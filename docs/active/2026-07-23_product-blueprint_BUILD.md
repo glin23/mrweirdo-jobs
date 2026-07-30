@@ -4,7 +4,7 @@ Owner: arnold-builder
 Type: BUILD_NOTES
 Reads: docs/active/2026-07-23_product-blueprint_TASK.md, shared/work_auth_identity.mjs, shared/personal_fact_gate.mjs, shared/record_profile_answers.mjs, shared/answer_provenance.mjs, test/ashby_driver_harness.mjs, test/helpers.mjs, docs/specs/product-blueprint.md, docs/active/2026-07-23_product-blueprint_RISK_REPORT.md, docs/active/2026-07-23_product-blueprint_ARCH_AUDIT.md, PROJECT_MEMORY.md, PROJECT_CONTEXT.yaml, .claude/arnold/roles/builder.md, .claude/phase_schemas.yaml, .claude/file_size_limits.json, .github/workflows/ci.yml, .claude/skills/mrweirdo-onboard/SKILL.md, .claude/skills/mrweirdo-confirm/SKILL.md, .claude/skills/mrweirdo-lever/SKILL.md, .claude/skills/mrweirdo-ashby/SKILL.md, setup.sh, scripts/preflight.sh, scripts/public_alpha_gate.mjs, scripts/role_guard_smoke.mjs, shared/answer_routing.mjs, shared/answer_buckets.mjs, shared/answer_bank.json, shared/ashby_apply_driver.mjs, shared/greenhouse_apply_driver.mjs, shared/greenhouse_value_rules.mjs, shared/lever_apply_driver.mjs, shared/profile.template.json, shared/paths.mjs, test/answer_routing.test.mjs, test/answer_buckets.test.mjs, test/greenhouse_value_rules.test.mjs, test/json_shapes.test.mjs, test/personal_facts_guard.test.mjs, test/greenhouse_work_auth_driver.test.mjs, test/helpers.mjs, shared/answer_templates.mjs, shared/validate_user_profile.mjs, scripts/demo_check.mjs, CHANGELOG.md, docs/active/2026-07-23_product-blueprint_DESIGN.md, shared/apply_gap_report.mjs, shared/missing_field_questions.mjs, shared/supervisor_preflight.mjs, shared/apply_batch.mjs, shared/local_db.mjs, shared/onboard_tmp.mjs, scripts/secure_profile_files.sh, test/apply_gap_report.test.mjs, .claude/skills/mrweirdo-onboard/references/intake-and-profile.md, .claude/skills/mrweirdo-onboard/references/run-and-database.md, docs/active/2026-07-23_product-blueprint_VERIFY_REPORT.md, docs/active/2026-07-23_product-blueprint_STATE_AUDIT.md, test/greenhouse_driver_harness.mjs, test/secure_profile_files.test.mjs
 Blocks: none
-Iterations: 11
+Iterations: 12
 Updated: 2026-07-30
 ---
 
@@ -2935,3 +2935,98 @@ apply-result-1.jsonl                 →  apply_gap_report   →  沙箱 run-tmp
 | 测试必须串行跑 | ✅ `npm test` 自带 `--test-concurrency=1`；新测试全部独立 mkdtemp 前缀 |
 | 说「可以交付」前 ci.yml 每一步本地跑全绿 | ✅ 四步全跑且 tip 干净检出重跑（§88），不是只跑 npm test |
 | 主流程冒烟优先保证不断 | ✅ demo:check exit 0，且本包给它加的是「更不打扰」（report 模式零写入） |
+
+# 阶段 1「数字变真」包 2（第 12 轮，2026-07-30）
+
+## 93. 实现摘要（4 个代码提交，未 push）
+
+链：`d04d8b1` verify 三扣分 → `a7857e1` 统一退出契约 → `896026d` 唯一正典账本 → `d2488c2` 三个数变一个数。按阶段 1 设计 §14.10 提交 4-7 施工，verify 第 6 轮三条扣分项按派遣单并入且**先做**（同域小修，先落地免得后面两个提交建在有毒枝的地基上）。
+
+| 提交 | 内容 | 新/改文件 |
+|---|---|---|
+| `d04d8b1` fix(verify-r6) | ① `negated_success` 否认规则 + 确认正则否定语境防护（「not successfully submitted」不再判 submitted）② sweep 对已 700 嵌套子目录无条件下潜 ③ jobvite/icims helpers 拔「thank you for your interest」毒枝（测试取出货 patterns 数组喂 Directive 横幅原文） | 新 2 / 改 6，+104/-11 |
+| `a7857e1` feat(contract) | `driver_contract.mjs`（OUTCOMES 七词 / EXIT_CODES / emitOutcome 唯一出口 / validateOutcome / recordFill + FILL_SOURCES）；三驱动接 emitOutcome、删本地成功正则（GH `strictSuccess+confirmation`、`lever_helpers.checkSuccess` 瘦身为取证原料）；漏斗 validateOutcome 前置 + crashed 合成；apply_batch 校验行改契约词 + crashed 高亮；**全问答挂线**（三驱动 ANSWERS 累积随结局上交）；role_guard_smoke / 3 份 -auto 与 mrweirdo-lever 说明书词汇同步；新建 Lever harness | 新 5 / 改 13，+932/-209 |
+| `896026d` feat(ledger) | `submission_ledger.mjs`（append / appendCorrection / readAll / effectiveByJob / rebuild + CLI）；record_apply_outcome 成唯一写账人（每次投递先落账本行再动 DB；submitted_at 与账本 ts 同源） | 新 2 / 改 1，+476/-4 |
+| `d2488c2` feat(derive) | `SUBMITTED_WHERE_SQL` 唯一谓词；四读点换谓词（dashboard / queue_diagnostics / auto_apply_queue / apply_report）；preflight 硬检查 `submission_ledger_consistent`（rebuild dry-run 有差异 = 有人绕过漏斗写库 → FAIL） | 新 1 / 改 6，+132/-17 |
+
+驱动行数（膨胀铁律，两个超限文件净增 ≤0）：ashby 1155→**1149**（净减 6）、greenhouse 1909→**1894**（净减 15）、lever 489→496（无约束）。hook 逐笔编辑校验全程通过（每笔 ≤0，加行与相邻注释压缩合成一笔）。
+
+## 94. V5 拍死项：三个数变一个数（真实库只读副本实跑，非读码推断）
+
+改前（同一副本三格实查）：`submitted_at 非空 = 158` / `status ∈ 已投家族 = 182` / `auto_submitted_at 非空 = 183`。
+改后同一副本、同一条谓词 `SUBMITTED_WHERE_SQL`（= `status IN ('✅ 已投','✅ 已确认')`）：
+
+- `node scripts/dashboard.mjs --once` → **`182 total ✅`**
+- `node shared/apply_report.mjs` → **`<strong>182</strong>Submitted total`**
+- 谓词直查 → **182**
+- `node shared/submission_ledger.mjs rebuild`（dry-run）→ `checked 0, changes []`（账本还空，**账本只为它见过的行说话**——158/183 两格与 182 的全等要等包 3 backfill 把 183 条历史迁入账本后达成，rebuild 那时会按「submitted_at 与 status 互为充要」拉平）
+
+真实 `~/.mrweirdo-jobs/jobs.db` 全程零写入：跑前跑后 `mtime=1782006129 size=1728512` 逐字节同值。
+
+## 95. TDD 落地证据（先红后绿，原始报错原文）
+
+- 扣分项①红：`negated success must be not_submitted, got submitted (confirm=ashby_success deny=)`
+- 扣分项②红：`a 644 file inside an already-700 nested dir was skipped by sweep`
+- 扣分项③红：`/thank\s+you\s+for\s+(applying|your\s+application|your\s+interest)/i matches the Directive failure banner`（jobvite 与 icims 各一）
+- 契约漏斗红（改 record_apply_outcome 前对出货代码实跑）：`legacy vocabulary must fail loudly, got exit 0` / `verdict-less submitted must fail loudly, got exit 0` / essay action 断言红
+- 谓词红：`SyntaxError: ... does not provide an export named 'SUBMITTED_WHERE_SQL'`；dashboard 今日计数红（已确认行从今日额度消失，见 §97-3）
+- **测试后置申报**：`driver_contract.mjs` 纯模块单测与账本模块（`submission_ledger.test.mjs`）写在实现之后。补偿：账本 2 处突变自证真咬人——① effectiveByJob 更正不覆盖原行 → **2 红** ② rebuild dry-run 改成写库 → **2 红**；突变后从 scratchpad 备份复原，shasum 与工作区逐字节一致（沿 §91 教训，未用 git checkout 复原未提交内容）
+- 覆盖率（新模块，`--experimental-test-coverage`）：`driver_contract.mjs` 行 **100%**、`submission_ledger.mjs` 行 **95.7%**、`record_apply_outcome.mjs` 行 80.0%（其余分支由 cover_letter_manual_outcome / role_guard_smoke 等既有套件盖住）
+
+## 96. 实测证据（沙箱 + 干净检出）
+
+- **链上 4 个提交各自 `git worktree add --detach` 独立路径干净检出 npm test 全绿**：291→312→321→**325**，fail 全 0
+- tip `d2488c2` 干净检出 CI 四步：npm test 325/325、role_guard_smoke=0、public_alpha_gate=0、`find shared scripts -name '*.mjs'` 逐个 node --check=0
+- 主流程冒烟（登记表 ci_smoke.main_chain 启用）：`npm run demo:check` **exit 0**（2 条 WARN 与本轮无关：无活 Chrome）
+- **三驱动出货 main() 替身实跑**（V7）：Ashby 4 结局（submitted 0 / not_submitted 2 且 **attempt=1 短路** / unknown 2 / rate_limited 4 且逐轮落笔进 answers）、Greenhouse 2 结局（submitted / not_submitted attempt=1）、Lever 4 结局（submitted / not_submitted / captcha_blocked 3 / needs_user 2）——退出码逐一断言与 EXIT_CODES 一致，emitOutcome 替身走真 validateOutcome
+- 账本纪律（V6/V8）：append-only 前缀哈希不变、坏行带行号响亮、correction 覆盖、rebuild 默认 dry-run 字节不动库、--apply 幂等（连跑第二次 diff 空）、绕过漏斗改库被 dry-run 抓住、账本没见过的 legacy 行零触碰、已确认不降级、answers 只进账本不进 jobs 表（V8 marker 断言）
+- **创始人家目录零写入**：开工前后 stat 快照（路径+mtime+大小+权限，840 条目，排除 chrome-profile 自缓存）diff = **0 行**；`/tmp/mrweirdo-onboard` 168→168；真实 jobs.db 只读（§94 stat 证据）
+- 老坑回归：答案路径文件（answer_routing / answer_buckets / 模板 / 三态门 / work_auth_identity）`git diff 987a4f0..HEAD` **零改动**；新增行 grep 三态字段名 **0 命中**
+
+## 97. 偏离设计稿（逐条显式，无偷改）
+
+1. **提交 4 与提交 5 合并成一个提交**（设计 §14.10 拆为「契约」与「全问答」两个）。判据：emitOutcome 的对象形状里 `answers` 是必带面，拆开会出现「契约字段存在但恒空」的中间态提交——单独检出它的树上 answers 永远是 `[]`，正是本项目反复吃亏的「看起来接了、实际没通电」。四个提交仍各自干净检出全绿，切分总数 9→8 不影响包 3 边界。
+2. **FillEntry.source 走契约自带的 FILL_SOURCES 而非逐字对齐 PROVENANCE_SOURCES**。ADR-16 说「来源词汇对齐 answer_provenance」，实读发现两表记的是不同维度（provenance 记「谁把值放进档案」：user_answer/onboarding_a0…；FillEntry 记「这一格打到表单上的值当场从哪来」：profile/bank_default/derived…）——照字面对齐会把「档案值是用户答的」误标到「表单值来自模板」上。§14.3 类图本来就画的是五词表，按类图实现；work_auth_provenance 快照仍逐条用 PROVENANCE 词汇随账本行落盘。**建议 architect 把 ADR-16 那句改成「provenance 词汇用于 work_auth_provenance 快照，FillEntry.source 用 §14.3 五词表」**。
+3. **dashboard 今日计数顺手修了一个真 bug（属四读点换谓词的范围内，但设计没点名）**：原 SQL 只认 `status='✅ 已投'`，当天被人工确认成 `✅ 已确认` 的行会从「今日 N/50」里消失——防拉黑日上限被静默放宽。换唯一谓词后一并修正（先红实测：构造「已确认+今天」行，旧码计 0、新码计 1）。这是**本包唯一一处真实用户可见的读数语义变化**，方向是收紧不是放松。
+4. **驱动 crashed 族的归类超出设计明文**：设计只定义了五种退出的骨架，未逐一映射旧 reason。映射原则已写进 driver_contract.mjs 头注释：机器坏了（form_not_loaded / resume_upload_failed / cdp_goto_failed / helpers_inject_fail / submit_button_not_found / storage_timeout）→ crashed exit 1（「选择器烂掉必须响」的执行面）；缺人才能补的（cover letter / incomplete_form / stuck / essay_pending / resume_missing）→ needs_user；页面明说没投出（含 job_unavailable）→ not_submitted；max_attempts_exceeded → rate_limited（步数超限）。
+5. **不带 verdict 的 not_submitted 在账本里记 not_submitted 而非 unknown**：危险方向只有「无凭据的成功」（validateOutcome 直接拒），驱动自认失败无需页面背书（如 job_unavailable 根本没有提交页）。
+6. **preflight 一致性检查对「坏账本行」也判 FAIL**（设计只说「对不上=响」）：readAll 对坏行 throw，检查把它折为不一致——账本是正典，正典坏了比数字不一致更该拦。
+7. `submitAndCheck`（greenhouse）尾部 `\`);  return {…}` 两语句同行——膨胀 hook 逐笔 ≤0 的排版妥协，语义无损，下次该文件净减时顺手拆行。
+
+## 98. 发现的旧 bug / 遗留（本轮未动，按包排队）
+
+- `greenhouse_apply_driver.mjs` 的 `/tmp/mrw_gh_post_` 一次性截图已随提交 4 换成 captureEvidence（§90 挂账清掉）；`lever_helpers.js` checkSuccess 已收编（同）。
+- **提交 8（backfill-legacy + Directive 7 条更正）与提交 9（源码守卫：驱动禁本地成功正则 / 账本第二写点）= 包 3**，按派遣单边界一行未写；ledger CLI 对 backfill 子命令显式报「属包 3」。
+- jobvite/icims 等 5 个半成品 helpers 的整体收编仍属阶段 4（本轮只拔毒枝）。
+- 截图保留策略（取证 R3）仍未定（包 1 §90 已挂，重复登记防丢）。
+- feedback 表历史行 success(15)/submitted(110) 双命名：新写入全走契约词，历史行按 append-only 教义不回填（§14.5 未明点 3 的既定处置）。
+
+## 99. 试过的错误方向（第 12 轮，Iterations=2）
+
+**❌ 方向 1：deny 表加一条「not …submitted」规则就完事。** 实算发现集合语义下确认规则 `successfully submitted` 会同时命中「not successfully submitted」的子串 → 双命中 → unknown，而非 not_submitted。verify 要的底线（不许 submitted）达到了，但诚实的答案是「页面明说没投出」。改法：确认正则加否定语境 lookbehind（`(?<!not (?:been |yet )?)…`），deny 规则负责正向捕捉——canonical 句子干净落 not_submitted，变体最坏 unknown，无一路能到 submitted（测试三个变体逐一钉死）。
+**❌ 方向 2：verdict=not_submitted 一出现就短路终止。** 差点把重试循环杀死：deny 表里的 `missing_required_field` / `try_again` 正是校验错误页的常见文案——第 1 次提交带着没填的必填项时 verdict 就是 not_submitted，若无条件短路，驱动会放弃**本来能答上**的表单。改法：只在「verdict=not_submitted ∧ missing 为空（无可填字段）」时才终局——Directive 型拦截页正是这个形状（替身测试断言 attempt=1，同时 rate_limited 场景证明带 missing 的循环仍然活着）。
+**❌ 方向 3：Lever 驱动在每个 outcome 点直接 emitOutcome。** emitOutcome 里的 process.exit 会跳过 try/finally 的 closeTab——标签页永远留在用户 Chrome 里。改法：main() 改为 return 结局对象、finally 关标签、文件末尾 `emitOutcome(await main())`；顺带让 Lever harness 可以直接断言返回对象，不用 throw 替身。
+**❌ 方向 4：harness 里给 emitOutcome 做假实现。** 假实现不校验 = 驱动发非法结局测试也绿。改法：替身 import 真 validateOutcome 先校验再 throw 记录——驱动的每次 emission 都过真契约。
+**❌ 方向 5（差点采信的假绿）：Lever 替身规则 `window.Lever` 匹配 helpers 注入。** 出货 helpers 里根本没有这个字符串（用的是 `globalThis.Lever`），注入永远失败、场景全部走成 crashed——第一版测试红得莫名其妙，实读 helpers 源码才发现匹配词错了（改成源码里真实存在的 `Lever ready`）。教训同项目记忆：替身规则必须锚在出货源码的真实字节上。
+
+## 100. 交付自查清单（第 12 轮）
+
+- ☑ TDD：三扣分项 + 漏斗契约 + 谓词先红后绿（红样原文 §95）；契约/账本模块单测后置已申报并以 2 处突变补证
+- ☑ 测试全绿 **325/325**（291→+34）；链上 4 提交独立干净检出各自全绿（§96）；覆盖率新模块 100% / 95.7%（≥80）
+- ☑ CI 四步在 tip 干净检出全 0；主流程冒烟 demo:check exit 0（ci_smoke.main_chain 启用项）；结构升级双路 / 隔离字段两格未填 → 跳过（本包 jobs 表零 DDL，账本是新文件不是新表）
+- ☑ V5 拍死项：158/182/183 → 同一条谓词下 **182**，三个出口实跑对数（§94）
+- ☑ 无吞错：新增 catch 全部显式语义（evidence 失败打日志继续——投递不能因留证失败翻成没投；ledger/validate 失败响亮退出）；`except.*pass` 全库 0 命中
+- ☑ 无 mock 假数据混入生产代码；替身只在 test/ 下且锚出货源码字节
+- ☑ 不涉 HTTP 端点 → 接口 8 契约/压测不适用（「契约」在本包指驱动进程退出约定）
+- ☑ 偏离 100% 标注（§97 七条，其中 2 条建议 architect 回写设计）；旧 bug 未顺手修（§98 列明去向）
+- ☑ 变更日志：CHANGELOG Fixed 顶部 4 条（一个数 / 退出契约 / 今日额度 / 三扣分项）
+- ☑ 边界：未 push（`origin/main` = `987a4f0`，本地领先 4）、未真投递、未开浏览器碰真实网站、未写 `~/.mrweirdo-jobs/`（840 条 stat diff=0 + jobs.db mtime/size 前后同值）、`/tmp/mrweirdo-onboard` 168→168 未删、batchA-backup 未碰、TASK 档案未改、他人未提交文档稿（DESIGN/TASK/VERIFY_REPORT/hook_hits）一字未动未 stage
+- ☑ 产物红线：BUILD/CHANGELOG/说明书全部 Edit 精准替换；新文件才用 Write
+
+### 100.1 本项目铁律对照（`.claude/arnold/roles/builder.md`）
+
+| 铁律 | 结论 |
+|---|---|
+| 测试必须串行跑 | ✅ 全程 `--test-concurrency=1`；新测试独立 mkdtemp 前缀，账本/漏斗测试互不踩目录 |
+| 说「可以交付」前 ci.yml 每一步本地跑全绿 | ✅ 四步全跑且在 tip 干净检出上重跑（§96），不是只跑 npm test |
+| 主流程冒烟优先保证不断 | ✅ demo:check exit 0；且 preflight 新硬检查只在「有人绕过漏斗写库」时拦——正常主链路零新增摩擦（账本/库未建时如实放行） |

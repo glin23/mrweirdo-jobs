@@ -60,6 +60,39 @@ since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
 ### Fixed
+- **"How many did I apply to" now has one answer instead of three**
+  (2026-07-30, 阶段 1「数字变真」包 2). The DB carried three submission cells
+  giving three different totals (158 / 182 / 183). A new append-only ledger
+  (`~/.mrweirdo-jobs/log/submissions.jsonl`) is the single authority for "did
+  it go out": every attempt — succeeded, refused, crashed — is one line with
+  the page verdict, evidence paths and **every answer typed onto the form**;
+  the only writer is `record_apply_outcome.mjs`; corrections are appended with
+  evidence, never edited in place; `node shared/submission_ledger.mjs rebuild`
+  recomputes the DB cache from the ledger (dry-run by default, idempotent with
+  `--apply`), and preflight fails hard if the cache diverges from the ledger.
+  Every counting read point (dashboard, queue, diagnostics, report) now uses
+  the one exported predicate — same copy of the DB prints 182 everywhere.
+- **Drivers exit through one contract; no path defaults to success**
+  (2026-07-30, ADR-15). Seven outcome words (`submitted` / `not_submitted` /
+  `needs_user` / `captcha_blocked` / `rate_limited` / `crashed` / `unknown`)
+  with fixed exit codes (0/2/2/3/4/1/2); `outcome:"submitted"` is refused
+  unless backed by the page-level verdict; a driver that dies without output
+  is recorded as `crashed` and highlighted in the batch summary instead of
+  filed as a routine skip; legacy words (`skip`/`essay_pending`/`error`) are
+  loudly rejected, not silently aliased. Ashby/Greenhouse now stop on the
+  first attempt when the page states failure with nothing fillable (the
+  Directive pages used to burn four blind retries); Greenhouse's and Lever's
+  local success regexes are gone — the shared verdict judges everything.
+- **The dashboard's daily quota no longer shrinks when a submission gets
+  confirmed** (2026-07-30). The today-count only recognized `✅ 已投`, so a row
+  confirmed the same day silently left the daily-cap math — loosening the
+  anti-blacklist limit. It now counts through the same single predicate.
+- **Negated success copy, nested screenshot dirs, and two half-built helpers'
+  poison branch** (2026-07-30, 第 6 轮验收三条扣分项). "was **not**
+  successfully submitted" is now a deny rule (it used to judge `submitted`);
+  the PII sweep descends into already-locked subdirectories; jobvite/icims
+  helpers no longer treat "thank you for your interest" — the literal text of
+  the Directive failure banner — as a success signal.
 - **A page saying "We couldn't submit your application" can no longer be
   recorded as a success** (2026-07-30, 阶段 1「数字变真」包 1). The Ashby
   driver's success regex had an `already applied…` branch that judged that
