@@ -6,6 +6,9 @@ import { dbPath, initDb } from './local_db.mjs';
 import { normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
 import { onboardTmpPath } from './onboard_tmp.mjs';
 import { validateOutcome } from './driver_contract.mjs';
+import { append as ledgerAppend, sqliteTs } from './submission_ledger.mjs';
+import { workAuthSources } from './answer_provenance.mjs';
+import { atsHome } from './paths.mjs';
 
 function argValue(name) {
   const idx = process.argv.indexOf(name);
@@ -98,11 +101,33 @@ try {
 }
 initDb();
 const db = new DatabaseSync(dbPath());
-const row = db.prepare('SELECT id, company, title, status FROM jobs WHERE id = ?').get(rowId);
+const row = db.prepare('SELECT id, company, title, status, ats_platform FROM jobs WHERE id = ?').get(rowId);
 if (!row) {
   console.error(JSON.stringify({ ok: false, reason: 'row_not_found', row_id: rowId }));
   process.exit(1);
 }
+
+// The ledger line comes FIRST — before any DB write, for every attempt, 成没成
+// 都记 (ADR-13 唯一正典 / ADR-16 全问答落盘). If the ledger cannot be written,
+// the throw below stops the recorder before the cache (DB) diverges from it.
+const pageVerdict = outcome.verdict && typeof outcome.verdict === 'object' ? outcome.verdict.verdict : outcome.verdict;
+const ledgerEntry = ledgerAppend(atsHome(), {
+  era: 'v2',
+  job_id: rowId,
+  company_key: normalizeCompany(row.company),
+  title_key: normalizeTitle(row.title),
+  ats: row.ats_platform || null,
+  outcome: outcome.outcome,
+  // Page verdict wins when present. Without one, a claimed failure may stand as
+  // failure (the dangerous direction is only unbacked SUCCESS — that one throws
+  // in validateOutcome); anything else is honestly unknown.
+  verdict: ['submitted', 'not_submitted'].includes(pageVerdict) ? pageVerdict
+    : outcome.outcome === 'not_submitted' ? 'not_submitted' : 'unknown',
+  reason: outcome.reason ?? null,
+  evidence: outcome.evidence ?? null,
+  answers: Array.isArray(outcome.answers) ? outcome.answers : [],
+  work_auth_provenance: workAuthSources(atsHome()),
+});
 
 function writeFeedback(reason, detail = outcome) {
   try {
@@ -172,18 +197,20 @@ if (row.status !== '🤖 AI sourced' && !SUBMITTED_STATUSES.has(row.status)) {
   process.exit(0);
 }
 
+// submitted_at 与账本同源（同一个 ts）——rebuild 重算出来必须逐字节相同，否则
+// 「账本是正典、DB 是缓存」只是一句口号（阶段 1 设计 §14.4.1 调用流）。
 db.prepare(`
   UPDATE jobs
      SET status = '✅ 已投',
-         submitted_at = COALESCE(submitted_at, datetime('now')),
-         auto_submitted_at = COALESCE(auto_submitted_at, datetime('now')),
+         submitted_at = COALESCE(submitted_at, ?),
+         auto_submitted_at = COALESCE(auto_submitted_at, ?),
          confirmation_url = COALESCE(?, confirmation_url),
          skip_reason = NULL,
          bot_note = 'mrweirdo auto-apply verified by driver success check',
          auto_apply_eligible = 0,
          updated_at = datetime('now')
    WHERE id = ?
-`).run(outcome.post_url || outcome.url || null, rowId);
+`).run(sqliteTs(ledgerEntry.ts), sqliteTs(ledgerEntry.ts), outcome.post_url || outcome.url || null, rowId);
 writeFeedback('submitted_verified', outcome);
 console.log(JSON.stringify({
   ok: true,
