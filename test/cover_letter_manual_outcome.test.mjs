@@ -27,7 +27,7 @@ test('required cover letter without generated PDF is recorded as manual-visible 
   const rowId = db.prepare('SELECT id FROM jobs').get().id;
   db.close();
   writeFileSync(resultFile, `${JSON.stringify({
-    outcome: 'skip',
+    outcome: 'needs_user',
     reason: 'cover_letter_required_not_generated',
     detail: { question: 'Cover Letter' },
   })}\n`);

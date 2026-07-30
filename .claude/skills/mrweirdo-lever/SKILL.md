@@ -109,10 +109,11 @@ node shared/cdp.mjs eval "$TAB" "Lever.isErrorMessageVisible()"
 ```bash
 node shared/cdp.mjs eval "$TAB" "(() => { const s = Lever.findSubmit(); if (!s.ok) return s; document.querySelector(s.selector).click(); return {clicked: s.selector}; })()"
 sleep 3
-node shared/cdp.mjs eval "$TAB" "Lever.checkSuccess()"
-node shared/cdp.mjs screenshot "$TAB" "log/screenshots/${COMPANY}_post_submit.png"
+EVIDENCE=$(node shared/submission_evidence.mjs --tab "$TAB" --company "$COMPANY" --job "${ROW_ID:-manual}" --phase after_submit)
+echo "$EVIDENCE"
 ```
-`checkSuccess()` 返回 `{ok: true, urlMatch: true}` 表示 URL 落到 `/thanks` 路径，是 Lever 标准成功标志。
+判定读 `$EVIDENCE` 的 `verdict` 三档（唯一判定实现，无默认成功）：`submitted` 才算投出；`not_submitted` = 页面明说没投出；`unknown` = 判不出，如实报告给用户，**绝不当成功**。整页截图已按判定命名落在 `log/screenshots/`。
+注：`Lever.checkSuccess()` 现在只回传页面原料（`{path, url, bodyText}`），不再自带成功判定。
 
 **Submit 失败时（GOTCHA #2）**：Lever 会回滚 resume + selectedLocation。retry 前必须**重做 step 5 + 重新 setSelectedLocation**，其他文本字段保留。
 
@@ -140,17 +141,13 @@ node shared/cdp.mjs screenshot "$TAB" "log/screenshots/${COMPANY}_post_submit.pn
 | URL 返回 404 / "no longer posted" | 报告 + 退出，不写 log（不算投递） |
 | `Lever.fillForm` `errors` 非空 | 列出 errors，让用户手动补（或更新 profile.json 后重投） |
 | `waitForResumeStorageId` 超时 | retry upload 一次；仍失败 → 报告退出，让用户手动 |
-| Submit 后 `checkSuccess.ok === false` | 截图 `*_post_submit_fail.png`；按 GOTCHA #2 重做 step 5 + setSelectedLocation 后再 retry 一次；仍失败则报告 |
+| Submit 后 verdict 非 `submitted` | 截图已按判定命名；`not_submitted` 直接报告；`unknown` 按 GOTCHA #2 重做 step 5 + setSelectedLocation 后再 retry 一次；仍失败则报告 |
 | Chrome CDP 9222 不响应 | 尝试 `chrome-cdp-launcher.sh` 重启一次；仍失败则报错退出 |
 | 简历 PDF 路径不存在 | 报错退出 |
 
 ## 成功判定
 
-`Lever.checkSuccess()` 返回 `ok: true`，依据：
-1. `location.pathname` 含 `/thanks` 或 `/thank-you`（Lever 标准成功路径），或
-2. Body text 含 "thanks for applying" / "application has been submitted" / "application has been received"
-
-两者满足其一即可。截图是辅助证据。
+唯一判定实现是 `shared/submission_evidence.mjs` 的 `submissionVerdict`（确认表 / 否认表集合语义）：确认命中且无否认 → `submitted`；否认命中且无确认 → `not_submitted`；其余一律 `unknown`。`/thanks` 跳转与成功文案都是确认证据的一种，**没有任何默认成功路径**。截图是辅助证据。
 
 ## 不要做的事
 

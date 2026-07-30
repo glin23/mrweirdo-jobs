@@ -15,14 +15,14 @@
 //      sponsorship, location combobox, LinkedIn) → answer from profile.
 //   6. Click Submit again. Up to 5 attempts.
 //   7. Submit result judged NODE-SIDE by submissionVerdict (shared/submission_evidence.mjs, the single implementation) — no default success; a deny hit can never become 'submitted'.
-//   8. On unresolved errors → return {outcome:'skip', reason, remaining}, close tab.
-//   9. On essay-pending → return {outcome:'essay_pending'}, KEEP tab open.
+//   8. Final result leaves ONLY through emitOutcome (driver_contract.mjs, ADR-15 统一退出契约):
+//      submitted 0 / crashed 1 / needs_user·not_submitted·unknown 2 / rate_limited 4.
+//   9. On essay-pending → {outcome:'needs_user', reason:'essay_pending'}, KEEP tab open.
 //
 // Notes for the new maintainer:
 //   - Essay templates + radio defaults live in shared/answer_bank.json.
-//   - Ashby uses uuid ids for many fields (e.g. "72b55bca-..."). A bare "#72b55..."
-//     selector is INVALID CSS (leading digit). Use [id="..."] form instead. The
-//     /^[0-9]/.test(id) guard is the rule.
+//   - Ashby uses uuid ids for many fields (e.g. "72b55bca-..."); a bare "#72b55..." selector is
+//     INVALID CSS (leading digit) — use [id="..."] form; the /^[0-9]/.test(id) guard is the rule.
 //   - Ashby triplicates error messages — always dedupe missing[] before iterating.
 
 import { spawnSync } from 'node:child_process';
@@ -35,12 +35,12 @@ import {
   isSpecificCityLogisticsFact as routingIsSpecificCityFact,
   isOpenEndedResidenceQuestion as routingIsOpenEndedResidence,
   relocationPolicyOpen as routingRelocationPolicyOpen,
-  confirmedCitiesFrom as routingConfirmedCities,
-  mentionsConfirmedCity as routingMentionsConfirmedCity,
+  confirmedCitiesFrom as routingConfirmedCities, mentionsConfirmedCity as routingMentionsConfirmedCity,
   deriveWorkAuthAnswers, withoutSponsorshipAnswer, workAuthBlockNote, workAuthGapFor,
 } from './answer_routing.mjs';
 import { matchAnswerBucket } from './answer_buckets.mjs';
 import { submissionVerdict, captureEvidence } from './submission_evidence.mjs';
+import { emitOutcome, recordFill } from './driver_contract.mjs';
 
 // ---- CLI dispatcher — handle --list-pending-essays before anything else ----
 const HOME = atsHome();
@@ -55,9 +55,8 @@ if (process.argv[2] === '--list-pending-essays') {
   process.exit(0);
 }
 
-// ============================================================
-// Normal apply-mode setup
-// ============================================================
+// ---- Normal apply-mode setup ----
+const ANSWERS = []; // FillEntry log — every value this driver puts on the form (ADR-16 全问答落盘)
 const PROFILE = JSON.parse(readFileSync(join(HOME, 'profile.json'), 'utf8'));
 const RESUME = PROFILE.resume_path || join(HOME, 'resume.pdf');
 const DEFAULT_COVER_LETTER = join(HOME, 'cover_letter.pdf');
@@ -383,29 +382,29 @@ async function uploadCoverLetter(tab, missingLabel = '') {
   const upload = cdp('upload', tab, found.sel, COVER_LETTER);
   if (!upload.stdout.includes('"ok":true')) return { ok: false, note: 'cover_letter_upload_failed', manual_required: true, detail: upload.stdout || upload.stderr, question: missingLabel };
   coverLetterUploaded = true;
-  return { ok: true, mode: 'cover_letter_upload', selector: found.sel };
+  return { ok: true, mode: 'cover_letter_upload', value: COVER_LETTER, selector: found.sel };
 }
 
 // ---------- step: fill standard fields ----------
 async function fillStandard(tab) {
-  const name = `${PROFILE.personal.first_name} ${PROFILE.personal.last_name}`;
-  const email = PROFILE.personal.email;
+  const name = `${PROFILE.personal.first_name} ${PROFILE.personal.last_name}`; const email = PROFILE.personal.email;
   cdp('typetext', tab, '#_systemfield_name', name);
+  recordFill(ANSWERS, { label: '_systemfield_name', value: name, source: 'profile', widget: 'text' });
   cdp('typetext', tab, '#_systemfield_email', email);
+  recordFill(ANSWERS, { label: '_systemfield_email', value: email, source: 'profile', widget: 'text' });
   // Phone — Ashby uses uuid ids for phone fields. Find any visible tel input.
   const phoneRes = await evalInTab(tab, `
     (() => {
       const inp = [...document.querySelectorAll("input[type=tel]")].find(el => el.offsetParent !== null);
       if (!inp) return { found: false };
       if (!inp.id) inp.id = 'mrw_phone_temp';
-      // Leading-digit-safe selector
-      const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id;
+      const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id; // leading-digit-safe selector
       return { found: true, sel };
     })()
   `);
   if (phoneRes.found) {
     const digits = (PROFILE.personal.phone || '').replace(/\D/g, '').replace(/^1/, '');
-    if (digits) cdp('typetext', tab, phoneRes.sel, digits);
+    if (digits) { cdp('typetext', tab, phoneRes.sel, digits); recordFill(ANSWERS, { label: 'Primary phone', value: digits, source: 'profile', widget: 'tel' }); }
   }
   return { name, email, phone_filled: phoneRes.found };
 }
@@ -474,7 +473,7 @@ async function fillTextInQuestion(tab, question, value) {
   `);
   if (!r.ok) return r;
   cdp('typetext', tab, r.sel, value);
-  return { ok: true, mode: 'text_fill' };
+  return { ok: true, mode: 'text_fill', value };
 }
 
 // ---------- step: answer a missing field by keyword ----------
@@ -945,7 +944,7 @@ async function answerEssay(tab, questionText) {
   `);
   if (!f.ok) return f;
   cdp('typetext', tab, f.sel, ans);
-  return { ok: true, mode: 'essay_template', answer_len: ans.length };
+  return { ok: true, mode: 'essay_template', value: ans, answer_len: ans.length };
 }
 
 // ============================================================
@@ -968,7 +967,7 @@ function listPendingEssays() {
   for (const line of lines) {
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }
-    if (rec.outcome !== 'essay_pending') continue;
+    if (rec.outcome !== 'essay_pending' && !(rec.outcome === 'needs_user' && rec.reason === 'essay_pending')) continue; // old lines vs contract-era lines
     const key = rec.job_id || rec.url || Math.random().toString(36);
     byJob.set(String(key), rec);
   }
@@ -1065,46 +1064,46 @@ async function main() {
     log(`Submit attempt ${attempt}…`);
     const res = await submitAndCheck(tab);
     if (res.verdict.verdict === 'submitted') {
-      await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: res.verdict.verdict }).catch((e) => log('evidence capture failed (submission still recorded):', e.message));
-      console.log(JSON.stringify({ outcome: 'submitted', attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, cover_letter_uploaded: coverLetterUploaded }));
+      const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'submitted' }).catch((e) => { log('evidence capture failed (submission still recorded):', e.message); return null; });
       await closeTab(tab);
-      return;
+      emitOutcome({ outcome: 'submitted', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, cover_letter_uploaded: coverLetterUploaded, answers: ANSWERS });
     }
     // Dedup missing (Ashby triplicates the error message)
     res.missing = [...new Set(res.missing)];
     log('  missing fields:', res.missing.join(' | ').slice(0, 200));
     if (res.missing.length === 0) {
+      if (res.verdict.verdict === 'not_submitted') {
+        // Page states failure and there is nothing fillable — terminal, no blind
+        // retries (the Directive pages used to burn 4 retries here, 包 2 收口).
+        const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'not_submitted' }).catch((e) => { log('evidence capture failed:', e.message); return null; });
+        await closeTab(tab);
+        emitOutcome({ outcome: 'not_submitted', reason: 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
+      }
       if (attempt < 5) { await sleep(2500); continue; }
-      console.log(JSON.stringify({ outcome: 'skip', reason: 'unknown_state_no_errors_no_success', snippet: res.snippet, tab_id: tab, job_id: JOB_ID }));
-      return;
+      emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, snippet: res.snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
     }
     if (JSON.stringify(res.missing) === JSON.stringify(lastMissing)) {
-      // Same errors as last round — we're stuck. If pending essays exist, return that for main agent.
+      // Same errors as last round — we're stuck. If pending essays exist, surface them for main agent.
       if (pendingForMainClaude.length > 0) {
         const rec = {
-          outcome: 'essay_pending', tab_id: tab, job_id: JOB_ID,
+          outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID,
           pending: dedupePendingQuestions(pendingForMainClaude),
-          still_missing: res.missing,
-          company: COMPANY,
-          url: APPLY_URL,
+          still_missing: res.missing, company: COMPANY, url: APPLY_URL, answers: ANSWERS,
           hint: 'main agent: write answer for each pending question, then call: node cdp.mjs typetext <tab> <sel> "<answer>", then re-run this driver to retry submit',
         };
         logEssayPending(rec);
-        console.log(JSON.stringify(rec));
-        // KEEP tab open — user/main-Claude needs to follow up.
-        return;
+        emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
       }
-      console.log(JSON.stringify({ outcome: 'skip', reason: 'stuck_on_same_missing', missing: res.missing, job_id: JOB_ID }));
       await closeTab(tab);
-      return;
+      emitOutcome({ outcome: 'needs_user', reason: 'stuck_on_same_missing', missing: res.missing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
     }
     lastMissing = res.missing;
     for (const m of res.missing) {
       const a = await answerMissing(tab, m);
+      if (a?.ok) recordFill(ANSWERS, { label: m, value: a.value ?? a.picked ?? '', source: a.source || 'derived', widget: a.mode || 'unknown' });
       if (a?.manual_required) {
-        console.log(JSON.stringify({ outcome: 'skip', reason: a.note || 'manual_required', detail: a, missing: res.missing, job_id: JOB_ID }));
         await closeTab(tab);
-        return;
+        emitOutcome({ outcome: 'needs_user', reason: a.note || 'manual_required', detail: a, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
       }
       if (a?.pending_for_main_claude) {
         // Try to locate the field to give main agent a CSS selector
@@ -1133,23 +1132,18 @@ async function main() {
   // Hit max attempts. If pending essays exist, surface them for main agent.
   if (pendingForMainClaude.length > 0) {
     const rec = {
-      outcome: 'essay_pending', tab_id: tab, job_id: JOB_ID,
+      outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID,
       pending: dedupePendingQuestions(pendingForMainClaude),
-      still_missing: lastMissing,
-      company: COMPANY,
-      url: APPLY_URL,
+      still_missing: lastMissing, company: COMPANY, url: APPLY_URL, answers: ANSWERS,
     };
     logEssayPending(rec);
-    console.log(JSON.stringify(rec));
-    // KEEP tab open.
-    return;
+    emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
   }
-  console.log(JSON.stringify({ outcome: 'skip', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID }));
   await closeTab(tab);
+  emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
 }
 
 main().catch(async (e) => {
   // DO NOT close tab on error — keep it open for debugging.
-  console.log(JSON.stringify({ outcome: 'error', error: e.message, stack: e.stack?.split('\n').slice(0, 3), job_id: JOB_ID }));
-  process.exit(1);
+  emitOutcome({ outcome: 'crashed', reason: 'driver_exception', error: e.message, stack: e.stack?.split('\n').slice(0, 3), job_id: JOB_ID, answers: ANSWERS });
 });

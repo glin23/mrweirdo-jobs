@@ -33,16 +33,15 @@ import { atsHome } from './paths.mjs';
 import { renderAnswerTemplate } from './answer_templates.mjs';
 import { currentResidenceYesNoAnswer, deriveWorkAuthAnswers, withoutSponsorshipAnswer, workAuthBlockNote, workAuthGapFor } from './answer_routing.mjs';
 import {
-  availabilityCommitmentAnswer,
-  bachelorProgressCandidates,
-  gpaValue,
+  availabilityCommitmentAnswer, bachelorProgressCandidates, gpaValue,
   graduationSelectValues as graduationSelectValueCandidates,
-  isGraduateDegree,
-  hoursPerWeekAnswer as resolveHoursPerWeekAnswer,
-  monthYear,
+  isGraduateDegree, hoursPerWeekAnswer as resolveHoursPerWeekAnswer, monthYear,
 } from './greenhouse_value_rules.mjs';
+import { submissionVerdict, captureEvidence } from './submission_evidence.mjs';
+import { emitOutcome, recordFill } from './driver_contract.mjs';
 
 const HOME = atsHome();
+const ANSWERS = []; // FillEntry log — every value this driver puts on the form (ADR-16 全问答落盘)
 const REPO = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const PROFILE = JSON.parse(readFileSync(join(HOME, 'profile.json'), 'utf8'));
 const RESUME = PROFILE.resume_path || join(HOME, 'resume.pdf');
@@ -978,12 +977,12 @@ async function uploadResume(tab) {
 
 // ---------- fill basic text fields ----------
 async function fillBasic(tab) {
-  cdp('typetext', tab, '#first_name', PROFILE.personal.first_name);
-  cdp('typetext', tab, '#last_name', PROFILE.personal.last_name);
-  cdp('typetext', tab, '#email', PROFILE.personal.email);
-  // Phone: digits only — intl-tel-input formats it
-  const digits = (PROFILE.personal.phone || '').replace(/\D/g, '').replace(/^1/, '');
-  if (digits) cdp('typetext', tab, '#phone', digits);
+  for (const [id, value] of [['first_name', PROFILE.personal.first_name], ['last_name', PROFILE.personal.last_name], ['email', PROFILE.personal.email]]) {
+    cdp('typetext', tab, `#${id}`, value);
+    recordFill(ANSWERS, { label: id, value, source: 'profile', widget: 'text' });
+  }
+  const digits = (PROFILE.personal.phone || '').replace(/\D/g, '').replace(/^1/, ''); // digits only — intl-tel-input formats it
+  if (digits) { cdp('typetext', tab, '#phone', digits); recordFill(ANSWERS, { label: 'phone', value: digits, source: 'profile', widget: 'tel' }); }
   return { ok: true };
 }
 
@@ -1266,14 +1265,12 @@ async function submitAndCheck(tab) {
     })()
   `);
   await sleep(5000);
-  return await evalInTab(tab, `
+  // No local success regex any more: the page returns raw material and the
+  // single shared submissionVerdict judges it node-side (ADR-14 判定器唯一实现).
+  // The /confirmation URL signal lives in the shared confirm table.
+  const page = await evalInTab(tab, `
     (() => {
       const body = document.body.innerText;
-      const strictSuccess = /successfully submitted|application[\\s\\S]{0,30}(received|success)|thanks? for (applying|submitting)|thank you for (applying|submitting|your application)/i.test(body);
-      const greenhouseConfirmation =
-        /\\/confirmation(?:[?#]|$)/i.test(location.href) &&
-        /thank you for your interest|receiv(?:e|ing)[\\s\\S]{0,80}email|next steps in the hiring process|track your status/i.test(body);
-      const success = strictSuccess || greenhouseConfirmation;
       // GH-style: error helper text is inside .input-wrapper--error or .select__control--error containers
       // The label sits in a sibling/parent. Walk back from each .helper-text--error to the field label.
       const missing = [];
@@ -1329,9 +1326,9 @@ async function submitAndCheck(tab) {
         const lbl = el.id ? document.querySelector('label[for="' + CSS.escape(el.id) + '"]') : null;
         addMissing(lbl?.innerText || labelNear(el));
       }
-      return { success, missing, url: location.href, body_snippet: body.slice(0, 250) };
+      return { bodyText: body.slice(0, 20000), missing, url: location.href, body_snippet: body.slice(0, 250) };
     })()
-  `);
+  `);  return { ...page, verdict: submissionVerdict({ bodyText: page.bodyText, url: page.url }) };
 }
 
 // ---------- find field by label, fill it ----------
@@ -1780,9 +1777,8 @@ async function main() {
 
   const unavailable = await detectJobUnavailable(tab);
   if (unavailable.ok) {
-    console.log(JSON.stringify({ outcome: 'skip', reason: 'job_unavailable', detail: unavailable, job_id: JOB_ID }));
     await closeTab(tab);
-    return;
+    emitOutcome({ outcome: 'not_submitted', reason: 'job_unavailable', detail: unavailable, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
   }
 
   log('Upload resume…');
@@ -1790,13 +1786,11 @@ async function main() {
   if (!u.ok) {
     const unavailableAfterUpload = await detectJobUnavailable(tab);
     if (unavailableAfterUpload.ok) {
-      console.log(JSON.stringify({ outcome: 'skip', reason: 'job_unavailable', detail: unavailableAfterUpload, job_id: JOB_ID }));
       await closeTab(tab);
-      return;
+      emitOutcome({ outcome: 'not_submitted', reason: 'job_unavailable', detail: unavailableAfterUpload, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
     }
-    console.log(JSON.stringify({ outcome: 'skip', reason: 'resume_upload_failed', detail: u, job_id: JOB_ID }));
     await closeTab(tab);
-    return;
+    emitOutcome({ outcome: 'crashed', reason: 'resume_upload_failed', detail: u, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
   }
 
   log('Fill basic fields…');
@@ -1805,16 +1799,15 @@ async function main() {
   // Pre-emptively handle Country (always required, react-select SYNC variant)
   log('Pre-fill Country = US (sync Select)…');
   await reactSelect(tab, 'country', 'United States', { mode: 'sync', fullMatchKeywords: [] });
+  recordFill(ANSWERS, { label: 'country', value: 'United States', source: 'derived', widget: 'select' });
   await sleep(500);
 
   // Pre-emptively handle Location (City) if present — AsyncSelect (Google Places)
   const candidateCity = preferredCandidateCity();
   if (candidateCity) {
     log(`Pre-fill Location = ${candidateCity} (async Select)…`);
-    await reactSelect(tab, 'candidate-location', candidateCity, {
-      mode: 'async',
-      fullMatchKeywords: preferredCandidateCityFullMatchKeywords(),
-    });
+    await reactSelect(tab, 'candidate-location', candidateCity, { mode: 'async', fullMatchKeywords: preferredCandidateCityFullMatchKeywords() });
+    recordFill(ANSWERS, { label: 'candidate-location', value: candidateCity, source: 'profile', widget: 'select' });
     await sleep(500);
   }
 
@@ -1825,45 +1818,40 @@ async function main() {
     await clickVisibleConsentCheckboxes(tab);
     log(`Submit attempt ${attempt}…`);
     const res = await submitAndCheck(tab);
-    if (res.success) {
-      cdp('screenshot', tab, `/tmp/mrw_gh_post_${JOB_ID || 'job'}.png`);
-	      console.log(JSON.stringify({ outcome: 'submitted', attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, cover_letter_uploaded: coverLetterUploaded }));
+    if (res.verdict.verdict === 'submitted') {
+      const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'submitted' }).catch((e) => { log('evidence capture failed (submission still recorded):', e.message); return null; });
       await closeTab(tab);
-      return;
+      emitOutcome({ outcome: 'submitted', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, cover_letter_uploaded: coverLetterUploaded, answers: ANSWERS });
     }
     res.missing = [...new Set(res.missing)];
     log('  missing:', res.missing.join(' | ').slice(0, 200));
     if (res.missing.length === 0) {
+      if (res.verdict.verdict === 'not_submitted') {
+        // Page states failure and nothing is fillable — terminal, no blind retries.
+        const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'not_submitted' }).catch((e) => { log('evidence capture failed:', e.message); return null; });
+        await closeTab(tab);
+        emitOutcome({ outcome: 'not_submitted', reason: 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
+      }
       if (attempt < 5) { await sleep(3000); continue; }
-      console.log(JSON.stringify({ outcome: 'skip', reason: 'no_errors_no_success', snippet: res.body_snippet, tab_id: tab, job_id: JOB_ID }));
-      return;
+      emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, snippet: res.body_snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
     }
     if (JSON.stringify(res.missing) === JSON.stringify(lastMissing)) {
       if (unanswerable.length > 0) {
-        console.log(JSON.stringify({
-          outcome: 'skip',
-          reason: classifyUnsubmitted(res.missing, unanswerable),
-          blockers: unanswerable,
-          missing: res.missing,
-          job_id: JOB_ID,
-        }));
         await closeTab(tab);
-        return;
+        emitOutcome({ outcome: 'needs_user', reason: classifyUnsubmitted(res.missing, unanswerable), blockers: unanswerable, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
       }
       if (pendingForMainClaude.length > 0) {
-        const rec = { outcome: 'essay_pending', tab_id: tab, job_id: JOB_ID, pending: pendingForMainClaude, still_missing: res.missing, company: COMPANY, url: APPLY_URL };
+        const rec = { outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID, pending: pendingForMainClaude, still_missing: res.missing, company: COMPANY, url: APPLY_URL, answers: ANSWERS };
         logEssayPending(rec);
-        console.log(JSON.stringify(rec));
-        // KEEP tab open — user/main-Claude needs to follow up.
-        return;
+        emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
       }
-      console.log(JSON.stringify({ outcome: 'skip', reason: classifyUnsubmitted(res.missing, []), missing: res.missing, job_id: JOB_ID }));
       await closeTab(tab);
-      return;
+      emitOutcome({ outcome: 'needs_user', reason: classifyUnsubmitted(res.missing, []), missing: res.missing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
     }
     lastMissing = res.missing;
     for (const m of res.missing) {
       const a = await answerMissing(tab, m);
+      if (a?.ok) recordFill(ANSWERS, { label: m, value: a.value ?? a.picked ?? '', source: a.source || 'derived', widget: a.mode || a.via || 'unknown' });
       if (a?.pending_for_main_claude) {
         const sel = await evalInTab(tab, `
           (() => {
@@ -1892,18 +1880,15 @@ async function main() {
     await sleep(1500);
   }
   if (pendingForMainClaude.length > 0) {
-    const rec = { outcome: 'essay_pending', tab_id: tab, job_id: JOB_ID, pending: pendingForMainClaude, still_missing: lastMissing, company: COMPANY, url: APPLY_URL };
+    const rec = { outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID, pending: pendingForMainClaude, still_missing: lastMissing, company: COMPANY, url: APPLY_URL, answers: ANSWERS };
     logEssayPending(rec);
-    console.log(JSON.stringify(rec));
-    // KEEP tab open.
-    return;
+    emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
   }
-  console.log(JSON.stringify({ outcome: 'skip', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID }));
   await closeTab(tab);
+  emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
 }
 
 main().catch(async (e) => {
   // DO NOT close tab on error — keep it open for debugging.
-  console.log(JSON.stringify({ outcome: 'error', error: e.message, job_id: JOB_ID }));
-  process.exit(1);
+  emitOutcome({ outcome: 'crashed', reason: 'driver_exception', error: e.message, job_id: JOB_ID, answers: ANSWERS });
 });

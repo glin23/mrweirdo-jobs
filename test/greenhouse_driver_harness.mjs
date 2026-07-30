@@ -51,11 +51,29 @@ function cdp(...args) {
   // cdp('typetext', tab, selector, value) is how the driver types into a text
   // input; recording args[3] as \`value\` keeps "what landed on the form" readable
   // the same way it is for the select stubs above.
-  globalThis.__MRW_FILLS.push({ via: 'cdp', args, value: args[0] === 'typetext' ? args[3] : undefined });
+  (globalThis.__MRW_FILLS ||= []).push({ via: 'cdp', args, value: args[0] === 'typetext' ? args[3] : undefined });
+  if (args[0] === 'goto') return { stdout: '{"id":"tab-under-test"}', stderr: '' };
   return { stdout: '{"ok":true}', stderr: '' };
 }
-async function evalInTab(tab, js) { return { ok: false }; }
-export { answerMissing };
+// Scriptable eval: rules match a distinctive substring of the injected JS so a
+// full main() run can be driven end to end (same shape as the Ashby harness).
+async function evalInTab(tab, js) {
+  for (const r of (globalThis.__MRW_EVAL_RULES || [])) {
+    if (js.includes(r.match)) return typeof r.result === 'function' ? r.result(js) : r.result;
+  }
+  return { ok: false };
+}
+// emitOutcome under test: validates via the real contract, records, throws
+// instead of process.exit-ing.
+import { validateOutcome as __validateOutcome } from '${SHARED}/driver_contract.mjs';
+function emitOutcome(obj) {
+  __validateOutcome(obj);
+  (globalThis.__MRW_EMITTED ||= []).push(obj);
+  const e = new Error('__EMIT_OUTCOME__');
+  e.emitted = obj;
+  throw e;
+}
+export { answerMissing, main };
 `;
 
 let seq = 0;
@@ -66,11 +84,18 @@ export async function loadDriver(profile) {
   const home = mkdtempSync(join(tmpdir(), 'mrw-gh-driver-'));
   writeFileSync(join(home, 'profile.json'), JSON.stringify(profile, null, 2));
   let src = DRIVER_SRC.replace(/\nmain\(\)\.catch\([\s\S]*$/, '\n');
+  // No real waits under test (guarded like the Ashby harness).
+  const SLEEP_DECL = 'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));';
+  assert.ok(src.includes(SLEEP_DECL), 'harness stale: sleep declaration not found in the driver');
+  src = src.replace(SLEEP_DECL, 'const sleep = () => Promise.resolve();');
   for (const fn of BROWSER_FNS) {
     const decl = `function ${fn}(`;
     assert.ok(src.includes(decl), `harness stale: ${decl} not found in the driver`);
     src = src.replace(decl, `function __unused_${fn}(`);
   }
+  const CONTRACT_IMPORT = "import { emitOutcome, recordFill } from";
+  assert.ok(src.includes(CONTRACT_IMPORT), 'harness stale: driver_contract import not found in the driver');
+  src = src.replace(CONTRACT_IMPORT, "import { emitOutcome as __shipped_emitOutcome, recordFill } from");
   src = src.replace(/from '\.\//g, `from '${SHARED}/`) + STUBS;
   const file = join(home, `driver_under_test_${seq++}.mjs`);
   writeFileSync(file, src);

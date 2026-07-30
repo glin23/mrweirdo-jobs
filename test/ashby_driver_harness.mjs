@@ -32,10 +32,29 @@ const STUBS = `
 // ---- test harness: browser boundary only ----------------------------------
 function cdp(...args) {
   globalThis.__MRW_CDP.push(args);
+  if (args[0] === 'goto') return { stdout: '{"id":"tab-under-test"}', stderr: '' };
   return { stdout: '{"ok":true}', stderr: '' };
 }
-async function evalInTab(tab, js) { return globalThis.__MRW_EVAL_RESULT ?? { ok: false }; }
-export { answerMissing, addPendingQuestion, submitAndCheck };
+// Scriptable eval: rules match a distinctive substring of the injected JS so a
+// full main() run can be driven end to end; result may be a function for
+// per-call variation. Falls back to the single-shot __MRW_EVAL_RESULT.
+async function evalInTab(tab, js) {
+  for (const r of (globalThis.__MRW_EVAL_RULES || [])) {
+    if (js.includes(r.match)) return typeof r.result === 'function' ? r.result(js) : r.result;
+  }
+  return globalThis.__MRW_EVAL_RESULT ?? { ok: false };
+}
+// emitOutcome is the driver's ONLY exit (ADR-15). Under test it validates via
+// the real contract, records, and throws instead of process.exit-ing.
+import { validateOutcome as __validateOutcome } from '${SHARED}/driver_contract.mjs';
+function emitOutcome(obj) {
+  __validateOutcome(obj);
+  (globalThis.__MRW_EMITTED ||= []).push(obj);
+  const e = new Error('__EMIT_OUTCOME__');
+  e.emitted = obj;
+  throw e;
+}
+export { answerMissing, addPendingQuestion, submitAndCheck, main };
 
 // The shipped pending-list statement, verbatim, with the three variables main()
 // has in scope at that point bound as arguments.
@@ -65,6 +84,11 @@ export async function loadDriver(profile) {
     assert.ok(src.includes(decl), `harness stale: ${decl} not found in the driver`);
     src = src.replace(decl, `function __unused_${fn}(`);
   }
+  // The shipped emitOutcome import would collide with the stub declaration; the
+  // stub validates through the same real contract module, so nothing is faked.
+  const CONTRACT_IMPORT = "import { emitOutcome, recordFill } from";
+  assert.ok(src.includes(CONTRACT_IMPORT), 'harness stale: driver_contract import not found in the driver');
+  src = src.replace(CONTRACT_IMPORT, "import { emitOutcome as __shipped_emitOutcome, recordFill } from");
   src = src.replace(/from '\.\//g, `from '${SHARED}/`) + STUBS;
   const file = join(home, `ashby_under_test_${seq++}.mjs`);
   writeFileSync(file, src);

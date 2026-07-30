@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 // lever_apply_driver.mjs - batch-safe Lever auto-apply driver.
 //
-// Emits one final structured JSON line for record_apply_outcome.mjs:
-//   { outcome: "submitted", ... } or { outcome: "skip", reason, ... }.
+// Exit + emission follow the unified driver contract (阶段 1 设计 §14 数字变真 /
+// ADR-15): one final structured JSON line via emitOutcome(), contract exit code.
+// The submit judgement is NOT local any more — Lever.checkSuccess() returns raw
+// page material and the single shared submissionVerdict() judges it (ADR-14).
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atsHome } from './paths.mjs';
 import { bachelorProgressCandidates, gpaRangeCandidates, gpaValue } from './greenhouse_value_rules.mjs';
+import { submissionVerdict, captureEvidence } from './submission_evidence.mjs';
+import { emitOutcome, recordFill } from './driver_contract.mjs';
 
 const HOME = atsHome();
 const REPO = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
@@ -37,6 +41,7 @@ const STATIC_COVER_LETTER_ALLOWED = process.env.MRWEIRDO_DISABLE_STATIC_COVER_LE
 const COVER_LETTER = process.env.MRWEIRDO_COVER_LETTER_PATH ||
   (STATIC_COVER_LETTER_ALLOWED ? (PROFILE.cover_letter_path || (existsSync(DEFAULT_COVER_LETTER) ? DEFAULT_COVER_LETTER : '')) : '');
 let coverLetterUploaded = false;
+const ANSWERS = []; // FillEntry log — every value this driver puts on the form (ADR-16 全问答落盘)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function readJson(file, fallback = {}) {
@@ -73,8 +78,11 @@ async function evalInTab(tab, js) {
   return parseJson(r.stdout, { ok: false, _raw: r.stdout, _err: r.stderr, _code: r.code });
 }
 
-function outcome(obj) {
-  console.log(JSON.stringify({ job_id: JOB_ID, ...obj }));
+// Builds the final outcome object. main() RETURNS it (instead of printing and
+// exiting inline) so the finally-block closeTab still runs before emitOutcome
+// exits the process with the contract code.
+function result(obj) {
+  return { job_id: JOB_ID, platform: 'lever', answers: ANSWERS, ...obj };
 }
 
 function profileLocation(profile = {}) {
@@ -300,6 +308,7 @@ async function answerRemaining(tab) {
 	      if (upload.code === 0) {
 	        coverLetterUploaded = true;
 	        filled.push({ label: field.label, result: parseJson(upload.stdout, upload.stdout), mode: 'cover_letter_upload' });
+	        recordFill(ANSWERS, { label: field.label, value: COVER_LETTER, source: 'derived', widget: 'file' });
 	      } else {
 	        unresolved.push({ ...field, note: 'cover_letter_upload_failed', manual_required: true, stderr: upload.stderr, stdout: upload.stdout });
 	      }
@@ -314,9 +323,13 @@ async function answerRemaining(tab) {
     const js = field.type === 'react-select'
       ? `(async () => await Lever.pickSelect(${JSON.stringify(field.id)}, ${JSON.stringify(answer)}))()`
       : `Lever.fillCardField(${JSON.stringify(field.id)}, ${JSON.stringify(answer)})`;
-    const result = await evalInTab(tab, js);
-    if (result?.ok) filled.push({ label: field.label, answer, result });
-    else unresolved.push({ ...field, attempted_answer: answer, result });
+    const applied = await evalInTab(tab, js);
+    if (applied?.ok) {
+      filled.push({ label: field.label, answer, result: applied });
+      recordFill(ANSWERS, { label: field.label, value: applied.picked ?? answer, source: 'derived', widget: field.type || 'text' });
+    } else {
+      unresolved.push({ ...field, attempted_answer: answer, result: applied });
+    }
     await sleep(150);
   }
 
@@ -342,19 +355,16 @@ async function closeTab(tab) {
 async function main() {
   let tab = null;
   let preShot = null;
-  let postShot = null;
   try {
     const applyUrl = normalizeLeverUrl(APPLY_URL_RAW);
     if (!existsSync(RESUME)) {
-      outcome({ outcome: 'skip', reason: 'resume_missing', resume_path: RESUME });
-      return;
+      return result({ outcome: 'needs_user', reason: 'resume_missing', resume_path: RESUME });
     }
 
     const goto = cdp('goto', applyUrl);
     const tabInfo = parseJson(goto.stdout);
     if (goto.code !== 0 || !tabInfo?.id) {
-      outcome({ outcome: 'skip', reason: 'cdp_goto_failed', stderr: goto.stderr, url: applyUrl });
-      return;
+      return result({ outcome: 'crashed', reason: 'cdp_goto_failed', stderr: goto.stderr, url: applyUrl });
     }
     tab = tabInfo.id;
     await sleep(2500);
@@ -366,18 +376,25 @@ async function main() {
       return { unavailable, hasSubmit, url: location.href, title: document.title };
     })()`);
     if (unavailable.unavailable || !unavailable.hasSubmit) {
-      outcome({ outcome: 'skip', reason: 'job_unavailable', detail: unavailable, url: applyUrl });
-      return;
+      return result({ outcome: 'not_submitted', reason: 'job_unavailable', detail: unavailable, url: applyUrl });
     }
 
     const inject = cdp('eval', tab, readFileSync(HELPERS, 'utf8'));
     if (inject.code !== 0 || !/Lever ready/.test(inject.stdout)) {
-      outcome({ outcome: 'skip', reason: 'helpers_inject_fail', stdout: inject.stdout, stderr: inject.stderr });
-      return;
+      return result({ outcome: 'crashed', reason: 'helpers_inject_fail', stdout: inject.stdout, stderr: inject.stderr });
     }
 
     const leverProfile = buildLeverProfile(PROFILE);
     const fill = await evalInTab(tab, `(async () => await Lever.fillForm(${JSON.stringify(leverProfile)}))()`);
+    // fillForm's plan carries what actually landed on the form; log it (ADR-16).
+    for (const p of (Array.isArray(fill?.plan) ? fill.plan : [])) {
+      recordFill(ANSWERS, {
+        label: p.needle || p.id || p.step,
+        value: p.picked ?? p.value ?? '',
+        source: 'profile',
+        widget: p.step === 'pickSelect' ? 'select' : 'text',
+      });
+    }
 
     let uploaded = null;
     for (const selector of ['input[type=file][name=resume]', 'input[type=file][data-qa=resume-upload]', '#resume-upload-input', 'input[type=file]']) {
@@ -388,15 +405,13 @@ async function main() {
       }
     }
     if (!uploaded) {
-      outcome({ outcome: 'skip', reason: 'resume_upload_fail', fill });
-      return;
+      return result({ outcome: 'crashed', reason: 'resume_upload_fail', fill });
     }
 
     const storage = await evalInTab(tab, '(async () => await Lever.waitForResumeStorageId(45000))()');
     const verifyResume = await evalInTab(tab, 'Lever.verifyResumeUploaded()');
     if (!storage?.ok && !verifyResume?.ok) {
-      outcome({ outcome: 'skip', reason: 'resume_storage_timeout', storage, verifyResume, fill });
-      return;
+      return result({ outcome: 'crashed', reason: 'resume_storage_timeout', storage, verifyResume, fill });
     }
 
     let answerPass = await answerRemaining(tab);
@@ -410,8 +425,7 @@ async function main() {
 	    if (unresolved.length > 0) {
 	      const allUnresolved = collectAnswerPassUnresolved(answerPass);
 	      const manualCoverLetter = allUnresolved.some((field) => field?.note === 'cover_letter_required_not_generated');
-	      outcome({ outcome: 'skip', reason: manualCoverLetter ? 'cover_letter_required_not_generated' : 'incomplete_form', fill, answer_pass: answerPass, remaining: unresolved });
-	      return;
+	      return result({ outcome: 'needs_user', reason: manualCoverLetter ? 'cover_letter_required_not_generated' : 'incomplete_form', fill, answer_pass: answerPass, remaining: unresolved });
 	    }
 
     const captcha = await evalInTab(tab, `(() => {
@@ -421,22 +435,20 @@ async function main() {
       return { found_widget: foundWidget, found_text: text.includes('verify you are human') };
     })()`);
     if (captcha.found_widget || captcha.found_text) {
-      outcome({ outcome: 'skip', reason: 'captcha_detected', captcha });
-      return;
+      return result({ outcome: 'captcha_blocked', reason: 'captcha_detected', captcha });
     }
 
     const visibleError = await evalInTab(tab, 'Lever.isErrorMessageVisible()');
     if (visibleError.visible) {
-      outcome({ outcome: 'skip', reason: 'visible_validation_error', visible_error: visibleError });
-      return;
+      return result({ outcome: 'needs_user', reason: 'visible_validation_error', visible_error: visibleError });
     }
 
-    mkdirSync(join(HOME, 'log/screenshots'), { recursive: true });
     const company = (new URL(applyUrl).pathname.split('/')[1] || 'lever').replace(/[^a-z0-9_-]+/gi, '_');
-    const stamp = new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15);
-    preShot = join(HOME, 'log/screenshots', `${company}_${JOB_ID || 'row'}_lever_pre_${stamp}.png`);
-    postShot = join(HOME, 'log/screenshots', `${company}_${JOB_ID || 'row'}_lever_post_${stamp}.png`);
-    cdp('screenshot', tab, preShot);
+    // Full-page evidence, name decided by code（阶段 1 设计 §13.7 投递留证）; a
+    // failed shot logs and continues — an application must not fail on evidence.
+    const pre = await captureEvidence(tab, { company, jobId: JOB_ID || 'row', phase: 'before_submit' })
+      .catch((e) => { console.error('[driver] before_submit evidence failed:', e.message); return null; });
+    preShot = pre?.path || null;
 
     const submit = await evalInTab(tab, `(() => {
       const found = Lever.findSubmit();
@@ -446,44 +458,39 @@ async function main() {
       return { ok: true, clicked: found.selector, text: found.text };
     })()`);
     if (!submit?.ok) {
-      outcome({ outcome: 'skip', reason: 'submit_button_not_found', submit });
-      return;
+      return result({ outcome: 'crashed', reason: 'submit_button_not_found', submit });
     }
 
     await sleep(5000);
-    const success = await evalInTab(tab, 'Lever.checkSuccess()');
-    const page = await evalInTab(tab, '(() => ({ url: location.href, title: document.title }))()');
-    cdp('screenshot', tab, postShot);
+    // Raw material from the page, judgement by the single shared implementation
+    // (ADR-14) — Lever's local success regex is gone.
+    const raw = await evalInTab(tab, 'Lever.checkSuccess()');
+    const verdict = submissionVerdict({ bodyText: raw?.bodyText, url: raw?.url });
+    const post = await captureEvidence(tab, { company, jobId: JOB_ID || 'row', phase: 'after_submit', verdict: verdict.verdict })
+      .catch((e) => { console.error('[driver] after_submit evidence failed:', e.message); return null; });
+    const evidence = { screenshot_pre: preShot, screenshot_post: post?.path || null };
 
-    if (success?.ok) {
-      outcome({
+    if (verdict.verdict === 'submitted') {
+      return result({
         outcome: 'submitted',
-        platform: 'lever',
+        verdict,
         url: applyUrl,
-        post_url: page.url,
-        screenshot_pre: preShot,
-	        screenshot_post: postShot,
+        post_url: raw?.url || null,
+        evidence,
 	        fill,
 	        answer_pass: answerPass,
 	        cover_letter_uploaded: coverLetterUploaded,
 	      });
-      return;
     }
-
-    outcome({
-      outcome: 'skip',
-      reason: 'submit_verify_fail',
-      submit,
-      success,
-      page,
-      screenshot_pre: preShot,
-      screenshot_post: postShot,
-    });
+    if (verdict.verdict === 'not_submitted') {
+      return result({ outcome: 'not_submitted', reason: 'page_states_failure', verdict, submit, page: { url: raw?.url }, evidence });
+    }
+    return result({ outcome: 'unknown', reason: 'submit_verify_fail', verdict, submit, page: { url: raw?.url }, evidence });
   } catch (e) {
-    outcome({ outcome: 'skip', reason: 'driver_exception', error: e.message, stack: e.stack });
+    return result({ outcome: 'crashed', reason: 'driver_exception', error: e.message, stack: e.stack });
   } finally {
     await closeTab(tab);
   }
 }
 
-await main();
+emitOutcome(await main());

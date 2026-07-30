@@ -441,18 +441,19 @@
   }
 
   /**
-   * checkSuccess() — Lever's standard success state is a redirect to
-   * `/<company>/<uuid>/thanks` and a body containing "Thanks for applying"
-   * / "Your application has been submitted".
+   * checkSuccess() — RAW MATERIAL ONLY. The judgement lives in
+   * shared/submission_evidence.mjs (submissionVerdict, the single
+   * implementation — ADR-14 判定器唯一实现). A local success regex here was the
+   * fourth copy of the judgement and exactly how drivers drifted apart; the
+   * node-side source guard cannot see into injected page code, so this
+   * function must never grow one back.
    */
   function checkSuccess() {
-    const path = location.pathname || '';
-    const body = document.body ? document.body.innerText || '' : '';
-    const urlMatch = /\/thanks(\/|$)/i.test(path) || /thank-you/i.test(path);
-    const textMatch = /thanks for applying|application has been (submitted|received)|your application has been/i.test(
-      body
-    );
-    return { ok: urlMatch || textMatch, path, urlMatch, textMatch };
+    return {
+      path: location.pathname || '',
+      url: location.href || '',
+      bodyText: document.body ? (document.body.innerText || '').slice(0, 20000) : '',
+    };
   }
 
   /**
@@ -535,7 +536,7 @@
       const r = setText(id, val);
       if (r.ok) {
         filled.push(id);
-        plan.push({ step: 'setText', id, value_len: String(val).length });
+        plan.push({ step: 'setText', id, value: String(val), value_len: String(val).length });
       } else {
         errors.push({ id, error: r.error });
       }
@@ -567,7 +568,7 @@
         const r = setText(forId, answer);
         if (r.ok) {
           filled.push('custom:' + needle);
-          plan.push({ step: 'setText', id: forId, needle });
+          plan.push({ step: 'setText', id: forId, needle, value: String(answer) });
         } else {
           errors.push({ id: forId, needle, error: r.error });
         }

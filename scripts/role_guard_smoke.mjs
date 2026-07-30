@@ -215,7 +215,7 @@ try {
   });
   const recorderId = db.prepare("SELECT id FROM jobs WHERE company = 'Recorder Co'").get().id;
   const submittedLog = path.join(tmpHome, 'submitted.log');
-  writeFileSync(submittedLog, 'human log line\n{"outcome":"submitted","post_url":"https://example.com/confirmation"}\n');
+  writeFileSync(submittedLog, 'human log line\n{"outcome":"submitted","verdict":{"verdict":"submitted","confirmHits":["ashby_success"],"denyHits":[]},"post_url":"https://example.com/confirmation"}\n');
   runScript('shared/record_apply_outcome.mjs', ['--row-id', String(recorderId), '--result-file', submittedLog]);
   const submittedRow = db.prepare('SELECT status, confirmation_url, skip_reason, auto_apply_eligible FROM jobs WHERE id = ?').get(recorderId);
   assert.equal(submittedRow.status, '✅ 已投');
@@ -236,7 +236,7 @@ try {
   });
   const skipRecorderId = db.prepare("SELECT id FROM jobs WHERE company = 'Skip Recorder Co'").get().id;
   const skipLog = path.join(tmpHome, 'skip.log');
-  writeFileSync(skipLog, '{"outcome":"skip","reason":"profile_specific_answer_required"}\n');
+  writeFileSync(skipLog, '{"outcome":"needs_user","reason":"profile_specific_answer_required"}\n');
   runScript('shared/record_apply_outcome.mjs', ['--row-id', String(skipRecorderId), '--result-file', skipLog]);
   const skipRow = db.prepare('SELECT status, skip_reason, auto_apply_eligible FROM jobs WHERE id = ?').get(skipRecorderId);
   assert.equal(skipRow.status, '⚠️ 跳过未投');
@@ -256,7 +256,7 @@ try {
   });
   const essayRecorderId = db.prepare("SELECT id FROM jobs WHERE company = 'Essay Co'").get().id;
   const essayLog = path.join(tmpHome, 'essay.log');
-  writeFileSync(essayLog, '{"outcome":"essay_pending","pending":[{"question":"Why us?","selector":"textarea"}]}\n');
+  writeFileSync(essayLog, '{"outcome":"needs_user","reason":"essay_pending","pending":[{"question":"Why us?","selector":"textarea"}]}\n');
   const essayRecord = runScript('shared/record_apply_outcome.mjs', ['--row-id', String(essayRecorderId), '--result-file', essayLog]);
   assert.match(essayRecord, /"action":"essay_pending"/);
   const essayRow = db.prepare('SELECT status, skip_reason, auto_apply_eligible FROM jobs WHERE id = ?').get(essayRecorderId);

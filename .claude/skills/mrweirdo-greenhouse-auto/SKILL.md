@@ -59,7 +59,7 @@ Extract company + role from URL slug + `<title>`. Save as `$COMPANY` / `$ROLE` f
 curl -sf http://localhost:9222/json/version > /dev/null || { echo "CDP died mid-run"; exit 1; }
 ```
 
-If CDP died → log to feedback.jsonl with `outcome=skip, reason=cdp_down`, return. The onboard dispatch loop will continue to the next row (don't abort the batch).
+If CDP died → log to feedback.jsonl with `outcome=crashed, reason=cdp_down`, return. The onboard dispatch loop will continue to the next row (don't abort the batch).
 
 ### 3. Navigate to URL
 
@@ -168,7 +168,7 @@ CAPTCHA_CHECK=$(node "$MRWEIRDO_REPO_ROOT/shared/cdp.mjs" eval "$TAB" "(() => {
 
 if echo "$CAPTCHA_CHECK" | grep -q '"blocked":true'; then
   echo "CAPTCHA blocker detected: $CAPTCHA_CHECK — skipping (cannot auto-bypass safely)"
-  # Log: outcome=skip, reason=captcha_present (see blockers array for which kind)
+  # Log: outcome=captcha_blocked, reason=captcha_present (see blockers array for which kind)
   exit 0
 fi
 ```
@@ -194,21 +194,21 @@ VERDICT=$(echo "$EVIDENCE" | python3 -c "import json,sys; print(json.load(sys.st
 
 One command reads the page text + URL (`/confirmation` counts as confirming evidence), judges, then takes a full-page screenshot whose name carries the verdict (`…_after_submitted.png` / `…_after_not_submitted.png` / `…_after_unknown.png`).
 
-Parse `$VERDICT`:
+Parse `$VERDICT`. Outcome words follow the unified driver contract (`shared/driver_contract.mjs`): `submitted` / `not_submitted` / `needs_user` / `captcha_blocked` / `rate_limited` / `crashed` / `unknown` — the recorder loudly rejects anything else (legacy `skip`/`essay_pending`/`error` are gone). Driver-binary exit codes: 0 submitted / 1 crashed / 2 needs_user·not_submitted·unknown / 3 captcha / 4 rate-limited — nonzero is a normal honest result, only 1 means the machinery broke.
 
 - `submitted` — **the page confirmed it**:
-  - Emit a structured final line like `{"outcome":"submitted","job_id":ROW_ID,"post_url":"<current URL>"}`
+  - Emit a structured final line like `{"outcome":"submitted","verdict":"submitted","job_id":ROW_ID,"post_url":"<current URL>"}` — the recorder refuses `outcome:"submitted"` without a `verdict` backing it.
   - Let onboard call `shared/record_apply_outcome.mjs` to mark the DB row. Do not update `jobs.db` directly inside this helper.
   - Append to `daily_count.jsonl` only from the onboard caller after the recorder says `action:"submitted"`.
   - Append to `feedback.jsonl`: `{outcome:'submitted', auto_submitted:true, screenshot_pre, screenshot_post}`
 
 - `not_submitted` — **the page states failure**:
   - Do NOT click Submit again
-  - Emit `{"outcome":"skip","reason":"page_states_failure","deny_hits":<from $EVIDENCE>,...}` and let the onboard recorder mark the DB row. Never report this row as submitted.
+  - Emit `{"outcome":"not_submitted","reason":"page_states_failure","deny_hits":<from $EVIDENCE>,...}` and let the onboard recorder mark the DB row. Never report this row as submitted.
 
 - `unknown` — **uncertain submit state**:
   - Do NOT click Submit again (avoid double submissions)
-  - Emit `{"outcome":"skip","reason":"submit_verify_fail",...}` and let the onboard recorder mark the DB row.
+  - Emit `{"outcome":"unknown","reason":"submit_verify_fail",...}` and let the onboard recorder mark the DB row.
   - Append to `feedback.jsonl` with both screenshots — these are the forensic record
 
 ---

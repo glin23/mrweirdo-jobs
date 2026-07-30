@@ -336,7 +336,7 @@ for (let i = 0; i < rows.length; i += 1) {
 
     const resultFile = join(tmpDir, `apply-result-${row.id}.jsonl`);
     writeFileSync(resultFile, `${JSON.stringify({
-      outcome: 'skip',
+      outcome: 'needs_user',
       reason,
       validation: validationResult,
     })}\n`, { mode: 0o600 });
@@ -376,8 +376,12 @@ for (let i = 0; i < rows.length; i += 1) {
     ...(!coverLetter.ok ? { MRWEIRDO_COVER_LETTER_GENERATION_REASON: coverLetter.reason || 'cover_letter_generation_failed' } : {}),
   };
   const code = await runTee([driverFor(row), row.apply_url, String(row.id)], resultFile, driverEnv);
-  if (code !== 0) {
-    console.error(`[apply-batch] driver exited code=${code}; recorder will classify from captured output`);
+  // 契约退出码（ADR-15）：0 提交 / 1 崩溃 / 2 需人看 / 3 验证码 / 4 超限。
+  // 2-4 是驱动如实报告的正常结局；1 是机器坏了，必须响。
+  if (code === 1) {
+    console.error(`[apply-batch] ⚠️ driver CRASHED (exit 1) for row ${row.id}; recorder will file it as crashed`);
+  } else if (![0, 2, 3, 4].includes(code)) {
+    console.error(`[apply-batch] driver exited non-contract code=${code}; recorder will classify from captured output`);
   }
 
   const record = runNode(['shared/record_apply_outcome.mjs', '--row-id', String(row.id), '--result-file', resultFile]);
@@ -405,7 +409,7 @@ for (let i = 0; i < rows.length; i += 1) {
       progress('apply', `job report generation failed for row ${row.id}; continuing`);
     }
   }
-  summaries.push({ row_id: row.id, company: row.company, title: row.title, result_file: resultFile, job_report_path: jobReportPath, ...recorded });
+  summaries.push({ row_id: row.id, company: row.company, title: row.title, result_file: resultFile, job_report_path: jobReportPath, driver_outcome: driverOutcome.outcome || null, ...recorded });
 
   if (recorded.action === 'submitted') {
     appendFileSync(
@@ -427,6 +431,13 @@ for (let i = 0; i < rows.length; i += 1) {
       next: `${rows[i + 1].company} (${i + 2}/${rows.length})`,
     });
   }
+}
+
+// crashed 单列高亮（阶段 1 设计 §14.4.3 失败路 2）：静默空转是同类工具被骂最凶的
+// 死法；机器坏了和正常跳过不许混在同一堆数字里。
+const crashedRows = summaries.filter((s) => s.driver_outcome === 'crashed' || s.reason === 'driver_died_without_outcome');
+if (crashedRows.length > 0) {
+  console.error(`[apply-batch] ⚠️⚠️ ${crashedRows.length} driver(s) CRASHED this batch: ${crashedRows.map((s) => `row ${s.row_id}`).join(', ')} — machinery failure, read the result files before trusting the batch numbers`);
 }
 
 let reportPath = null;

@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
 import { onboardTmpPath } from './onboard_tmp.mjs';
+import { validateOutcome } from './driver_contract.mjs';
 
 function argValue(name) {
   const idx = process.argv.indexOf(name);
@@ -80,7 +81,21 @@ function appendManualReviewRow(reason, detail = outcome) {
 }
 
 const output = readFileSync(resultFile, 'utf8');
-const outcome = parseOutcome(output) || { outcome: 'skip', reason: 'driver_no_structured_outcome' };
+// A driver that died without a structured line is a CRASH, recorded as such —
+// not a routine skip. 旧名 driver_no_structured_outcome 换名归入 crashed，语义
+// 保留（ADR-15：静默空转是 AIHawk 被骂最凶的死法，必须响）。
+let outcome;
+try {
+  outcome = validateOutcome(parseOutcome(output) || {
+    outcome: 'crashed',
+    reason: 'driver_died_without_outcome',
+    detail: 'no structured outcome line found in the driver result file',
+  });
+} catch (e) {
+  // Contract violation = producer bug. Loud exit, row untouched, no bucketing.
+  console.error(JSON.stringify({ ok: false, reason: 'driver_outcome_contract_violation', row_id: rowId, error: e.message }));
+  process.exit(1);
+}
 initDb();
 const db = new DatabaseSync(dbPath());
 const row = db.prepare('SELECT id, company, title, status FROM jobs WHERE id = ?').get(rowId);
@@ -123,11 +138,13 @@ function markSkipped(reason, detail = outcome, action = 'skipped') {
 	}
 
 if (outcome.outcome !== 'submitted') {
-  if (outcome.outcome === 'essay_pending') {
+  // essay_pending is a reason inside the needs_user family now (契约词汇表里
+  // 没有它单独的席位), but its manual-review semantics are unchanged.
+  if (outcome.outcome === 'needs_user' && outcome.reason === 'essay_pending') {
     markSkipped('essay_pending_main_agent_required', outcome, 'essay_pending');
     process.exit(0);
   }
-  markSkipped(outcome.reason || outcome.outcome || 'driver_not_submitted');
+  markSkipped(outcome.reason || outcome.outcome);
   process.exit(0);
 }
 
