@@ -563,7 +563,9 @@
     const txt = document.body ? document.body.innerText || '' : '';
     const patterns = [
       /application\s+(has\s+been\s+)?(submitted|received|sent)/i,
-      /thank\s+you\s+for\s+(applying|your\s+application|your\s+interest)/i,
+      // "your interest" removed: it appears verbatim in real failure banners
+      // (Directive duplicate-application refusal). 第 6 轮验收 R6-C 点名拔除。
+      /thank\s+you\s+for\s+(applying|your\s+application)/i,
       /your\s+application\s+(is\s+complete|was\s+successful)/i,
       /confirmation\s+(number|code)\s*[:#]/i,
     ];

@@ -105,22 +105,29 @@ export function sweep(home, { apply = true } = {}) {
     return true;
   };
 
-  for (const target of PII_TARGETS) {
-    if (typeof target === 'string') {
-      inspect(join(home, target), FILE_MODE, (p) => chmodSync(p, FILE_MODE));
-      continue;
-    }
-    const dir = join(home, target.dir);
-    if (!inspect(dir, DIR_MODE, (p) => chmodSync(p, DIR_MODE))) continue;
+  // Directories are walked unconditionally — an already-700 subdirectory can
+  // still hold 644 strays put there by a third party, and the sweep is the only
+  // trigger that ever sees files we did not write ourselves (第 6 轮验收 R6-D
+  // 扣分项②：mode 合格的子目录被 inspect 早退，嵌套内容永远轮不到检查).
+  const sweepDir = (dir) => {
+    if (!inspect(dir, DIR_MODE, (p) => chmodSync(p, DIR_MODE))) return;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) {
-        inspect(path, DIR_MODE, (p) => lockDir(p, { recursive: true }));
+        sweepDir(path);
         continue;
       }
       if (!entry.isFile()) continue;
       inspect(path, FILE_MODE, (p) => chmodSync(p, FILE_MODE));
     }
+  };
+
+  for (const target of PII_TARGETS) {
+    if (typeof target === 'string') {
+      inspect(join(home, target), FILE_MODE, (p) => chmodSync(p, FILE_MODE));
+      continue;
+    }
+    sweepDir(join(home, target.dir));
   }
   return report;
 }

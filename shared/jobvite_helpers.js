@@ -583,7 +583,10 @@
     }
     const txt = document.body ? document.body.innerText || '' : '';
     const patterns = [
-      /thank\s+you\s+for\s+(applying|your\s+application|your\s+interest)/i,
+      // "thank you for your interest" is NOT a success signal: the Directive
+      // failure banner ("We couldn't submit your application … Thank you for
+      // your interest!") contains it verbatim. 第 6 轮验收 R6-C 点名拔除。
+      /thank\s+you\s+for\s+(applying|your\s+application)/i,
       /application\s+(has\s+been\s+)?(submitted|received|sent)/i,
       /we'?ve\s+received\s+your\s+application/i,
       /your\s+application\s+(is\s+complete|was\s+successful)/i,

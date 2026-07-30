@@ -32,7 +32,11 @@ import { lockDir, lockFile } from './state_file_lock.mjs';
 // target: 'text' (default) matches against page bodyText; 'url' against the
 // page URL. URL hits join the same confirm set — evidence, not a bypass.
 export const CONFIRM_PATTERNS = [
-  { id: 'ashby_success', re: /successfully submitted/i, fixture: 'confirm_ashby_success.txt' },
+  // Negative-context lookbehinds: "was not successfully submitted" is a denial
+  // wearing confirmation words (第 6 轮验收 R6-A 扣分项①). The deny table has the
+  // matching negated_success rule; the lookbehind keeps the canonical phrasing
+  // out of the confirm set so it lands cleanly on not_submitted, not unknown.
+  { id: 'ashby_success', re: /(?<!not (?:been |yet )?)(?<!n[’']t (?:been |yet )?)successfully submitted/i, fixture: 'confirm_ashby_success.txt' },
   { id: 'application_received', re: /application[\s\S]{0,30}received/i, fixture: 'confirm_application_received.txt' },
   { id: 'thank_you_for_applying', re: /thanks? (?:so much )?for (?:applying|submitting|your application)|thank you for (?:applying|submitting|your application)/i, fixture: 'confirm_greenhouse_thank_you.txt' },
   { id: 'lever_application_submitted', re: /application (?:has been )?submitted|your application has been received/i, fixture: 'confirm_lever_submitted.txt' },
@@ -44,6 +48,7 @@ export const CONFIRM_PATTERNS = [
 // human look at the manual-review list; a false confirm invents a submission.
 export const DENY_PATTERNS = [
   { id: 'couldnt_submit', re: /could(?:n[’']t| ?not) submit|unable to submit/i, fixture: 'deny_directive_304.txt' },
+  { id: 'negated_success', re: /(?:\bnot|n[’']t)(?: been| yet)? (?:successfully )?submitted/i, fixture: 'deny_negated_success.txt' },
   { id: 'already_applied', re: /already applied|already submitted an application/i, fixture: 'deny_directive_305.txt' },
   { id: 'needs_corrections', re: /needs corrections/i, fixture: 'deny_binti_needs_corrections.txt' },
   { id: 'missing_required_field', re: /missing entry for required field/i, fixture: 'deny_missing_required.txt' },

@@ -125,6 +125,31 @@ test('lockDir: recursive option reaches nested files', () => {
   assert.equal(mode(nested), 0o600);
 });
 
+// 第 6 轮验收扣分项②：sweep 对「已经是 700 的子目录」不下潜——子目录 mode 合格时
+// inspect 早退，里面被第三方放进的 644 文件永远轮不到检查。写入侧对新文件出生即锁，
+// 但补网存在的意义恰恰是兜「不是我们写的文件」。
+test('sweep descends into already-700 nested subdirectories and locks 644 strays', () => {
+  const home = mkdtempSync(join(tmpdir(), 'mrw-lock-nested-'));
+  const stray = join(home, 'log', 'screenshots', 'batch-a', 'stray.png');
+  mkdirSync(dirname(stray), { recursive: true });
+  writeFileSync(stray, 'x');
+  chmodSync(stray, 0o644);
+  chmodSync(join(home, 'log', 'screenshots'), 0o700); // top carrier dir already locked
+  chmodSync(join(home, 'log', 'screenshots', 'batch-a'), 0o700); // nested dir already locked
+
+  const report = sweep(home);
+  assert.equal(mode(stray), 0o600, 'a 644 file inside an already-700 nested dir was skipped by sweep');
+  assert.ok(report.locked.includes(stray), 'sweep must report the stray it locked');
+
+  // Report mode must SEE the same stray without touching it.
+  const stray2 = join(home, 'log', 'screenshots', 'batch-a', 'stray2.png');
+  writeFileSync(stray2, 'x');
+  chmodSync(stray2, 0o644);
+  const dry = sweep(home, { apply: false });
+  assert.ok(dry.would_lock.includes(stray2), 'report mode must name nested unlocked files');
+  assert.equal(mode(stray2), 0o644, 'report mode must not chmod');
+});
+
 test('CLI: `state_file_lock.mjs sweep` locks the resolved home and exits 0', () => {
   const { home, files } = fullHome();
   const run = spawnSync(process.execPath, ['shared/state_file_lock.mjs', 'sweep'], {
