@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { atsHome } from './paths.mjs';
 import { roleTypesFromSearchIntent } from './role_types.mjs';
-import { normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
+import { normalizeCompany, normalizeTitle, SUBMITTED_WHERE_SQL } from './job_identity.mjs';
 import { passesQueueFilters, duplicateKey } from './eligibility.mjs';
 import { functionRelevanceBlockReason } from './function_relevance.mjs';
 import { SUPPORTED_AUTO_PLATFORMS } from './sourcing/apply_url_classification.mjs';
@@ -79,12 +79,9 @@ const candidates = db.prepare(`
   CANDIDATE_LIMIT
 );
 
+// 唯一谓词（ADR-13）：防重复投递的「已投」集合与所有计数出口同一条 WHERE。
 const submittedKeys = new Set(
-  db.prepare(`
-    SELECT company, title
-      FROM jobs
-     WHERE status IN (${[...SUBMITTED_STATUSES].map(() => '?').join(',')})
-  `).all(...SUBMITTED_STATUSES)
+  db.prepare(`SELECT company, title FROM jobs WHERE ${SUBMITTED_WHERE_SQL}`).all()
     .map((r) => `${normalizeCompany(r.company)}::${normalizeTitle(r.title)}`)
 );
 

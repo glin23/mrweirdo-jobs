@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { atsHome } from './paths.mjs';
 import { deriveRoleTypeFromJob, roleTypesFromSearchIntent } from './role_types.mjs';
-import { normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
+import { normalizeCompany, normalizeTitle, SUBMITTED_WHERE_SQL } from './job_identity.mjs';
 import { eligibleReason, legitimacyBlockReason } from './eligibility.mjs';
 import { assessFunctionRelevance, FUNCTION_RELEVANCE_TOO_DISTANT_REASON } from './function_relevance.mjs';
 import { KNOWN_UNSUPPORTED_PLATFORMS, SUPPORTED_AUTO_PLATFORMS, discoveryApplyBucket } from './sourcing/apply_url_classification.mjs';
@@ -86,11 +86,7 @@ const allowedRoleTypes = roleTypesFromSearchIntent(intentDoc.search_intent || {}
 initDb();
 const db = new DatabaseSync(dbPath());
 const submittedKeys = new Set(
-  db.prepare(`
-    SELECT company, title
-      FROM jobs
-     WHERE status IN (${[...SUBMITTED_STATUSES].map(() => '?').join(',')})
-  `).all(...SUBMITTED_STATUSES)
+  db.prepare(`SELECT company, title FROM jobs WHERE ${SUBMITTED_WHERE_SQL}`).all()
     .map((r) => `${normalizeCompany(r.company)}::${normalizeTitle(r.title)}`)
 );
 

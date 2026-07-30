@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { atsHome } from './paths.mjs';
+import { SUBMITTED_STATUSES, SUBMITTED_WHERE_SQL } from './job_identity.mjs';
 
 const HOME = atsHome();
 
@@ -42,7 +43,7 @@ const rows = db.prepare(`
    WHERE date(COALESCE(submitted_at, auto_submitted_at, updated_at, created_at)) >= date(?)
      AND status IN ('✅ 已投', '✅ 已确认', '⚠️ 跳过未投', '❌ Rejected')
    ORDER BY
-     CASE WHEN status IN ('✅ 已投', '✅ 已确认') THEN 0 ELSE 1 END,
+     CASE WHEN ${SUBMITTED_WHERE_SQL} THEN 0 ELSE 1 END,
      COALESCE(submitted_at, auto_submitted_at, updated_at) DESC,
      id DESC
 `).all(since);
@@ -52,7 +53,7 @@ const funnel = db.prepare(`
     COUNT(*) AS total_rows,
     SUM(CASE WHEN status = '🤖 AI sourced' THEN 1 ELSE 0 END) AS pending_discovered,
     SUM(CASE WHEN COALESCE(auto_apply_eligible, 0) = 1 THEN 1 ELSE 0 END) AS auto_eligible,
-    SUM(CASE WHEN status IN ('✅ 已投', '✅ 已确认') THEN 1 ELSE 0 END) AS submitted_or_confirmed,
+    SUM(CASE WHEN ${SUBMITTED_WHERE_SQL} THEN 1 ELSE 0 END) AS submitted_or_confirmed,
     SUM(CASE WHEN status = '✅ 已确认' THEN 1 ELSE 0 END) AS confirmed_total,
     SUM(CASE WHEN status IN ('⚠️ 跳过未投', '❌ Rejected') THEN 1 ELSE 0 END) AS skipped_or_rejected,
     SUM(CASE WHEN apply_quota_limit IS NOT NULL THEN 1 ELSE 0 END) AS quota_guarded,
@@ -61,7 +62,7 @@ const funnel = db.prepare(`
   FROM jobs
 `).get();
 
-const submitted = rows.filter((r) => r.status === '✅ 已投' || r.status === '✅ 已确认');
+const submitted = rows.filter((r) => SUBMITTED_STATUSES.has(r.status)); // 与 SUBMITTED_WHERE_SQL 同一集合（ADR-13 唯一谓词）
 const skipped = rows.filter((r) => r.status === '⚠️ 跳过未投' || r.status === '❌ Rejected');
 const confirmed = rows.filter((r) => r.status === '✅ 已确认');
 const generatedAt = new Date().toLocaleString();

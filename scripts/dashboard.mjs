@@ -27,6 +27,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { SUBMITTED_WHERE_SQL } from '../shared/job_identity.mjs';
 
 const HOME = process.env.MRWEIRDO_HOME || path.join(os.homedir(), '.mrweirdo-jobs');
 const DB_PATH = path.join(HOME, 'jobs.db');
@@ -123,8 +124,10 @@ function fitColor(s) {
 
 function dbStats(db) {
   const todayISOprefix = new Date().toISOString().slice(0, 10);
-  const submittedToday = db.prepare("SELECT COUNT(*) as c FROM jobs WHERE status='✅ 已投' AND substr(submitted_at,1,10)=?").get(todayISOprefix)?.c ?? 0;
-  const submittedAll = db.prepare("SELECT COUNT(*) as c FROM jobs WHERE status IN ('✅ 已投','✅ 已确认')").get()?.c ?? 0;
+  // 唯一谓词（ADR-13）：今日计数原来只认 '✅ 已投'——一行当天被确认就从今日
+  // 额度里消失，防拉黑的日上限会被静默放宽。
+  const submittedToday = db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE ${SUBMITTED_WHERE_SQL} AND substr(submitted_at,1,10)=?`).get(todayISOprefix)?.c ?? 0;
+  const submittedAll = db.prepare(`SELECT COUNT(*) as c FROM jobs WHERE ${SUBMITTED_WHERE_SQL}`).get()?.c ?? 0;
   const skippedAll = db.prepare("SELECT COUNT(*) as c FROM jobs WHERE status IN ('⚠️ 跳过未投','❌ Rejected')").get()?.c ?? 0;
   const queueScored = db.prepare("SELECT COUNT(*) as c FROM jobs WHERE status='🤖 AI sourced' AND scored=1").get()?.c ?? 0;
   const queueAll = db.prepare("SELECT COUNT(*) as c FROM jobs WHERE status='🤖 AI sourced'").get()?.c ?? 0;

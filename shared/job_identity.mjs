@@ -1,5 +1,11 @@
 export const SUBMITTED_STATUSES = new Set(['✅ 已投', '✅ 已确认']);
 
+// 「投了几家」唯一谓词（阶段 1 设计 §14 数字变真 / ADR-13）：所有读点（看板 /
+// 队列诊断 / 队列 / 报告）数「已投」一律拼这一条 WHERE 片段；rebuild 保证它与
+// submitted_at 非空互为充要。第二份手写状态清单 = 下一个 158/182/183。
+// Constant statuses only — no user input reaches this SQL.
+export const SUBMITTED_WHERE_SQL = `status IN (${[...SUBMITTED_STATUSES].map((s) => `'${s}'`).join(',')})`;
+
 export function normalizeCompany(s = '') {
   let n = String(s)
     .normalize('NFKC')

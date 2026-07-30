@@ -175,6 +175,33 @@ const cdp = await checkCdp();
 // they still see what is unlocked, they just don't touch anything.
 const lockSweep = sweep(home, { apply: process.env.MRWEIRDO_LOCK_SWEEP !== 'report' });
 
+// 账本↔DB 一致性（阶段 1 设计 §14.2 / ADR-13）：rebuild dry-run 有差异 = 有人
+// 绕过唯一写账人 record_apply_outcome 改了派生缓存——响，不放行。账本或库还不
+// 存在时无从不一致，如实放行。
+async function checkLedgerConsistency() {
+  try {
+    const { ledgerPath, rebuild } = await import('./submission_ledger.mjs');
+    const { dbPath } = await import('./local_db.mjs');
+    if (!existsSync(ledgerPath(home)) || !existsSync(dbPath())) {
+      return { ok: true, note: 'ledger or db not created yet — nothing to diverge' };
+    }
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(dbPath(), { readOnly: true });
+    const report = rebuild(home, db, { apply: false });
+    return {
+      ok: report.changes.length === 0,
+      checked: report.checked,
+      changes: report.changes,
+      remediation: report.changes.length
+        ? ['Someone wrote the derived DB columns outside the funnel. Review the diff, then: node shared/submission_ledger.mjs rebuild --apply']
+        : [],
+    };
+  } catch (e) {
+    return { ok: false, error: e.message }; // 坏账本行也算不一致——账本是正典，坏了必须先修
+  }
+}
+const ledgerConsistency = await checkLedgerConsistency();
+
 // A hard check, not a warning: this file already emits five kinds of WARN and an
 // automated flow walks straight past all of them. What it checks is onboarding
 // completeness (ADR-11): did the identity funnel ever run? It fails only for a
@@ -201,6 +228,7 @@ const checks = [
   { name: 'role_guard_smoke', ok: smoke.code === 0, detail: (smoke.stdout || smoke.stderr).trim() },
   { name: 'queue_nonempty', ok: queueRows.length > 0, detail: { rows: queueRows.length } },
   { name: 'queue_validated', ok: validations.every((v) => v.ok && v.allowed), detail: validations.filter((v) => !(v.ok && v.allowed)) },
+  { name: 'submission_ledger_consistent', ok: ledgerConsistency.ok, detail: ledgerConsistency },
   { name: 'cdp', ok: cdp.ok, detail: cdp },
 ];
 
