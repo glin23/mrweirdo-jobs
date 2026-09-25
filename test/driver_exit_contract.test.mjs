@@ -4,9 +4,9 @@
 //   * Directive 失败横幅 → not_submitted，且第 1 次尝试就短路（不再烧 4 次盲目重试）
 //   * 真成功 → submitted 且 verdict 同行（outcome 由 verdict 推出）
 //   * 全问答（answers[]）随最终结局一起上交（ADR-16）
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,6 +83,51 @@ test('Ashby 出货 main()：真成功 → submitted / exit 0，verdict 与 answe
   } finally {
     clearStubs();
   }
+});
+
+// 2026-09-25 restart-apply 小修包第 3 项：这两处曾用 console.log 吐旧词 skip 再
+// return——记账人拒收旧词，行既不入账也不改库，下一批反复重挑。表单没加载 /
+// 简历传不上都是机器没走到表单，按契约归 crashed（与 Greenhouse 同 reason 同词）。
+test('Ashby 出货 main()：表单一直加载不出来 → crashed / exit 1（不再吐旧词 skip）', async () => {
+  const driver = await loadAshby(ASHBY_BASE);
+  mock.timers.enable({ apis: ['Date'] });
+  setEvalRules([
+    // Each poll advances the fake clock so the 25s hydrate wait ends without real waiting.
+    { match: 'has_resume', result: () => { mock.timers.tick(5000); return { ready: 'complete', has_resume: false, input_count: 0, url: 'x', title: 't', body_text: '' }; } },
+  ]);
+  try {
+    const emitted = await runToEmit(driver.main);
+    assert.equal(emitted.outcome, 'crashed');
+    assert.equal(emitted.reason, 'ashby_form_not_loaded');
+    assert.equal(EXIT_CODES[emitted.outcome], 1);
+  } finally {
+    mock.timers.reset();
+    clearStubs();
+  }
+});
+
+test('Ashby 出货 main()：简历传不上 → crashed / exit 1（与 Greenhouse 同 reason）', async () => {
+  const driver = await loadAshby(ASHBY_BASE);
+  setEvalRules(ashbyBaseRules());
+  globalThis.__MRW_CDP_RULES = [{ match: '#_systemfield_resume', result: { code: 1, stdout: '', stderr: 'no such node' } }];
+  try {
+    const emitted = await runToEmit(driver.main);
+    assert.equal(emitted.outcome, 'crashed');
+    assert.equal(emitted.reason, 'resume_upload_failed');
+  } finally {
+    clearStubs();
+  }
+});
+
+test('源码守卫：驱动的结局只走 emitOutcome，禁止 console.log 裸吐 outcome', () => {
+  const shared = join(dirname(fileURLToPath(import.meta.url)), '..', 'shared');
+  const offenders = [];
+  for (const f of readdirSync(shared).filter((n) => n.endsWith('_apply_driver.mjs'))) {
+    readFileSync(join(shared, f), 'utf8').split('\n').forEach((line, i) => {
+      if (/console\.log\(\s*JSON\.stringify\(\s*\{\s*outcome\s*:/.test(line)) offenders.push(`${f}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(offenders, [], 'bare outcome emission bypasses the contract (ADR-15)');
 });
 
 test('Ashby 出货 main()：Directive 失败横幅 → not_submitted，第 1 次尝试就短路', async () => {

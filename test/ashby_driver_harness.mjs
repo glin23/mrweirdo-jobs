@@ -32,6 +32,12 @@ const STUBS = `
 // ---- test harness: browser boundary only ----------------------------------
 function cdp(...args) {
   globalThis.__MRW_CDP.push(args);
+  // Same rule shape as the Lever harness: match a substring of any argument.
+  for (const r of (globalThis.__MRW_CDP_RULES || [])) {
+    if (args.some((a) => typeof a === 'string' && a.includes(r.match))) {
+      return typeof r.result === 'function' ? r.result(args) : r.result;
+    }
+  }
   if (args[0] === 'goto') return { stdout: '{"id":"tab-under-test"}', stderr: '' };
   return { stdout: '{"ok":true}', stderr: '' };
 }

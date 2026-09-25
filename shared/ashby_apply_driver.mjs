@@ -1042,17 +1042,17 @@ async function main() {
   await sleep(6000);
   const hydrated = await waitForAshbyForm(tab);
   if (!hydrated.ok) {
-    console.log(JSON.stringify({ outcome: 'skip', reason: 'ashby_form_not_loaded', detail: hydrated, job_id: JOB_ID }));
+    // The form never mounted: the machinery did not reach it (dead postings are
+    // stopped earlier by the liveness gate's posting API check) → crashed, loud.
     await closeTab(tab);
-    return;
+    emitOutcome({ outcome: 'crashed', reason: 'ashby_form_not_loaded', detail: hydrated, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
   }
 
   log('Upload resume…');
   const u = await uploadResume(tab);
   if (!u.ok) {
-    console.log(JSON.stringify({ outcome: 'skip', reason: 'resume_upload_failed', detail: u, job_id: JOB_ID }));
     await closeTab(tab);
-    return;
+    emitOutcome({ outcome: 'crashed', reason: 'resume_upload_failed', detail: u, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
   }
 
   log('Fill name/email…');
