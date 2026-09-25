@@ -32,6 +32,7 @@ import {
   readInflight,
   writeInflight,
 } from './apply_guard.mjs';
+import { fillBasisVersion, readSeen, scoringBasisVersion, seenIndex } from './seen_log.mjs';
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const home = atsHome();
@@ -339,6 +340,9 @@ if (!dryRun) {
 // L1 run target folded into today's tier; this is the user's first line.
 const budget = budgetLine(attemptIndex(readAll(home)), maxRows ?? tier, tier);
 progress('apply', budget.line);
+// Rule 6 (needs_info + unchanged fill basis) reads the seen log; the basis is
+// fixed for the batch, the log is re-read per row like the ledger.
+const seenBasis = { scoring: scoringBasisVersion(home), fill: fillBasisVersion(home) };
 
 const queueRun = runNode(['shared/auto_apply_queue.mjs', '--summary']);
 if (queueRun.stderr) process.stderr.write(queueRun.stderr);
@@ -388,7 +392,7 @@ for (let i = 0; i < rows.length; i += 1) {
 
   // 投前权威闸（ADR-S7）: the ledger is re-read for EVERY row, so an attempt
   // recorded a moment ago — by this batch or another session — is seen.
-  const guard = checkDispatch(row, attemptIndex(readAll(home)), budget, new Date());
+  const guard = checkDispatch(row, attemptIndex(readAll(home)), budget, new Date(), { index: seenIndex(readSeen(home)), basis: seenBasis });
   if (!guard.ok) {
     progress('apply', `guard: row ${row.id} not dispatched — ${guard.reason}${guard.ref_ledger_id ? ` (ledger ${guard.ref_ledger_id})` : ''}`);
     summaries.push({ row_id: row.id, company: row.company, title: row.title, action: 'guard_blocked', reason: guard.reason, ref_ledger_id: guard.ref_ledger_id });

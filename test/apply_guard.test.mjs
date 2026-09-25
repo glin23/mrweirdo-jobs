@@ -15,6 +15,7 @@ import {
   dailyTier,
   budgetLine,
   checkDispatch,
+  identityBlock,
   preSubmitFailCount,
   priorApplicationToCompany,
   breaker,
@@ -23,6 +24,7 @@ import {
   clearInflight,
 } from '../shared/apply_guard.mjs';
 import { append, appendCorrection, readAll } from '../shared/submission_ledger.mjs';
+import { readSeen, recordSeen, seenIndex } from '../shared/seen_log.mjs';
 
 const TZ = 'America/New_York';
 const NOW = new Date('2026-09-25T18:00:00Z'); // 14:00 EDT
@@ -56,7 +58,8 @@ function fresh(over = {}) {
   return rest;
 }
 const job = (over = {}) => ({ apply_url: gh(999999), company: 'Other Co', title: 'Growth Intern', ...over });
-const budget = (over = {}) => ({ target: 10, tier: 10, attempted_today: 0, max_attempts: 10, ...over });
+const budget = (over = {}) => ({ target: 10, tier: 10, attempted_today: 0, max_attempts: 10, started_at: NOW.toISOString(), ...over });
+const NOSEEN = { index: seenIndex([]), basis: { scoring: 's0', fill: 'f0' } };
 
 test('isAttempted 只认 may_have_submitted===true；缺字段的行让索引响亮报错', () => {
   assert.equal(isAttempted(entry()), true);
@@ -68,30 +71,30 @@ test('isAttempted 只认 may_have_submitted===true；缺字段的行让索引响
 test('规则 2：指纹命中「投过」→ already_attempted_fp（公司标题都不同也拦）', () => {
   const prior = entry({ apply_url: gh(42) });
   const idx = attemptIndex([prior], NOW, TZ);
-  const v = checkDispatch(job({ apply_url: 'https://job-boards.greenhouse.io/other/jobs/42?x=1' }), idx, budget(), NOW);
+  const v = checkDispatch(job({ apply_url: 'https://job-boards.greenhouse.io/other/jobs/42?x=1' }), idx, budget(), NOW, NOSEEN);
   assert.deepEqual(v, { ok: false, reason: 'already_attempted_fp', ref_ledger_id: prior.id });
 });
 
 test('规则 3：公司+标题命中「投过」→ already_attempted_company_title（重发换编号也拦）', () => {
   const prior = entry({ company_key: 'otherco', title_key: 'growth intern', ts: ago(400) });
   const idx = attemptIndex([prior], NOW, TZ);
-  const v = checkDispatch(job({ company: 'OtherCo, Inc.', title: 'Growth Internship' }), idx, budget(), NOW);
+  const v = checkDispatch(job({ company: 'OtherCo, Inc.', title: 'Growth Internship' }), idx, budget(), NOW, NOSEEN);
   assert.equal(v.reason, 'already_attempted_company_title');
 });
 
 test('反例：可能已提交=false 的行不算投过——同指纹、同公司标题都放行', () => {
   const idx = attemptIndex([entry({ apply_url: gh(42), company_key: 'other', title_key: 'growth intern', outcome: 'crashed', verdict: 'unknown', may_have_submitted: false, reason: 'resume_upload_failed' })], NOW, TZ);
-  assert.deepEqual(checkDispatch(job({ apply_url: gh(42) }), idx, budget(), NOW), { ok: true, reason: null, ref_ledger_id: null });
+  assert.deepEqual(checkDispatch(job({ apply_url: gh(42) }), idx, budget(), NOW, NOSEEN), { ok: true, reason: null, ref_ledger_id: null });
 });
 
 test('规则 4：同公司 60 天内投过已满 2 次 → company_cooldown_60d；第 61 天放行', () => {
   const two = [entry({ company_key: 'other', ts: ago(10) }), entry({ company_key: 'other', ts: ago(59) })];
   assert.equal(COMPANY_MAX_60D, 2);
-  assert.equal(checkDispatch(job(), attemptIndex(two, NOW, TZ), budget(), NOW).reason, 'company_cooldown_60d');
+  assert.equal(checkDispatch(job(), attemptIndex(two, NOW, TZ), budget(), NOW, NOSEEN).reason, 'company_cooldown_60d');
   const oneOld = [entry({ company_key: 'other', ts: ago(10) }), entry({ company_key: 'other', ts: ago(61) })];
-  assert.equal(checkDispatch(job(), attemptIndex(oneOld, NOW, TZ), budget(), NOW).ok, true);
+  assert.equal(checkDispatch(job(), attemptIndex(oneOld, NOW, TZ), budget(), NOW, NOSEEN).ok, true);
   const oneOnly = [entry({ company_key: 'other', ts: ago(10) })];
-  assert.equal(checkDispatch(job(), attemptIndex(oneOnly, NOW, TZ), budget(), NOW).ok, true);
+  assert.equal(checkDispatch(job(), attemptIndex(oneOnly, NOW, TZ), budget(), NOW, NOSEEN).ok, true);
 });
 
 test('规则 5：同指纹 60 天内点提交前失败——常量 PRE_SUBMIT_RETRIES_60D=1：失败 1 次放行、2 次拦、最早一次滑出 60 天放行', () => {
@@ -100,12 +103,12 @@ test('规则 5：同指纹 60 天内点提交前失败——常量 PRE_SUBMIT_RE
   const j = job({ apply_url: gh(7) });
   const once = attemptIndex([fail(3)], NOW, TZ);
   assert.equal(preSubmitFailCount(once, 'greenhouse:7', NOW), 1);
-  assert.equal(checkDispatch(j, once, budget(), NOW).ok, true);
+  assert.equal(checkDispatch(j, once, budget(), NOW, NOSEEN).ok, true);
   const twice = attemptIndex([fail(3), fail(1)], NOW, TZ);
-  assert.equal(checkDispatch(j, twice, budget(), NOW).reason, 'pre_submit_retry_exhausted');
+  assert.equal(checkDispatch(j, twice, budget(), NOW, NOSEEN).reason, 'pre_submit_retry_exhausted');
   const slid = attemptIndex([fail(61), fail(1)], NOW, TZ);
   assert.equal(preSubmitFailCount(slid, 'greenhouse:7', NOW), 1);
-  assert.equal(checkDispatch(j, slid, budget(), NOW).ok, true);
+  assert.equal(checkDispatch(j, slid, budget(), NOW, NOSEEN).ok, true);
 });
 
 test('点提交前失败不进「今日已尝试」、不进同公司 60 天计数；needs_user 不算点提交前失败', () => {
@@ -116,17 +119,44 @@ test('点提交前失败不进「今日已尝试」、不进同公司 60 天计�
   ];
   const idx = attemptIndex(rows, NOW, TZ);
   assert.equal(idx.todayCount, 0);
-  assert.equal(checkDispatch(job(), idx, budget(), NOW).ok, true);
+  assert.equal(checkDispatch(job(), idx, budget(), NOW, NOSEEN).ok, true);
   assert.equal(preSubmitFailCount(idx, 'greenhouse:8', NOW), 0);
 });
 
-test('规则 1：今日额度用完 → daily_cap_reached；本次目标已满 → run_target_reached', () => {
-  const today = Array.from({ length: 3 }, () => entry({ ts: ago(0.1) }));
+test('规则 1：今日额度用完 → daily_cap_reached；本次开跑后已尝试满目标 → run_target_reached', () => {
+  const today = [entry({ ts: ago(0.2) }), entry({ ts: ago(0.1) }), entry({ ts: ago(0.05) })];
   const idx = attemptIndex(today, NOW, TZ);
   assert.equal(idx.todayCount, 3);
-  assert.equal(checkDispatch(job(), idx, budget({ tier: 3, attempted_today: 0, max_attempts: 10 }), NOW).reason, 'daily_cap_reached');
-  assert.equal(checkDispatch(job(), idx, budget({ tier: 10, attempted_today: 1, max_attempts: 2 }), NOW).reason, 'run_target_reached');
-  assert.equal(checkDispatch(job(), idx, budget({ tier: 10, attempted_today: 1, max_attempts: 3 }), NOW).ok, true);
+  assert.equal(checkDispatch(job(), idx, budget({ tier: 3, attempted_today: 0, max_attempts: 10 }), NOW, NOSEEN).reason, 'daily_cap_reached');
+  // Budget made at ago(0.15): 2 attempts since this run started.
+  assert.equal(checkDispatch(job(), idx, budget({ started_at: ago(0.15), max_attempts: 2 }), NOW, NOSEEN).reason, 'run_target_reached');
+  assert.equal(checkDispatch(job(), idx, budget({ started_at: ago(0.15), max_attempts: 3 }), NOW, NOSEEN).ok, true);
+  assert.throws(() => checkDispatch(job(), idx, { tier: 10, max_attempts: 3 }, NOW, NOSEEN), /started_at/);
+});
+
+test('规则 1 跨午夜（VERIFY P4）：运行跨过本地零点，本次目标仍按开跑以来的尝试数算', () => {
+  const start = new Date('2026-09-26T03:50:00Z'); // 23:50 EDT 09-25
+  const after = new Date('2026-09-26T04:20:00Z'); // 00:20 EDT 09-26
+  const b = budgetLine(attemptIndex([], start, TZ), 2, 10, start);
+  const attempts = [entry({ ts: '2026-09-26T03:55:00Z' }), entry({ ts: '2026-09-26T04:10:00Z' })];
+  const idx = attemptIndex(attempts, after, TZ);
+  assert.equal(idx.todayCount, 1, 'the new day only has the 00:10 attempt');
+  assert.equal(checkDispatch(job(), idx, b, after, NOSEEN).reason, 'run_target_reached', 'two attempts since start = target of 2');
+});
+
+test('规则 6：同岗上次卡在缺信息、填表依据没变 → needs_info_unchanged；补了档案（依据变了）→ 放行', () => {
+  const home = mkdtempSync(join(tmpdir(), 'mrw-guard-r6-'));
+  recordSeen(home, { code: 'needs_info', apply_url: gh(55), company: 'Acme', title: 'Ops Intern', jd_hash: null, basis_version: 'fill-v1', reason: 'gpa' });
+  const seen = { index: seenIndex(readSeen(home)), basis: { scoring: 's1', fill: 'fill-v1' } };
+  const idx = attemptIndex([], NOW, TZ);
+  assert.equal(checkDispatch(job({ apply_url: gh(55) }), idx, budget(), NOW, seen).reason, 'needs_info_unchanged');
+  assert.equal(identityBlock(job({ apply_url: gh(55) }), idx, NOW, seen).reason, 'needs_info_unchanged', 'the pre-score gate calls the same function');
+  assert.equal(checkDispatch(job({ apply_url: gh(55) }), idx, budget(), NOW, { ...seen, basis: { scoring: 's1', fill: 'fill-v2' } }).ok, true);
+  // Other seen codes are the pre-score gate's business, never a dispatch block.
+  recordSeen(home, { code: 'not_fit', apply_url: gh(56), company: 'Acme', title: 'Data Intern', jd_hash: 'x', basis_version: 's1', reason: 'fit_below_threshold' });
+  const seen2 = { index: seenIndex(readSeen(home)), basis: { scoring: 's1', fill: 'fill-v1' } };
+  assert.equal(checkDispatch(job({ apply_url: gh(56) }), idx, budget(), NOW, seen2).ok, true);
+  assert.throws(() => checkDispatch(job(), idx, budget(), NOW), /seen/);
 });
 
 test('「今日」按本机时区自然日：美东晚 9 点投的仍是今天，不按 UTC 跨日', () => {
@@ -140,11 +170,11 @@ test('更正行生效：被更正成 may_have_submitted=false 的行不再算投
   const orig = append(home, fresh());
   appendCorrection(home, orig.id, { may_have_submitted: false }, 'proof.png');
   const idx = attemptIndex(readAll(home), NOW, TZ);
-  assert.equal(checkDispatch(job({ apply_url: orig.apply_url }), idx, budget(), NOW).ok, true);
+  assert.equal(checkDispatch(job({ apply_url: orig.apply_url }), idx, budget(), NOW, NOSEEN).ok, true);
 });
 
 test('派单路径上推不出指纹 = bug，响亮报错', () => {
-  assert.throws(() => checkDispatch(job({ apply_url: 'https://acme.wd5.myworkdayjobs.com/x' }), attemptIndex([], NOW, TZ), budget(), NOW), /fingerprint/);
+  assert.throws(() => checkDispatch(job({ apply_url: 'https://acme.wd5.myworkdayjobs.com/x' }), attemptIndex([], NOW, TZ), budget(), NOW, NOSEEN), /fingerprint/);
 });
 
 test('dailyTier：缺省 10；只认 10/25/50；>30 没有确认参数响亮失败', () => {

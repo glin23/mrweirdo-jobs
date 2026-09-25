@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { companyTitleKey, jobFingerprint, normalizeCompany } from './job_identity.mjs';
 import { effectiveEntries, readAll } from './submission_ledger.mjs';
 import { lockDir, lockFile } from './state_file_lock.mjs';
+import { lookupSeen, stillSeen } from './seen_log.mjs';
 
 export const TIERS = Object.freeze([10, 25, 50]);
 export const DEFAULT_TIER = 10;
@@ -57,7 +58,7 @@ function pushTo(map, key, value) {
 // Index over the ledger's effective attempt lines (corrections applied).
 export function attemptIndex(entries, now = new Date(), tz = localTimeZone()) {
   const today = localDay(now, tz);
-  const idx = { byFp: new Map(), byCompanyTitle: new Map(), byCompany: new Map(), preSubmitFails: new Map(), todayCount: 0 };
+  const idx = { byFp: new Map(), byCompanyTitle: new Map(), byCompany: new Map(), preSubmitFails: new Map(), todayCount: 0, attemptTimes: [] };
   for (const e of effectiveEntries(entries)) {
     if (typeof e.may_have_submitted !== 'boolean') {
       throw new Error(`ledger line ${e.id} (job_id ${e.job_id}) has no boolean may_have_submitted — every line must say whether it may have reached the company`);
@@ -67,6 +68,7 @@ export function attemptIndex(entries, now = new Date(), tz = localTimeZone()) {
       pushTo(idx.byFp, fp, e);
       pushTo(idx.byCompanyTitle, `${e.company_key}::${e.title_key}`, e);
       pushTo(idx.byCompany, e.company_key, e.ts);
+      idx.attemptTimes.push(new Date(e.ts).getTime());
       if (localDay(new Date(e.ts), tz) === today) idx.todayCount += 1;
     } else if (e.outcome !== 'needs_user') {
       pushTo(idx.preSubmitFails, fp, e.ts);
@@ -95,7 +97,7 @@ export function dailyTier(env = process.env, confirmOver30 = false) {
 
 // L1 run target folded into the day's remaining tier (ADR-S7); the first line
 // the user sees.
-export function budgetLine(idx, target, tier) {
+export function budgetLine(idx, target, tier, now = new Date()) {
   if (!Number.isInteger(target) || target <= 0) throw new Error(`budget target must be a positive integer, got ${JSON.stringify(target)}`);
   const attemptedToday = idx.todayCount;
   const left = Math.max(0, tier - attemptedToday);
@@ -108,21 +110,39 @@ export function budgetLine(idx, target, tier) {
   } else {
     line = `开始，本次目标投 ${target}；今日额度剩 ${left}`;
   }
-  return { target, tier, attempted_today: attemptedToday, max_attempts: maxAttempts, max_scored: maxAttempts * 10, line };
+  // started_at: the run target counts attempts since THIS moment, so a run that
+  // crosses local midnight (todayCount resets) cannot overshoot it (VERIFY P4).
+  return { target, tier, attempted_today: attemptedToday, max_attempts: maxAttempts, max_scored: maxAttempts * 10, started_at: now.toISOString(), line };
 }
 
+const no = (reason, ref = null) => ({ ok: false, reason, ref_ledger_id: ref });
+const OK = Object.freeze({ ok: true, reason: null, ref_ledger_id: null });
+
 // The authoritative pre-dispatch gate. Checks in order, first hit wins:
-//   1. today's tier used up / this run's target reached
+//   1. today's tier used up / this run's target reached (attempts since
+//      budget.started_at)
+//   2-6. identityBlock (below)
+// `seen` = { index: seen_log.seenIndex(...), basis: { scoring, fill } } — rule 6
+// needs it; it is required, not optional, so no caller can skip rule 6 quietly.
+export function checkDispatch(job, idx, budget, now, seen) {
+  if (!budget?.started_at) throw new Error('checkDispatch: budget.started_at is required (make budgets with budgetLine)');
+  if (idx.todayCount >= budget.tier) return no('daily_cap_reached');
+  const sinceStart = idx.attemptTimes.filter((t) => t >= new Date(budget.started_at).getTime()).length;
+  if (sinceStart >= budget.max_attempts) return no('run_target_reached');
+  return identityBlock(job, idx, now, seen);
+}
+
+// Rules about THIS job, shared by the pre-score dedupe gate (stream_run, to
+// save scoring money) and the pre-dispatch gate (authoritative):
 //   2. fingerprint already attempted
 //   3. company+title already attempted
 //   4. company attempted ≥ COMPANY_MAX_60D times in 60 days
 //   5. pre-submit failures on this fingerprint in 60 days > PRE_SUBMIT_RETRIES_60D
-// (Rule 6 — needs_user with unchanged fill basis — lands with seen_log in S3.)
-export function checkDispatch(job, idx, budget, now = new Date()) {
+//   6. last seen stuck on missing info, and the fill basis (profile / essay
+//      profile / answer bank) has not changed since (PM R5)
+export function identityBlock(job, idx, now, seen) {
+  if (!seen?.index || !seen?.basis) throw new Error('identityBlock: seen context { index, basis } is required (rule 6)');
   const fp = fingerprintOrThrow(job.apply_url, 'checkDispatch');
-  const no = (reason, ref = null) => ({ ok: false, reason, ref_ledger_id: ref });
-  if (idx.todayCount >= budget.tier) return no('daily_cap_reached');
-  if (idx.todayCount - budget.attempted_today >= budget.max_attempts) return no('run_target_reached');
   const byFp = idx.byFp.get(fp);
   if (byFp?.length) return no('already_attempted_fp', byFp[byFp.length - 1].id);
   const byCt = idx.byCompanyTitle.get(companyTitleKey(job.company, job.title));
@@ -130,7 +150,9 @@ export function checkDispatch(job, idx, budget, now = new Date()) {
   const recent = (idx.byCompany.get(normalizeCompany(job.company)) || []).filter((ts) => withinWindow(ts, now));
   if (recent.length >= COMPANY_MAX_60D) return no('company_cooldown_60d');
   if (preSubmitFailCount(idx, fp, now) > PRE_SUBMIT_RETRIES_60D) return no('pre_submit_retry_exhausted');
-  return { ok: true, reason: null, ref_ledger_id: null };
+  const stuck = lookupSeen(seen.index, job).find((r) => r.code === 'needs_info' && stillSeen(r, { jd_hash: null }, seen.basis, now));
+  if (stuck) return no('needs_info_unchanged');
+  return OK;
 }
 
 // Answers the form question "have you applied to us before?" from the ledger
