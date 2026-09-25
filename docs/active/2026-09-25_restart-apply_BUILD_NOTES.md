@@ -9,9 +9,10 @@ Reads:
   - shared/driver_contract.mjs（统一退出契约）
   - .claude/arnold/roles/builder.md
   - （第 2 次召唤）docs/active/2026-09-25_restart-apply_DESIGN.md 第 2 轮全文、docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮 V1-V13、VERIFY_REPORT §5
-Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply
+  - （第 3 次召唤）DESIGN 第 2 轮 §3/§4/§7/§10、VERIFY_REPORT 第 2-3 轮挂账（规则 6、P3 slug/锁、P4 跨午夜）
+Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply
 Updated: 2026-09-25
-Iterations: 3
+Iterations: 4
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -228,3 +229,126 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 > **回炉第 1 轮（2026-09-25）**：`5284ff5` 修了 verify 第 2 轮 P1。新加两条红测试：一条走「补信息 → retry_gap_rows 放回 → 投前闸放行投成」，一条是「10 家全卡缺信息，第 11 家照投」。`180a640` 修了 P2：job_report 先剥掉 answers；reports/jobs 锁成 600/700，并加进 PII_TARGETS。Lever 的 fill/answer_pass 仍可能带值，Lever 暂停中，没有处理。测试 404→409，CI 四步 exit 0。**在 S3 落地「缺信息且档案没变就拦」（规则 6）并启用一次性工作库之前，不得真跑 apply_batch 放量**：页面拒收判 false 以后，同一个缺信息的岗位在工作库模式下每次运行都会被重派；在现在的全局库里，只有 retry_gap_rows 会把它放回队列。
 
 4. **推导规则照设计原文实现「needs_user / captcha / rate_limited 缺省 false，点击后的列一张表改 true」**：GH 的 needs_user reason 是动态生成的，列不全；漏列一个就会判 false，岗位被重投。这是危险方向，所以否决，改成「表外一律 true」（偏离 1）。
+
+---
+
+# 第 3 次召唤：即找即投 S3 + S4（2026-09-25）
+
+> 按 DESIGN 第 2 轮 §10（拆分清单）第 2 次召唤施工。10 个提交 `10d78de`..`e0b763a`，未 push。真实 `~/.mrweirdo-jobs/` 零写入：`jobs.db` 前后 mtime/size 都是 1782006129 / 1728512，`log/` 下仍没有 `submissions.jsonl` / `seen.jsonl`，`run-tmp` 下没有 `stream-*` [实测]。没有真投，没有 push。
+
+## 实现摘要（S3+S4）
+
+生产代码 +约 900 行（新模块 4 个：`stream_run` 465、`seen_log` 189、`inflight_recovery` 65、`watchlist_source` 49），测试 +约 1000 行。greenhouse 驱动 1894 → 1880（净减 14），ashby 驱动 1149 不变。
+
+| 设计项 | 提交 | 改了什么 |
+|---|---|---|
+| S3 看过记录 | `10d78de` | 新 `shared/seen_log.mjs`：`recordSeen` / `readSeen` / `seenIndex` / `lookupSeen` / `stillSeen` / `compact` / `jdHash` / `scoringBasisVersion` / `fillBasisVersion`。只存 9 个字段（V13），双钥匙（指纹或公司+标题），同键以最后一行为准，60 天压缩（临时文件 + 原子改名，600） |
+| S2 推迟项：规则 6 | `cee6e48` | `apply_guard` 抽出 `identityBlock`（规则 2-6），打分前去重闸和投前闸调同一个函数；规则 6 = 上次卡在缺信息、填表依据没变 → `needs_info_unchanged`。`checkDispatch` 必须带 seen 上下文，漏传响亮报错 |
+| VERIFY P4 跨午夜 | `cee6e48` | `budgetLine` 记 `started_at`；规则 1 的「本次目标」改数开跑以来的尝试，不再用「今日数 − 快照」 |
+| S3 `initRunDb` | `49173b2` | 新建工作库 + 全套表结构，`sqlite_sequence` 预置为 seqFloor（未明点 11：node:sqlite 下实测生效，第一行 = seqFloor+1）；路径已存在就拒绝；文件 600 |
+| S3 store 写看过 | `634d1a8` | 打分不合格 → `not_fit`（reason = 不合格原因代码）或 `visa_blocked`（`visa_compatible ≤ 2`），带 JD 指纹和打分依据版本 |
+| S3 greenhouse 两处写死路径 | `52ef827` | 「你以前投过我们吗」改调 `apply_guard.priorApplicationToCompany`（问账本）；链接看不出公司时按行号查 `dbPath()`（本次工作库），顺带把 `sqlite3` 命令行换成 `node:sqlite` 只读 |
+| S4 名单优先 | `9b3e2b4` | 新 `sourcing/watchlist_source.mjs`；dispatcher 注册 `watchlist`，单家错误经 `reportError` 带 slug 汇进 `errors`；`discover_candidates` 把 search_intent 传给来源；`intent_schema` 加可选 `target_companies`；预置名单 `sourcing/data/watchlist_ai_video.json`（21 家） |
+| S3 apply_batch 接线 | `efcf38d` | `--stream-run <id>` 流式模式；陈旧锁自动接管（VERIFY P3）；崩溃恢复抽成 `shared/inflight_recovery.mjs`（apply_batch 和 stream_run 共用）；supervisor 转发 `--stream-run` / `--confirm-tier-over-30` |
+| S3 状态机 | `d8ff260` | 新 `shared/stream_run.mjs`：`start` / `next` / `submit-scores` / `finish`，含 `pre_submit_fail_cap`、下架与缺信息写看过、历史前置检查、崩溃恢复、3 行报告、删运行目录 |
+| 沙箱试跑发现的问题 | `e0b763a` | 还有没打分的新岗就收工时，报告不再说成「没有新岗」 |
+
+**名单 slug 实测**（公开接口只读 GET，2026-09-25）：22 家里 **21 家可用**（Ashby 17：runway、lumaai、synthesia、elevenlabs、higgsfieldai、mirage、pika、suno、hedra、tavus、genmo、creatify、opusclip、krea、ideogram、viggle、black-forest-labs；Greenhouse 4：heygen、descript、stabilityai、lightricks），岗位链接 100% 推得出指纹。跳过：Kapwing（Lever，暂停中）；Captions / VEED / InVideo / D-ID / Arcads / Moonvalley 在两个平台都 404。试过但 404 的写法都记在文件 `_meta` 里（如 `higgsfield`、`luma-ai`、`blackforestlabs`）。
+
+**沙箱真实数据试跑** [实测，真实家目录拷贝，跑完已删]：
+1. 没迁历史时 `start` 拒绝开跑，提示先跑 `backfill-legacy`；
+2. 拷贝上 `backfill-legacy --apply` 核数 `{ok:true, submitted_in_db:182, legacy_unverified_in_ledger:182, fingerprints_match:true}`；
+3. 把 21 家名单写进拷贝的 search_intent，`start --target 2 --no-submit --max-windows 0` → `next`：21 块板 19 秒扫完、0 个错误，过硬过滤后 6 个候选，**1 个被历史账本拦下（already_attempted_fp）**，5 个进第一批；
+4. 直接 `finish` 暴露了报告误说「没有新岗」，已修（`e0b763a`）。
+
+## TDD 落地证据（S3+S4）
+
+每一步都先写测试、跑红、确认红的原因对，再实现转绿。
+
+- `seen_log.test.mjs`（9 条）。**红**：模块不存在（`ERR_MODULE_NOT_FOUND`）。**绿** 9/9。说明：这一步的实现写在跑红之前，红是事后把模块挪开跑出来的，如实写明。
+- `apply_guard.test.mjs` 新增 3 条（规则 1 按开跑以来计数、跨午夜、规则 6），另把全部调用补上 seen 上下文。**红**：没有 `identityBlock` 导出。**绿** 18/18。
+- `init_run_db.test.mjs`（2 条）。**红**：没有 `initRunDb` 导出。**绿** 2/2。
+- `store_scored_seen.test.mjs`（1 条）。**红**：看过记录为空（`actual: []`）。**绿**。实现后 `usable_apply_url.test.mjs` 1 条转红：夹具的 Ashby 链接不是 UUID、推不出指纹，`recordSeen` 抛错。改成「推不出指纹不写、计数 `seen_unrecordable` 并在进度里响亮打出」，见偏离 9。
+- `greenhouse_driver_paths.test.mjs`（3 条，走出货驱动源码 harness）。**红**：3 条都按预期错（账本有历史答 No、只有 jobs.db 有答 Yes、公司查成 `wrong-co`）。**绿** 3/3。
+- `watchlist_source.test.mjs`（5 条，含 dispatcher 真板接口模块 + 替身 fetch、`discover_candidates --sources watchlist` 真 CLI + `--import` 预载替身 fetch、预置名单形状）。**红**：模块不存在。**绿** 5/5。
+- `apply_batch_stream.test.mjs`（4 条）。**红** 3/4：流式模式下拦下的行仍占名额（驱动 0 次）、缺省 jobs.db 没拒绝、陈旧锁拒绝开跑。**绿** 4/4。
+- `stream_run_e2e.test.mjs`（13 条）。**红**：模块不存在。第一次实现后 3 条红，原因见试过的错误方向 1、2。**绿** 13/13。
+- **V1 硬指标测试结果**：假板 30 岗（8 合适）、N=10 连跑两次。第 1 次打分 30、驱动 8、账本 8 行，报告「投出 8 个 … / 看了 30 个新岗，合适的只有 8 个，没凑到 10 个」；第 2 次**打分器 0 次、驱动 0 次、账本仍 8 行**，报告「没有新岗」，打分前被拦的明细是 `already_attempted_fp` 8 + `seen_not_fit` 22；轮转窗口第 1 次 offset 0、第 2 次 offset 1000。
+- 全量：`npm test` **409 → 448**（新增 39 条，0 fail）。项目没有覆盖率工具，没有覆盖率数字。
+
+## 自审记录（S3+S4）
+
+- 「投过」仍只有 `isAttempted` 一份；打分前去重闸和投前闸共用 `identityBlock`，规则 6 只有一处实现。
+- 本次运行的计数（已尝试、点提交前失败）每批之后从账本重算，不做累加，重复调用不会多数。
+- 看过记录只存 9 个字段，e2e 用暗号断言 JD 正文和表单答案都不进文件（V13）；跑完家目录只多 `log/seen.jsonl`、`log/submissions.jsonl`、`source_cursor.json` 三个文件，运行目录删干净（V12）。
+- 新增 catch 两处，都有注释、都不压异常：陈旧锁读不懂就不接管、交给原来的 `wx` 打开去响亮拒绝；崩溃恢复里判断日志行是不是 JSON。
+- 派单路径和打分前去重闸上推不出指纹都响亮报错；只有 store 写看过记录这一处推不出指纹时降级为「计数 + 进度警告」，理由是看过记录只是记忆，缺一行只多花打分钱，不会重投。
+
+## 偏离 DESIGN（S3+S4，均申报，未擅改设计意图）
+
+1. **下架（expired）和缺信息（needs_info）的看过记录由 `stream_run` 在每批投完后写**，设计写的是 `apply_batch` 写。原因：`expired` 需要 JD 指纹，JD 正文只在本批的批次文件里，工作库的 jobs 表没有正文列，加列就要改表结构。后果：旧流程（不经 stream_run 直接跑 apply_batch）不写这两类记录，规则 6 只在流式运行里生效；旧流程的「补信息再投」回路本来就靠 retry_gap_rows，不受影响。
+2. **没有加 `--no-cursor-advance`**。`discover_candidates` 现有语义是「显式给 offset 就不动游标」，stream_run 轮转时显式传 offset，名单扫描传 `--source-window-size 0`；游标由 stream_run 在 `finish` 时写：窗口里的候选都用完了就挪到下一窗，还有剩下就停在本窗，下次接着看。
+3. **`initRunDb({ path, seqFloor })` 多了显式 `path`**（设计写 `{ seqFloor }`），路径已存在就拒绝。`seqFloor = max(账本最大 job_id, 100000)` 由 stream_run 算。
+4. **`checkDispatch(job, idx, budget, now, seen)` 多一个必填参数**，并抽出 `identityBlock`；`budgetLine` 返回值多 `started_at`（VERIFY P4 的修法）。
+5. **apply_batch 流式模式另外跳过了三样会把分数留在家目录的报告**：`job_report`（`reports/jobs/*.md`，含分数和差距）、`apply_report`、队列诊断 HTML。缺口报告保留（它写在运行目录里，随运行删掉）。流式模式也不预截断队列：闸按开跑以来计数，拦下的行不占名额。
+6. **VERIFY P3 两条挂账一并做了**：陈旧锁自动接管（`process.kill(pid, 0)` 报 ESRCH 才接管，并响亮说明）；名单来源公司名一律用 slug（和轮转来源同一写法）。
+7. **崩溃恢复抽成共享模块**，记账人的输出改写到 stderr（stream_run 的 stdout 只放一个 JSON）。
+8. **派单前校验失败的行（`stage=pre_dispatch`）也记成 needs_info**。账本行里没有 `stage` 字段，和页面拒收分不开。后果：这种行要等档案变了才会再看。流式模式下队列只有刚打完分、刚判合格的行，这种情况很少。
+9. **store 遇到推不出指纹的链接不写看过记录，计数 `seen_unrecordable`**（见自审最后一条）。
+10. **打分依据版本不计入 `feedback.jsonl` 最近 20 条**（派遣单裁定，符合 DESIGN 未明点 5 / ADR 原意：计入的话每次运行都会让「不合适」作废重看）。也没计入 `company_list.user.json`（它只影响 `quota_guarded` 一个原因）。
+11. **轮转只扫 `greenhouse_bulk` + `ashby_bulk`**（只有这两个平台能自动投）；「扫完一整圈」缺省 = `ceil(最长名单 / 窗口大小)` 个窗口，`--max-windows` 可覆盖（测试和试跑用）。
+12. `held_for_review` 的 7 天规则写进了 `stillSeen`，但本包没有写入方（D10 名单公司投前过目，归 S5）。
+13. 预置名单放成数据文件，**不会被自动使用**，要由 S5 的引导步骤写进用户的 `search_intent.target_companies` 才生效（不做静默兜底）。
+
+## 发现的旧 bug / 新观察（S3+S4，没修，列出待决）
+
+1. **真实家目录的 search_intent 还是 6 月方向**：沙箱试跑里 ElevenLabs 的 3 个自由职业翻译 / 配音岗过了硬过滤进入候选。换新简历、重做找岗方向归 S5 / 重新引导。
+2. **跑到目标数就停，同批里剩下的合格岗下次会被重新打分**：分数不许过夜（V12），所以这是设计上的代价，只多花钱，不会重投。
+3. **一整圈轮转很慢**：Greenhouse 板接口限速每秒 1 次，1000 块板一个窗口约 17 分钟，一整圈 9 个窗口。多数运行会先碰到「投满」或「看满」停下；新岗稀少的日子会很长。建议试投时记下耗时再定窗口大小。
+4. 驱动里「投过我们吗」的答题备注还叫 `prior_application_found_in_db`，现在其实是查账本，只是名字过时，不影响行为。
+5. **同一天跑两次共用当日档位**：档位 10 时，第 1 次投了 8 个，第 2 次最多再投 2 个，看的上限也跟着变成 20。这符合设计，但拍板人可能会觉得第二次「怎么这么少」，报告第一行会写清楚。
+
+## 遗留事项（S3+S4）
+
+- **放量前置仍有两条**：① lead 在拍板人点头后对真实家目录跑 `backfill-legacy --apply`（stream_run 在那之前会拒绝开跑，已实测）；② S5 编排改写（onboard 第 4-7 步改成 start → next/打分/submit-scores → finish，把名单写进 search_intent，看板改数账本，两份 -auto 说明书删 daily_count 一句，D10 名单公司过目）。
+- **规则 6 已落地**：VERIFY 第 2-3 轮挂的「S3 规则 6 落地前不得在工作库模式下放量」这一条的前提已满足，e2e 覆盖了「卡缺信息 → 下次不打分不派 → 补档案 → 重新进候选并投出」。
+- 真表单行为仍然没有验证：驱动全是替身。首批试投（拍板人在场）时用 `stream_run start --target 2`，投完立刻用 `--no-submit` 再跑一次做真环境复验。
+- `PRE_SUBMIT_RETRIES_60D` 保持单一常量 1，没动，等拍板人确认。
+- 旧观察 1-5 交 lead 决定放待解还是一起做。
+
+## 性能硬指标自查（S3+S4）
+
+- 不涉及 HTTP 端点，p95 不适用。
+- 名单 21 家实测 19 秒扫完（每秒 1 次限速）。e2e 单次完整运行（30 岗、8 次派单）约 1.5-2 秒。
+- 每次打分前去重闸读一次账本和看过记录；每行派单前现读账本和看过记录。一年约 4000 行账本的耗时没有实测，沿用设计推断。
+- 覆盖率：项目没有覆盖率工具，没有数字。
+
+## API 接口 8 契约自查（S3+S4）
+
+本轮不新增、不修改任何 HTTP 端点，不适用。对外只读调用仍只有 Ashby / Greenhouse 公开板接口（名单来源复用现有的两个板接口模块，没有新的网络代码）。
+
+## 本项目铁律对照（S3+S4）
+
+- 测试串行：`npm test`（`--test-concurrency=1`）✓；新测试全部用临时家目录，e2e 连 Chrome 都用本进程里的替身 CDP 端点。
+- CI 每一步本地跑 [实测，`e0b763a` 之上]：① `npm test` exit 0，448/448 ② `node scripts/role_guard_smoke.mjs` exit 0 ③ `node scripts/public_alpha_gate.mjs` exit 0 ④ shared + scripts 全部 `node --check` exit 0 ✓
+- 主流程冒烟（找岗 → 投递 → 报告）：e2e 走真 stream_run → 真 discover 接口约定（替身板）→ 真 store → 真 supervisor → 真 apply_batch → 真队列 / 校验 / 记账人 / 账本 → 3 行报告；另在真实家目录拷贝上跑通了「历史迁入 → 名单真接口扫描 → 去重闸 → 出批次 → 收工」。不能真投。
+
+## 交付自查清单（S3+S4）
+
+- [x] TDD：每步先红后绿，红因已核对（seen_log 一步是事后挪走模块跑红，已如实写明）
+- [x] 全绿 448/448；CI 四步本地全过
+- [ ] 覆盖率 ≥80%：项目没有覆盖率工具，没有测
+- [x] V1 连跑两次端到端离线测试：第二次打分 0、派单 0、账本不增
+- [x] 没有压异常的空 catch；生产代码里没有 mock
+- [x] 偏离 13 条全部标注；旧观察只列不修
+- [x] 两个超档驱动：greenhouse 净减 14，ashby 不变
+- [x] `PRE_SUBMIT_RETRIES_60D` 仍是单一常量
+- [x] 真实 `~/.mrweirdo-jobs/` 零写入；没有真投递；没有对真实家目录跑 backfill --apply；没有 push
+- [x] CHANGELOG 顶部加了 Added 三条、Fixed 两条
+
+## 试过的错误方向（S3+S4）
+
+1. **e2e 的 V2 / V8 一开始按「每次运行都有满额」写期望**：结果第 2 次只投了 2 个、只看了 20 个。原因是同一天的两次运行共用档位 10，第 1 次已经尝试了 8 个。这是正确行为，测试写错了；改成在这两条里把档位设成 25，并在测试里注明原因（也记进了旧观察 5）。
+2. **崩溃恢复第一版沿用 apply_batch 的写法，把记账人的输出写到 stdout**：stream_run 的 stdout 约定只放一个 JSON，恢复时多出一行，`start` 的结果解析失败。改成写 stderr。
+3. **store 写看过记录第一版对推不出指纹的链接直接抛错**：旧流程的一个测试夹具因此崩溃。整批入库因为一行记忆写不进去而失败，代价不成比例；改成计数并响亮打出。
+4. **考虑过让 apply_batch 在流式模式下把闸拦下的行在工作库里标成跳过**，免得下一批又被拦一次。没有做：被拦的行在后续批次里只是被再拦一次，不花钱也不出错，多写一处库状态反而多一个要维护的地方。

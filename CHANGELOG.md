@@ -59,7 +59,41 @@ dirs ignored (`618cb04`).
 since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
+### Added
+- **Find-and-apply runs: `node shared/stream_run.mjs`** (2026-09-25,
+  restart-apply S3). `start --target N` → (`next` → the agent scores one batch
+  of ≤50 → `submit-scores`)… → `finish`. Each run uses a one-off work DB under
+  `run-tmp/stream-*` (row ids continue above the ledger's, ≥100000) that is
+  deleted at `finish`; scores never persist. Before anything is scored, a
+  dedupe gate drops jobs the ledger says were attempted (same fingerprint or
+  company + title, 60-day company cap, pre-submit retry limit, stuck on missing
+  info with an unchanged profile) and jobs the new seen log
+  (`log/seen.jsonl`) still vouches for. Stops at N attempted, N×10 looked at,
+  supply exhausted, three identical failures, or `max(3, N)` pre-submit
+  failures; prints a 3-line report. Refuses to start while the legacy jobs.db
+  exists and its history is not in the ledger. `--no-submit` scores without
+  dispatching (real-environment re-check).
+- **Seen log** (`shared/seen_log.mjs`, 2026-09-25). Not-a-fit / visa-blocked
+  (60 days; void when the JD or the scoring basis — resume, search_intent,
+  score prompt — changes), taken down (while the JD is unchanged), stuck on
+  missing info (until profile / essay profile / answer bank change). Minimal
+  fields only: no JD text, no scores, no answers.
+- **Target companies first** (2026-09-25, restart-apply S4). Optional
+  `search_intent.target_companies[{ats, slug, label}]` is scanned on every run
+  before the rotating window (`--sources watchlist`); company = board slug; a
+  board that fails is listed in the report, the rest carry on. A verified
+  21-company AI-video preset lives in
+  `shared/sourcing/data/watchlist_ai_video.json` (not applied automatically).
+
 ### Fixed
+- **Greenhouse driver no longer reads a hard-coded `~/.mrweirdo-jobs/jobs.db`**
+  (2026-09-25). "Have you applied before?" is answered from the ledger; a
+  company name missing from the URL is looked up in the current DB (the run's
+  work DB), so a work-DB row id can no longer pull another company's name.
+- **The run target survives midnight** (2026-09-25). The pre-dispatch gate
+  counts attempts since the run's budget was made, not today's count minus a
+  snapshot; a stale `apply_batch.lock` whose process is gone is taken over
+  with a loud message.
 - **Nothing is dispatched without passing the ledger-backed pre-dispatch
   gate** (2026-09-25, restart-apply S2). `apply_batch` re-reads the ledger
   before every row and calls `apply_guard.checkDispatch`: already attempted
