@@ -378,7 +378,7 @@ const STOP_TEXT = {
   pre_submit_fail_cap: '好几家表单都没打开，像是机器问题，已停，请看截图',
 };
 
-function report(st, rows, lines) {
+function report(st, rows, lines, unscored) {
   const rowById = new Map(rows.map((r) => [r.id, r]));
   const name = (e) => `${rowById.get(e.job_id).company}·${rowById.get(e.job_id).title}`;
   const submitted = lines.filter((e) => e.verdict === 'submitted').map(name);
@@ -401,7 +401,9 @@ function report(st, rows, lines) {
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 
   let line3;
-  if (st.scored_this_run === 0) {
+  if (st.scored_this_run === 0 && unscored > 0) {
+    line3 = `这次没打分：还有 ${unscored} 个新岗没打分就收工了`;
+  } else if (st.scored_this_run === 0) {
     line3 = '没有新岗：这次找到的都是投过或看过的';
   } else if (!st.no_submit && st.attempted_this_run < st.budget.max_attempts) {
     line3 = `新岗不够：这次看了 ${st.scored_this_run} 个新岗，合适的只有 ${st.eligible_this_run} 个，没凑到 ${st.budget.max_attempts} 个`;
@@ -409,6 +411,7 @@ function report(st, rows, lines) {
     line3 = `这次看了 ${st.scored_this_run} 个新岗，合适的 ${st.eligible_this_run} 个`;
   }
   if (st.stop_reason === 'score_budget_reached') line3 += `（到了看的上限 ${st.budget.max_scored}）`;
+  if (st.scored_this_run > 0 && unscored > 0) line3 += `；还有 ${unscored} 个新岗没打分就收工了`;
   return { lines: [line1, line2, line3], submitted };
 }
 
@@ -416,7 +419,10 @@ function finish() {
   const st = loadState(argValue('--run'));
   const rows = runRows(st);
   const lines = runLedgerLines(rows);
-  const { lines: out, submitted } = report(st, rows, lines);
+  // Found but never scored: left in the pool, or handed out and never submitted.
+  const pendingCount = st.pending_batch != null ? readJson(join(st.run_dir, `batch-${st.pending_batch}.json`)).length : 0;
+  const unscored = loadPool(st).length + pendingCount;
+  const { lines: out, submitted } = report(st, rows, lines, unscored);
 
   // Rotation cursor: a window whose candidates were all taken is done; one
   // with candidates left over is where the next run starts.

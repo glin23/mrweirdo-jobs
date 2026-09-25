@@ -264,3 +264,19 @@ test('--no-submit（真环境复验用的试跑开关）：照常找、去重、
     await rig.close();
   }
 });
+
+test('没打完就收工：finish 时还有没打分的新岗 → 第 3 行如实说，不说成「没有新岗」', async () => {
+  const rig = await makeStreamRig('mrw-stream-early-');
+  try {
+    rig.board({ rotation: board30() });
+    const start = await rig.step(['start', '--target', '10', '--max-windows', '1']);
+    const next = await rig.step(['next', '--run', start.json.run_id]);
+    assert.equal(next.json.action, 'score');
+    const fin = await rig.step(['finish', '--run', start.json.run_id]);
+    assert.equal(fin.status, 0, fin.stderr);
+    assert.match(fin.json.lines[2], /还有 30 个新岗没打分就收工了/);
+    assert.doesNotMatch(fin.json.lines[2], /没有新岗/);
+  } finally {
+    await rig.close();
+  }
+});
