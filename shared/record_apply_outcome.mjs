@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
-import { normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
+import { companyTitleKey, jobFingerprint, normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
 import { onboardTmpPath } from './onboard_tmp.mjs';
 import { deriveMayHaveSubmitted, validateOutcome } from './driver_contract.mjs';
-import { append as ledgerAppend, sqliteTs } from './submission_ledger.mjs';
+import { append as ledgerAppend, readAll, sqliteTs } from './submission_ledger.mjs';
+import { attemptIndex } from './apply_guard.mjs';
 import { workAuthSources } from './answer_provenance.mjs';
 import { atsHome } from './paths.mjs';
 
@@ -181,24 +182,16 @@ if (outcome.outcome !== 'submitted') {
   process.exit(0);
 }
 
-const companyKey = normalizeCompany(row.company);
-const titleKey = normalizeTitle(row.title);
-const submittedDuplicate = db.prepare(`
-  SELECT id, status, company, title
-    FROM jobs
-   WHERE id <> ?
-     AND status IN (${[...SUBMITTED_STATUSES].map(() => '?').join(',')})
-`).all(rowId, ...SUBMITTED_STATUSES)
-  .find((r) => normalizeCompany(r.company) === companyKey && normalizeTitle(r.title) === titleKey);
-
-if (submittedDuplicate) {
-  markSkipped('duplicate_same_company_title_already_submitted', {
-    submitted_row_id: submittedDuplicate.id,
-    submitted_status: submittedDuplicate.status,
-    driver_outcome: auditOutcome,
-  });
-  process.exit(0);
-}
+// 投后查重 → 不变量（restart-apply DESIGN §1.4 难点四）. The dispatch guard
+// (apply_guard.checkDispatch, re-reading the ledger before every spawn) is where
+// re-applications are stopped. Reaching this line with a prior 投过 on the same
+// fingerprint or company+title means one already went out: record the truth
+// (the ledger line above, the DB row below says 已投) and fail LOUDLY — never
+// relabel a real submission as a skip.
+const priorIdx = attemptIndex(readAll(atsHome()).filter((e) => e.id !== ledgerEntry.id));
+const priorAttempt = priorIdx.byFp.get(jobFingerprint(row.apply_url).fp)?.at(-1)
+  || priorIdx.byCompanyTitle.get(companyTitleKey(row.company, row.title))?.at(-1)
+  || null;
 
 if (row.status !== '🤖 AI sourced' && !SUBMITTED_STATUSES.has(row.status)) {
   markSkipped('row_status_changed_before_recording', { current_status: row.status, driver_outcome: auditOutcome });
@@ -219,6 +212,19 @@ db.prepare(`
          updated_at = datetime('now')
    WHERE id = ?
 `).run(sqliteTs(ledgerEntry.ts), sqliteTs(ledgerEntry.ts), outcome.post_url || outcome.url || null, rowId);
+if (priorAttempt) {
+  writeFeedback('invariant_violation_reapplied', { prior_ledger_id: priorAttempt.id, driver_outcome: auditOutcome });
+  console.error(JSON.stringify({
+    ok: false,
+    reason: 'invariant_violation_reapplied',
+    row_id: rowId,
+    ledger_id: ledgerEntry.id,
+    prior_ledger_id: priorAttempt.id,
+    prior_job_id: priorAttempt.job_id,
+    error: 'this job had already been attempted, and it was submitted AGAIN — the pre-dispatch guard was bypassed or broken',
+  }));
+  process.exit(1);
+}
 writeFeedback('submitted_verified', auditOutcome);
 console.log(JSON.stringify({
   ok: true,

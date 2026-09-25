@@ -222,14 +222,12 @@ test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库
   const manual = readFileSync(join(a.home, 'run-tmp', 'manual_or_unsupported.json'), 'utf8');
   assert.ok(!manual.includes(marker), 'answers must not land in the manual-review file');
 
-  // ② 已有同公司同岗位的已投行 → duplicate 路径把 driver_outcome 包进 detail。
+  // ② 账本里已投过同公司同岗位 → 投后发现重投（不变量违反）路径的 feedback 也不带 answers。
   const b = makeFunnelHome('mrw-ledger-p2-dup-');
-  let db = new DatabaseSync(b.dbPath);
-  db.prepare(`INSERT INTO jobs(company, title, apply_url, status, ats_platform)
-    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-000000000002', '✅ 已投', 'ashby')`).run();
-  db.close();
+  append(b.home, baseEntry(424242, 'submitted', { company_key: 'acme', title_key: 'ops intern' }));
   const rb = record(b.env, b.rowId, b.home, { outcome: 'submitted', verdict: 'submitted', answers });
-  assert.equal(rb.status, 0, rb.stderr);
+  assert.equal(rb.status, 1, 'a re-application is an invariant violation — loud');
+  let db;
 
   // ③ 行状态在投递期间被改 → row_status_changed 路径同样包 driver_outcome。
   const c = makeFunnelHome('mrw-ledger-p2-changed-');
@@ -240,7 +238,7 @@ test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库
   assert.equal(rc.status, 0, rc.stderr);
 
   for (const h of [a, b, c]) {
-    assert.equal(readAll(h.home)[0].answers[0].value, marker, 'the ledger still holds the full answers');
+    assert.equal(readAll(h.home).at(-1).answers[0].value, marker, 'the ledger still holds the full answers');
     db = new DatabaseSync(h.dbPath);
     const dump = JSON.stringify([
       db.prepare('SELECT * FROM feedback').all(),
@@ -249,6 +247,37 @@ test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库
     db.close();
     assert.ok(!dump.includes(marker), `answers leaked into jobs.db (${h.home})`);
   }
+});
+
+test('投后查重改为不变量：账本里已投过同指纹 / 同公司标题，又报 submitted → 账本如实记、库如实标已投、响亮非零退出', () => {
+  for (const [label, prior] of [
+    ['fingerprint', { apply_url: 'https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-000000000001', company_key: 'elsewhere', title_key: 'other' }],
+    ['company+title', { company_key: 'acme', title_key: 'ops intern' }],
+  ]) {
+    const { home, env, rowId, dbPath } = makeFunnelHome(`mrw-ledger-reapply-${label.replace('+', '-')}-`);
+    const priorLine = append(home, baseEntry(424242, 'submitted', { ...prior, ts: '2026-06-01T00:00:00.000Z' }));
+    const r = record(env, rowId, home, { outcome: 'submitted', verdict: 'submitted' });
+    assert.equal(r.status, 1, `${label}: must exit non-zero`);
+    const err = JSON.parse(r.stderr.trim().split('\n').filter((l) => l.startsWith('{')).pop());
+    assert.equal(err.reason, 'invariant_violation_reapplied', label);
+    assert.equal(err.prior_ledger_id, priorLine.id, label);
+    const entries = readAll(home);
+    assert.equal(entries.length, 2, `${label}: the submission that happened is still recorded`);
+    assert.equal(entries[1].verdict, 'submitted');
+    const db = new DatabaseSync(dbPath);
+    const row = db.prepare('SELECT status FROM jobs WHERE id = ?').get(rowId);
+    const fb = db.prepare('SELECT reason FROM feedback WHERE job_id = ?').all(rowId).map((f) => f.reason);
+    db.close();
+    assert.equal(row.status, '✅ 已投', `${label}: the DB tells the truth — it was submitted`);
+    assert.ok(fb.includes('invariant_violation_reapplied'), label);
+  }
+});
+
+test('投后查重只看「投过」：之前只有点提交前失败的同岗行 → 正常入账', () => {
+  const { home, env, rowId } = makeFunnelHome('mrw-ledger-reapply-presubmit-');
+  append(home, baseEntry(424243, 'unknown', { apply_url: 'https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-000000000001', outcome: 'crashed', may_have_submitted: false, reason: 'ashby_form_not_loaded' }));
+  const r = record(env, rowId, home, { outcome: 'submitted', verdict: 'submitted' });
+  assert.equal(r.status, 0, r.stderr);
 });
 
 test('验收 V6：rebuild——正常态零差异；绕过漏斗改库被抓；--apply 修复且幂等；不碰账本没见过的行', () => {
