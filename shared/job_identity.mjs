@@ -38,3 +38,33 @@ export function sameCompanyTitle(a = {}, b = {}) {
   return normalizeCompany(a.company) === normalizeCompany(b.company) &&
     normalizeTitle(a.title) === normalizeTitle(b.title);
 }
+
+// 岗位指纹（restart-apply DESIGN §3 / ADR-S2）：从投递链接推「平台:岗位编号」。
+// Four rules, first hit wins — exactly the ones measured 950/950 on the legacy
+// pool. fp carries no board: the same id never appeared under two boards, and a
+// gh_jid link has no board to give. Anything else → null; on a dispatch path
+// null is a bug and callers must throw (we only apply on these three ATSs).
+const UUID_SRC = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const FINGERPRINT_RULES = [
+  ['greenhouse', /greenhouse\.io\/[^/?#]+\/jobs\/(\d+)/i],
+  ['greenhouse', /[?&]gh_jid=(\d+)/i],
+  ['ashby', new RegExp(`ashbyhq\\.com/[^/?#]+/(${UUID_SRC})`, 'i')],
+  ['lever', new RegExp(`lever\\.co/[^/?#]+/(${UUID_SRC})`, 'i')],
+];
+
+export function jobFingerprint(url) {
+  if (!url || typeof url !== 'string') return null;
+  for (const [ats, re] of FINGERPRINT_RULES) {
+    const m = url.match(re);
+    if (m) {
+      const jobId = m[1].toLowerCase();
+      return { ats, job_id: jobId, fp: `${ats}:${jobId}` };
+    }
+  }
+  return null;
+}
+
+// The second key of the dual identity: same company + same title = same job.
+export function companyTitleKey(company, title) {
+  return `${normalizeCompany(company)}::${normalizeTitle(title)}`;
+}
