@@ -36,6 +36,7 @@ export const PII_TARGETS = [
   'resume.pdf',
   'cover_letter.pdf',
   'log/submissions.jsonl',
+  'essay_pending.jsonl',
   { dir: 'log/screenshots' },
   { dir: 'materials/cover_letters' },
   { dir: 'generated_materials' },

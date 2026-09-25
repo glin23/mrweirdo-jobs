@@ -73,7 +73,7 @@ function emitOutcome(obj) {
   e.emitted = obj;
   throw e;
 }
-export { answerMissing, main };
+export { answerMissing, main, logEssayPending, ESSAY_PENDING_LOG };
 `;
 
 let seq = 0;

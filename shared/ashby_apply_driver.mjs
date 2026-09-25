@@ -1014,7 +1014,7 @@ function listPendingEssays() {
 // and "main agent consumes pending list."
 function logEssayPending(rec) {
   try {
-    appendFileSync(ESSAY_PENDING_LOG, JSON.stringify(rec) + '\n');
+    appendFileSync(ESSAY_PENDING_LOG, JSON.stringify({ ...rec, answers: undefined }) + '\n'); // answers live in the 600 ledger only
   } catch (e) {
     log('WARN: failed to append essay_pending log:', e.message);
   }
