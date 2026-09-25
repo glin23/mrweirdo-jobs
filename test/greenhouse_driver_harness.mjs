@@ -73,16 +73,19 @@ function emitOutcome(obj) {
   e.emitted = obj;
   throw e;
 }
-export { answerMissing, main, logEssayPending, ESSAY_PENDING_LOG };
+export { answerMissing, main, logEssayPending, ESSAY_PENDING_LOG, COMPANY };
 `;
 
 let seq = 0;
 
 // Loads the shipped driver against `profile` in a throwaway fake home. No
 // ~/.mrweirdo-jobs access, no browser, no network.
-export async function loadDriver(profile) {
+// `opts.setup(home)` runs before import (seed a ledger / DB); `opts.argv` sets
+// [apply_url, job_id]; `opts.env` is applied during import only.
+export async function loadDriver(profile, opts = {}) {
   const home = mkdtempSync(join(tmpdir(), 'mrw-gh-driver-'));
   writeFileSync(join(home, 'profile.json'), JSON.stringify(profile, null, 2));
+  if (opts.setup) opts.setup(home);
   let src = DRIVER_SRC.replace(/\nmain\(\)\.catch\([\s\S]*$/, '\n');
   // No real waits under test (guarded like the Ashby harness).
   const SLEEP_DECL = 'const sleep = (ms) => new Promise((r) => setTimeout(r, ms));';
@@ -100,17 +103,19 @@ export async function loadDriver(profile) {
   const file = join(home, `driver_under_test_${seq++}.mjs`);
   writeFileSync(file, src);
 
-  const prevHome = process.env.MRWEIRDO_HOME;
-  const prevRepo = process.env.MRWEIRDO_REPO_ROOT;
+  const envOverrides = { MRWEIRDO_HOME: home, MRWEIRDO_REPO_ROOT: ROOT, ...(opts.env || {}) }; // REAL shipped answer_bank.json
+  const prevEnv = Object.fromEntries(Object.keys(envOverrides).map((k) => [k, process.env[k]]));
   const prevArgv = process.argv.slice();
-  process.env.MRWEIRDO_HOME = home;
-  process.env.MRWEIRDO_REPO_ROOT = ROOT; // use the REAL shipped answer_bank.json
-  process.argv[2] = 'https://job-boards.greenhouse.io/testco/jobs/1';
+  Object.assign(process.env, envOverrides);
+  [process.argv[2], process.argv[3]] = opts.argv || ['https://job-boards.greenhouse.io/testco/jobs/1', undefined];
+  if (process.argv[3] === undefined) process.argv.length = 3;
   try {
-    return await import(file);
+    const mod = await import(file);
+    return Object.assign(Object.create(null), mod, { home });
   } finally {
-    if (prevHome === undefined) delete process.env.MRWEIRDO_HOME; else process.env.MRWEIRDO_HOME = prevHome;
-    if (prevRepo === undefined) delete process.env.MRWEIRDO_REPO_ROOT; else process.env.MRWEIRDO_REPO_ROOT = prevRepo;
+    for (const [k, v] of Object.entries(prevEnv)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
     process.argv = prevArgv;
   }
 }

@@ -39,6 +39,9 @@ import {
 } from './greenhouse_value_rules.mjs';
 import { submissionVerdict, captureEvidence } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
+import { priorApplicationToCompany } from './apply_guard.mjs';
+import { dbPath } from './local_db.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 const HOME = atsHome();
 const ANSWERS = []; // FillEntry log — every value this driver puts on the form (ADR-16 全问答落盘)
@@ -556,27 +559,10 @@ function hasWorkedForCompany() {
   return experiences.some((exp) => String(exp?.company || '').toLowerCase().includes(target));
 }
 
+// Asked from the ledger (it holds the migrated history), never from a
+// hard-coded jobs.db — that path is not this run's DB (restart-apply 难点三).
 function hasPriorApplicationToCompany() {
-  if (!COMPANY) return false;
-  const dbPath = join(HOME, 'jobs.db');
-  if (!existsSync(dbPath)) return false;
-  const companySql = COMPANY.replace(/'/g, "''").toLowerCase();
-  const idClause = JOB_ID ? `AND id != ${Number(JOB_ID) || -1}` : '';
-  const sql = `
-    SELECT COUNT(*)
-    FROM jobs
-    WHERE lower(company) = '${companySql}'
-      ${idClause}
-      AND (
-        status LIKE '✅%'
-        OR submitted_at IS NOT NULL
-        OR auto_submitted_at IS NOT NULL
-        OR confirmation_url IS NOT NULL
-        OR confirmed_at IS NOT NULL
-      );
-  `;
-  const r = spawnSync('sqlite3', [dbPath, sql], { encoding: 'utf8' });
-  return Number((r.stdout || '').trim()) > 0;
+  return Boolean(COMPANY) && priorApplicationToCompany(HOME, COMPANY);
 }
 
 // ADR-12 R2: work-auth answers come from the three-state booleans ONLY. The
@@ -755,10 +741,10 @@ function rowCompanyFromDb() {
   if (!JOB_ID) return '';
   const id = Number(JOB_ID);
   if (!Number.isFinite(id) || id <= 0) return '';
-  const dbFile = join(HOME, 'jobs.db');
-  if (!existsSync(dbFile)) return '';
-  const r = spawnSync('sqlite3', [dbFile, `SELECT company FROM jobs WHERE id = ${id} LIMIT 1;`], { encoding: 'utf8' });
-  return (r.stdout || '').trim();
+  // dbPath() = this run's work DB; its row ids mean nothing in any other DB.
+  if (!existsSync(dbPath())) return '';
+  const db = new DatabaseSync(dbPath(), { readOnly: true });
+  try { return db.prepare('SELECT company FROM jobs WHERE id = ?').get(id)?.company || ''; } finally { db.close(); }
 }
 
 function slugifyGreenhouseCompany(value) {
