@@ -8,9 +8,10 @@ Reads:
   - docs/active/2026-07-23_product-blueprint_VERIFY_REPORT.md :2620-2750（第 7 轮验收 P2）
   - shared/driver_contract.mjs（统一退出契约）
   - .claude/arnold/roles/builder.md
-Blocks: restart-apply 小修包的 verify 验收
+  - （第 2 次召唤）docs/active/2026-09-25_restart-apply_DESIGN.md 第 2 轮全文、docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮 V1-V13、VERIFY_REPORT §5
+Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply
 Updated: 2026-09-25
-Iterations: 2
+Iterations: 3
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -106,3 +107,120 @@ Iterations: 2
 1. **第 4 项的「读不懂」测试，一开始想用损坏的 jobs.db 或坏掉的 search_intent 把 preflight 弄出非 JSON 输出**：结果 preflight 两种情况都能优雅降级，照样输出合法 JSON（ok:false、queue:[]），造不出截断。改成复制出货的 demo_check.mjs 到临时仓库根目录，放一个只输出半截 JSON 的替身 preflight。
 2. **第 4 项的测试夹具一开始用 600 行**：确实超过了 64KB，但 preflight 每次要跑 36 秒，3 条测试加起来超过 1 分钟。改成 30 行、每行加长字段，输出同样超过 64KB，每次约 3 秒（附带发现了旧 bug 1）。
 3. **第 2 项考虑过把 bot_challenge 加进拦截名单**（bug 报告也否掉了这个方向）：这样活的 Ashby 岗也会被一刀切掉，等于停掉整个平台。没有采用。
+
+---
+
+# 第 2 次召唤：即找即投 S1 + S2（2026-09-25）
+
+> 按 DESIGN 第 2 轮 §10「建议第 1 次召唤 = S1+S2」施工。未 push。真实 `~/.mrweirdo-jobs/` 零写入：`jobs.db` 前后 mtime/size 都是 1782006129 / 1728512，`log/` 下仍没有 `submissions.jsonl`，`locks/` 为空 [实测]。所有真实数据验证都在 scratchpad 里的库拷贝上做。
+
+## 实现摘要（S1+S2）
+
+9 个代码提交，另 1 个文档提交（本记录 + CHANGELOG）。生产代码 +约 620 行，测试 +约 960 行；两个超档驱动净增 0（1149 / 1894 行不变）。
+
+| 设计项 | 提交 | 改了什么 |
+|---|---|---|
+| S1-5 essay 日志隐私 | `07abffd` | GH/Ashby `logEssayPending` 写入时去掉 `answers`（各 1 行）；`PII_TARGETS` 加 `essay_pending.jsonl` |
+| S1-6/7 Ashby 接口 | `98883a8` | 板 404 才返回 `[]`，200 但没有 `jobs` 数组 throw `ashby_unexpected_shape` → 存活检查判 uncertain；每次请求 15 秒超时（`FETCH_TIMEOUT_MS`） |
+| S1-1 岗位指纹 | `5eecbfd` | `jobFingerprint(url)` 四条规则 + `companyTitleKey()` |
+| S1-3 推导 + S1-4 出口核对 | `e6e7b9e` | `driver_contract.PRE_SUBMIT_EXITS`（8 个出口）+ `PRE_DISPATCH_STAGE` + `deriveMayHaveSubmitted()` |
+| S1-2 字段 + S1-3 记账人 | `2e89862` | 账本 `append` 要求 `apply_url` 推得出指纹、`may_have_submitted` 为布尔；同 job_id 换链接响亮报错；`maxJobId()`；记账人写这两个字段 |
+| S1-2 历史迁入 | `f793114` | `backfillLegacy()` + CLI `backfill-legacy [--apply]`，默认 dry-run，幂等，写完当场核数 |
+| S2 投前闸 | `652afbc` | 新模块 `shared/apply_guard.mjs`（183 行）：`attemptIndex` / `checkDispatch` 规则 1-5 / `dailyTier` / `budgetLine` / `preSubmitFailCount` / `priorApplicationToCompany` / `breaker` / 在途标记读写清；账本抽出 `effectiveEntries` |
+| S2 投后查重 → 不变量 | `a0b7359` | 记账人不再把真实提交标成跳过：读账本发现重投 → 账本照记、库标已投、feedback 记 `invariant_violation_reapplied`、exit 1 |
+| S2 apply_batch 接线 | `22bc56e` | 开跑读档位出第一行；每行派单前现读账本过闸；在途标记写/清/开跑恢复；记账失败即停批；熔断；校验失败行带 `stage=pre_dispatch`；停写 `daily_count.jsonl` |
+
+DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_unavailable` 写看过记录 `expired`」和规则 6（needs_info）外完成，这两处依赖 S3 的 `seen_log`，见偏离段。
+
+**沙箱真实数据复验** [实测]：真实岗位库拷贝上 `jobFingerprint` 950/950 可推、零重复指纹；`backfill-legacy` dry-run 计划迁入 182 条已投 + 33 条驱动跑过的跳过行，另 28 条不迁（24 条纯去重、3 条 `not_retry_for_demo_*` 无 feedback、1 条 `job_unavailable_closed` 无 feedback），推不出指纹 0 条；拷贝上 `--apply` 追加 215 行，核数 `{ok:true, submitted_in_db:182, legacy_unverified_in_ledger:182, fingerprints_match:true}`，重跑追加 0，账本 600。
+
+## TDD 落地证据（S1+S2）
+
+每项都是先写测试、跑红、确认红的原因对，再实现转绿。
+
+- 第 5 项：`essay_pending_privacy.test.mjs`（4 条，走出货驱动源码 harness）。**红**：`answers must not be written to essay_pending.jsonl` ×2、`PII_TARGETS` 不含。**绿** 4/4。
+- 第 6/7 项：`ashby_board_api_shape.test.mjs`（9 条）。**红**：3 种错形状没 throw、存活检查判 expired；挂起用例一直挂到 60 秒被取消（正是 bug 本身）。**绿** 9/9，挂起用例约 3 秒。
+- 第 1 项：`job_fingerprint.test.mjs`（7 条）。**红**：模块没有导出。**绿** 7/7。
+- 第 3/4 项：`pre_submit_derivation.test.mjs`（8 条，含「出口表每行都真在某个驱动出口上」源码守卫）。**红**：没有导出。**绿** 8/8。
+- 第 2 项字段：`submission_ledger.test.mjs` 新增 4 条（身份字段、行号不变量、maxJobId、点提交前出口记 false）。**红**：没有 `maxJobId` 导出。**绿**。
+- 第 2 项迁入：`ledger_backfill.test.mjs`（5 条）。**红**：没有 `backfillLegacy`。**绿** 5/5。另外真实数据 dry-run 抓到第一版判定只认出 15 条（见试过的错误方向 1），夹具随即改成截断 detail，再改实现。
+- S2 闸：`apply_guard.test.mjs`（16 条，每条规则一正一反）。**红**：模块不存在。**绿** 16/16。
+- S2 不变量：`submission_ledger.test.mjs` 新增 2 条 + 改 P2 ②。**红**：重投时 exit 0。**绿**。
+- S2 接线：`apply_batch_guard.test.mjs`（8 条：V4 V5 V6 V9 V10、档位确认、熔断、现读账本）+ `inflight_recovery.test.mjs`（5 条）。真 `apply_batch` + 真记账人 + 真账本，只替换驱动和外围步骤（`test/apply_batch_harness.mjs`）。**红**：8/8、5/5 全红（V9 实际派了 3 次等）。**绿** 13/13。
+- 全量：`npm test` **336 → 404**（新增 68 条，0 fail）。项目没有覆盖率工具，没有覆盖率数字，如实写明没有测。
+
+## 自审记录（S1+S2）
+
+- 「投过」口径全仓只有 `isAttempted`（apply_guard）一份，推导只在 `deriveMayHaveSubmitted` 一处；记账人、投前闸、投后不变量都调它们，没有第二份规则。
+- 账本缺 `may_have_submitted` 的行会让 `attemptIndex` 响亮报错，不当成 false 放过。
+- 派单路径上推不出指纹 → `checkDispatch` throw（设计：null = bug）。
+- 本轮新增 catch 只有一处：`dailyTier` 报错时打印并 exit 1，不压异常。`backfill` 判「驱动跑过」用前缀匹配，没有 try/catch。
+- 每行派单前现读账本，一年约 4000 行时的耗时没有实测，沿用设计的推断。
+
+## 偏离 DESIGN（S1+S2，均未擅改设计意图，申报给 lead / architect）
+
+1. **推导规则第 4 条改成「表外一律 true」**。设计 §3 规则 4 写「needs_user / captcha_blocked / rate_limited → false」，同一节又写「出口表外的一律算 true」，两句互相矛盾。未明点 7 逐个核对的结果：GH/Ashby 所有 `needs_user` / `rate_limited` 出口都在第一次 `submitAndCheck` 之后；GH 的 `needs_user` reason 由 `classifyUnsubmitted` 动态生成；Lever 点击前的 `needs_user:cover_letter_required_not_generated` 与 GH 点击后的同名键撞车（键里没有平台）。按 lead 裁决「拿不准按可能已提交」，实现为表外一律 true，Lever 的 needs_user / captcha 点击前出口不入表（Lever 暂停中）。**后果要拍板人知道**：GH/Ashby 卡在缺信息、essay_pending 的岗位算「投过」，占今日额度和同公司 60 天名额，补完信息后流水线也不会再投它（essay_pending 的旧流程是主 agent 在原标签页里补答后直接重跑驱动，不经 apply_batch，不受影响）。
+2. **新增 `stage: 'pre_dispatch'` 标记（设计没有）**。`apply_batch` 派单前校验没过时会合成一行 `needs_user` 记账，驱动根本没启动。按第 1 条规则它会被判 true，结果「分数不够」这种行也会吃掉当日额度。所以合成行加了 `stage`，推导第一条判 false。
+3. **点提交前重试上限的常量语义**：`PRE_SUBMIT_RETRIES_60D = 1` 表示「失败后 60 天内还允许再试几次」，失败次数 > 它就拦，效果和设计的「满 2 次拦」一样。之所以不定义成「最多失败几次」，是因为那种写法改成 0 会连一次都不让试。若拍板人否决重试，改成 0 的效果是「失败一次后 60 天内不再试」；如果他要的是「永不再试」，需要改的是清空 `PRE_SUBMIT_EXITS`，不是这个常量。
+4. **S2 两处推迟到 S3**：`not_submitted:job_unavailable` 写看过记录 `expired`，以及规则 6（needs_info 且填表依据没变）。两处都要用 `seen_log.mjs`，设计把它放在 S3 的新建文件里。
+5. **崩溃恢复放在 `apply_batch` 开跑时**（设计写在 `stream_run start`，那是 S3）。原因：S2 起 apply_batch 只认账本拦重投，残留的在途尝试如果不先补记，就可能被再投一次。S3 的 `stream_run` 可以直接复用这段逻辑。
+6. **S2 没删 dedupe / recompute 两步，也没改 `limitRows` 预截断**：这两件事要和一次性工作库一起做（设计 1.3 表），现在删掉，全局岗位库上就没有去重了。因此在 S3 之前，闸拦下的行仍会占 `--max` 名额，一批实际派出的可能少于 `--max`。
+7. **账本 `append` 对 legacy 行也要求推得出指纹**：设计只写了 v2 行。收紧的理由是去重只认账本，一条推不出指纹的历史行等于没迁。真实数据 182/182 都推得出，所以没有实际影响。
+8. 投后不变量只看账本，不再查 jobs.db。在拍板人点头、lead 跑 `--apply` 之前，账本里没有历史，历史重复靠 `validate_auto_row` 的库内查重兜着（它仍在派单前生效）。
+
+## 发现的旧 bug（S1+S2，没修，列出待决）
+
+1. `record_apply_outcome` 的 `row_status_changed_before_recording` 分支会把一次真实提交标成「跳过」（行状态在投递期间被改时）。这个分支在投后不变量之前，所以这种情况下重投不会报警 [读码]。
+2. `score_prompt.md` 的输入里有「`feedback.jsonl` 最近 20 条」，这是一个一直在变的输入。S3 的 `scoringBasisVersion` 如果把它算进去，每次运行都会让「不合适」作废；如果不算，打分依据变化就漏记了。需要 architect 定。
+3. 两个 `-auto` SKILL.md 里还写着「追加 `daily_count.jsonl`」，按设计放在 S5 删。
+
+## 未明点核对结论（lead 指派）
+
+- **未明点 5（打分读不读 profile.json）** [读码 `shared/scoring/score_prompt.md:6-26`]：不读。打分输入只有三样：`search_intent.json`（签证相关的 `user_summary.work_authorization` / `needs_sponsorship` 也在这份文件里）、`~/.mrweirdo-jobs/feedback.jsonl` 最近 20 条、本批岗位。`skills_match` 提到「简历技能」，简历信息通过 search_intent 带进来（主 agent 上下文里可能也有简历）。结论：回答身份问题（写 profile.json）不会让「不合适」作废；但 feedback.jsonl 这一项见旧 bug 2。
+- **未明点 7（点击前还是点击后）** [读码]：GH `greenhouse_apply_driver.mjs:1771-1888`、Ashby `ashby_apply_driver.mjs:1038-1143` 所有 `needs_user`、`rate_limited` 出口都在第一次 `submitAndCheck` 之后 → 可能已提交（true）；GH/Ashby 没有 `captcha_blocked` 出口。Lever `lever_apply_driver.mjs:361-461` 的 `needs_user:resume_missing / cover_letter_required_not_generated / incomplete_form / visible_validation_error` 和 `captcha_blocked:captcha_detected` 都在点击前，但因为键撞车没有入表，按 true 保守处理（Lever 暂停中）。`crashed:driver_exception` 仍然是 true（未明点 13）。
+- **未明点 4（历史 61 条跳过）**：按裁决只迁驱动真跑过的。判定依据是 feedback 表里该行至少有一条 detail 以 `{"outcome":"` 开头，也就是驱动自己吐出的结局对象。沙箱拷贝上迁 33 条、不迁 28 条，清单在 dry-run 输出的 `attempts.rows` / `not_migrated` 里，**请 lead 在对真实家目录 `--apply` 前先跑 dry-run 过目**。注意 33 条里有 1 条 `ashby_form_not_loaded`（点提交前），按设计也记成 true、永不重投。
+- **未明点 12**：常量已单一化，见偏离第 3 条。
+
+## 遗留事项（S1+S2）
+
+- **`backfill-legacy --apply` 没有对真实家目录跑**（按派遣单）。lead 在拍板人点头后执行：`MRWEIRDO_HOME=~/.mrweirdo-jobs node shared/submission_ledger.mjs backfill-legacy` 先看计划，再加 `--apply`；输出里 `verify.ok` 必须是 true。
+- **在拍板人点头、lead 跑完迁入之前，不要真跑 apply_batch**：去重闸只认账本，账本没有历史时只剩 `validate_auto_row` 的库内查重兜底，60 天同公司规则也看不到历史。
+- 偏离 1 的产品后果（缺信息的岗位算「投过」）需要拍板人知道；如果不接受，就需要让驱动在点提交前后各带一个标记（两个都是超档文件，要等拆分）。
+- 偏离 4、5、6 移交 S3；旧 bug 1-3 交 lead 决定放待解还是一起做。
+- 真表单行为仍然没有验证：本轮都是替身驱动。首批试投时顺便统计 `driver_exception` 和 `recovered_inflight` 出现的次数。
+
+## 性能硬指标自查（S1+S2）
+
+- 不涉及 HTTP 端点，p95 不适用。
+- 每行派单前全量读一次账本：沙箱 215 行时单测整批耗时里看不出差别，没有单独计时；一年 4000 行的量级沿用设计推断（<10ms），**没有实测**。
+- Ashby 接口单块板最坏由约 10 分钟降到 15 秒 ×2 + 2 秒退避。
+- 覆盖率：项目没有覆盖率工具，没有数字。
+
+## API 接口 8 契约自查（S1+S2）
+
+本轮不新增、不修改任何 HTTP 端点，不适用。对外只读调用仍只有 Ashby 公开 posting API（新增超时）。
+
+## 本项目铁律对照（S1+S2）
+
+- 测试串行：`npm test`（`--test-concurrency=1`）✓；新测试全部用临时 `MRWEIRDO_HOME`。
+- CI 每一步本地跑 [实测，提交 `22bc56e` 之上]：① `npm test` exit 0，404/404 ② `node scripts/role_guard_smoke.mjs` exit 0 ③ `node scripts/public_alpha_gate.mjs` exit 0 ④ shared + scripts 全部 `node --check` exit 0 ✓
+- 主流程冒烟（找岗 → 投递 → 报告）：投递段用真 apply_batch + 替身驱动跑通（`apply_batch_guard` / `inflight_recovery`）；不能真投。
+
+## 交付自查清单（S1+S2）
+
+- [x] TDD：每项先红后绿，红的原因已核对（3 处红因不对的已修正测试，见下）
+- [x] 全绿 404/404；CI 四步本地全过
+- [ ] 覆盖率 ≥80%：项目没有覆盖率工具，没有测
+- [x] 没有压异常的空 catch；生产代码里没有 mock
+- [x] 偏离 8 条全部标注；旧 bug 只列不修
+- [x] 账本字段名与设计逐字一致：`apply_url`、`may_have_submitted`、`era`、`verdict`、`outcome`
+- [x] 真实 `~/.mrweirdo-jobs/` 零写入；没有真投递；没有 push
+- [x] 两个超档驱动净增 0
+- [x] CHANGELOG 顶部 Fixed 段加了五条
+
+## 试过的错误方向（S1+S2）
+
+1. **迁入时用 `JSON.parse(feedback.detail)` 判断「驱动跑过」**：夹具全绿，但真实数据拷贝上只认出 15 条。原因是漏斗当年把 detail 截断到 600 字加「...」，长的驱动结局都不是合法 JSON 了。改成匹配前缀 `{"outcome":"` 后认出 33 条，夹具也改成截断后的 detail。
+2. **harness 里「第 2 次运行重新找到同一岗位」一开始往同一个 jobs.db 插同链接的新行**：撞上 `jobs.apply_url` 的 UNIQUE 约束。改成每次运行用一个新库、行号全局递增，正好模拟 S3 的一次性工作库和 `seqFloor`。
+3. **Ashby 挂起测试第一版在没实现超时的时候就绿了**：断言写在替身 fetch 里面，抛出的 AssertionError 被 `fetchRaw` 的重试 catch 吞掉，消息里恰好含 abort，匹配上了 `/timeout|abort/`。改成在外面计数，断言 `name: 'TimeoutError'`，再跑一次，确认会一直挂着（红）。
+4. **推导规则照设计原文实现「needs_user / captcha / rate_limited 缺省 false，点击后的列一张表改 true」**：GH 的 needs_user reason 是动态生成的，列不全；漏列一个就会判 false，岗位被重投。这是危险方向，所以否决，改成「表外一律 true」（偏离 1）。

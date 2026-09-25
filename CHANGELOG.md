@@ -60,6 +60,35 @@ since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
 ### Fixed
+- **Nothing is dispatched without passing the ledger-backed pre-dispatch
+  gate** (2026-09-25, restart-apply S2). `apply_batch` re-reads the ledger
+  before every row and calls `apply_guard.checkDispatch`: already attempted
+  (same fingerprint, or same company + title), company attempted twice in 60
+  days, today's tier used up (10/25/50, local calendar day; above 30 needs
+  `--confirm-tier-over-30`), or a job that already failed before Submit more
+  than `PRE_SUBMIT_RETRIES_60D` times → not dispatched. "Attempted" means one
+  thing everywhere: ledger `may_have_submitted === true`. An in-flight marker
+  (`locks/inflight.json`) makes a crash between driver and recorder get
+  recorded on the next run instead of re-applied; three identical machine
+  failures in a row stop the batch. `daily_count.jsonl` is no longer written.
+- **A re-application is no longer relabelled as a skip** (2026-09-25). The
+  recorder's post-submit duplicate check used to mark a real submission
+  `⚠️ 跳过未投` while the ledger said submitted. It now reads the ledger,
+  records the truth, and exits 1 with `invariant_violation_reapplied`.
+- **Ledger lines carry their own job identity** (2026-09-25, restart-apply S1,
+  permanent format). Every line now has `apply_url` (must yield a
+  platform:job-id fingerprint) and `may_have_submitted` (derived once, in
+  `driver_contract.deriveMayHaveSubmitted`: exits read-verified to fire before
+  the first Submit click are `false`, everything else `true`).
+  `node shared/submission_ledger.mjs backfill-legacy [--apply]` migrates the
+  legacy jobs.db history (default dry-run, idempotent, count-checked).
+- **essay_pending.jsonl no longer stores form answers** (2026-09-25). Both
+  drivers wrote the whole record, answers included; they now drop `answers`
+  (the ledger keeps them) and the file is in `PII_TARGETS` (600).
+- **An unreadable Ashby API answer no longer kills a live job** (2026-09-25).
+  A 200 without a `jobs` array used to read as an empty board, so liveness
+  marked live postings expired; it now throws (`ashby_unexpected_shape`) and
+  liveness says `uncertain`. Each request also has a 15 s timeout.
 - **Form answers no longer leak into jobs.db** (2026-09-25, restart-apply
   小修包, 第 7 轮验收 P2). `record_apply_outcome.mjs` wrote the whole driver
   outcome — including every answer typed onto the form, work-authorization
