@@ -41,6 +41,7 @@ export const PII_TARGETS = [
   { dir: 'materials/cover_letters' },
   { dir: 'generated_materials' },
   { dir: 'run-tmp' },
+  { dir: 'reports/jobs' },
 ];
 
 const FILE_MODE = 0o600;

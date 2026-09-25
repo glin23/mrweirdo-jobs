@@ -6,6 +6,7 @@ import { dbPath, initDb } from './local_db.mjs';
 import { atsHome } from './paths.mjs';
 import { DEFAULT_OUTCOME_STATUS } from './constants.mjs';
 import { onboardTmpPath } from './onboard_tmp.mjs';
+import { lockDir, lockFile } from './state_file_lock.mjs';
 
 const MACHINE_KEYS = new Set([
   'row_id',
@@ -96,7 +97,13 @@ function splitGaps(value) {
 
 function summarizeSubmission(rowId) {
   const resultFile = onboardTmpPath(`apply-result-${rowId}.jsonl`);
-  const entries = readJsonLines(resultFile);
+  // Form answers belong to the 600 ledger only (VERIFY_REPORT 第 2 轮 P2): drop
+  // them before anything here is mined for the report.
+  const entries = readJsonLines(resultFile).map((entry) => {
+    if (!entry || typeof entry !== 'object') return entry;
+    const { answers: _ledgerOnly, ...rest } = entry;
+    return rest;
+  });
   const latest = [...entries].reverse().find((entry) => entry?.outcome || entry?.action) || null;
   const screenshots = [...collectStrings(entries, (s) => /\.(png|jpe?g)$/i.test(s) || s.includes('/screenshots/'))];
   const gapFields = [...collectStrings(entries, (s) => /required|missing|incomplete|gap/i.test(s))]
@@ -309,11 +316,13 @@ function selectBatch(db, runId) {
 
 function writeReport(db, row, opts = {}) {
   const reportsDir = join(atsHome(), 'reports', 'jobs');
-  mkdirSync(reportsDir, { recursive: true });
+  mkdirSync(reportsDir, { recursive: true, mode: 0o700 });
+  lockDir(reportsDir);
   const outputPath = join(reportsDir, `${row.id}-${slugify(row.company)}.md`);
   const markdown = renderReport(row, opts);
   parseMachineSummary(markdown);
-  writeFileSync(outputPath, markdown);
+  writeFileSync(outputPath, markdown, { mode: 0o600 });
+  lockFile(outputPath); // pre-existing report keeps 600 too
   db.prepare(`UPDATE jobs SET report_path = ? WHERE id = ?`).run(outputPath, row.id);
   return outputPath;
 }

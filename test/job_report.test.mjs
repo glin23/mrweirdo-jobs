@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { parseMachineSummary } from '../shared/job_report.mjs';
 import { onboardTestEnv } from './helpers.mjs';
+import { PII_TARGETS } from '../shared/state_file_lock.mjs';
 
 test('job_report writes markdown, machine summary, and report_path only', () => {
   const home = mkdtempSync(join(tmpdir(), 'mrweirdo-report-'));
@@ -83,4 +84,33 @@ test('job_report writes markdown, machine summary, and report_path only', () => 
   assert.equal(row.status, '🤖 AI sourced');
   assert.equal(row.report_path, parsed.paths[0]);
   after.close();
+});
+
+// 回炉第 1 轮（VERIFY_REPORT 第 2 轮 P2）：表单答案只许进 600 的账本一处。
+test('job_report：驱动结果里的表单答案原文不进报告；报告文件 600、目录 700', () => {
+  const home = mkdtempSync(join(tmpdir(), 'mrweirdo-report-pii-'));
+  const env = onboardTestEnv(home);
+  assert.equal(spawnSync(process.execPath, ['shared/init_db_cli.mjs'], { cwd: process.cwd(), env, encoding: 'utf8' }).status, 0);
+  const db = new DatabaseSync(join(home, 'jobs.db'));
+  db.prepare(`INSERT INTO jobs(company, title, apply_url, status, fit_score, ats_platform)
+    VALUES ('Acme', 'Ops Intern', 'https://boards.greenhouse.io/acme/jobs/7', '✅ 已投', 8, 'greenhouse')`).run();
+  const rowId = db.prepare('SELECT id FROM jobs').get().id;
+  db.close();
+  const secrets = ['PII_MARKER_essay_fills_the_gap_in_my_experience', 'PII_MARKER_missing_nothing_salary_90k', 'PII_MARKER_required_sponsorship_yes'];
+  mkdirSync(join(home, 'run-tmp'), { recursive: true });
+  writeFileSync(join(home, 'run-tmp', `apply-result-${rowId}.jsonl`), `${JSON.stringify({
+    outcome: 'needs_user',
+    reason: 'stuck_on_same_missing',
+    missing: ['Street address is required'],
+    answers: secrets.map((value, i) => ({ label: `Question ${i} (required)`, value, source: 'derived', widget: 'textarea' })),
+  })}\n`);
+  const r = spawnSync(process.execPath, ['shared/job_report.mjs', '--row-id', String(rowId), '--append-submission'], { cwd: process.cwd(), env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const path = r.stdout.trim().split('\n').pop();
+  const md = readFileSync(path, 'utf8');
+  for (const s of secrets) assert.ok(!md.includes(s), `answer text leaked into the report: ${s}`);
+  assert.match(md, /Street address is required/, 'the page\'s own gap list is still reported');
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  assert.equal(statSync(join(home, 'reports', 'jobs')).mode & 0o777, 0o700);
+  assert.ok(PII_TARGETS.some((t) => t?.dir === 'reports/jobs'));
 });
