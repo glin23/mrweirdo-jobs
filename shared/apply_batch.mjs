@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import {
-  appendFileSync,
   closeSync,
   createWriteStream,
+  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -19,6 +19,19 @@ import { formatMaxRows, limitRows, resolveMaxRows } from './batch_limit.mjs';
 import { progress, sleepWithProgress } from './progress.mjs';
 import { onboardTmpDir } from './onboard_tmp.mjs';
 import { lockDir, lockFile } from './state_file_lock.mjs';
+import { dbPath } from './local_db.mjs';
+import { readAll } from './submission_ledger.mjs';
+import { PRE_DISPATCH_STAGE } from './driver_contract.mjs';
+import {
+  attemptIndex,
+  breaker,
+  budgetLine,
+  checkDispatch,
+  clearInflight,
+  dailyTier,
+  readInflight,
+  writeInflight,
+} from './apply_guard.mjs';
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const home = atsHome();
@@ -39,6 +52,17 @@ const dryRun = hasArg('--dry-run');
 const skipLiveness = hasArg('--skip-liveness') || process.env.MRWEIRDO_SKIP_LIVENESS === '1';
 const paceMinMs = Math.max(0, Number(argValue('--pace-min-ms') || process.env.MRWEIRDO_APPLY_PACE_MIN_MS || 30000));
 const paceMaxMs = Math.max(paceMinMs, Number(argValue('--pace-max-ms') || process.env.MRWEIRDO_APPLY_PACE_MAX_MS || 90000));
+const batchRunId = `batch_${new Date().toISOString().replace(/[:.]/g, '-')}_${process.pid}`;
+
+// L3 日档位（restart-apply ADR-S7）: read and validated before anything runs; a
+// tier above 30 without the user's explicit flag stops here, loudly.
+let tier;
+try {
+  tier = dailyTier(process.env, hasArg('--confirm-tier-over-30'));
+} catch (e) {
+  console.error(`[apply-batch] ${e.message}`);
+  process.exit(1);
+}
 
 const env = {
   ...process.env,
@@ -215,6 +239,37 @@ function acquireBatchLock() {
   console.error(`[apply-batch] lock=${lockPath}`);
 }
 
+// 崩溃恢复（ADR-S8）: a marker left behind means a driver may have clicked
+// Submit and nobody recorded it. Record it FIRST (as the driver's own outcome
+// if it got that far, else crashed/recovered_inflight = may have submitted) —
+// before any new dispatch can re-apply to the same job. Recording failure
+// stops the run: an unrecorded attempt must be resolved, not stepped over.
+function recoverInflight() {
+  const m = readInflight(home);
+  if (!m) return;
+  console.error(`[apply-batch] ⚠️ found an unrecorded attempt from ${m.run_id}: row ${m.row_id} ${m.apply_url} (started ${m.started_at}) — recording it before anything else`);
+  const alreadyRecorded = readAll(home).some((e) => e.job_id === m.row_id && e.apply_url === m.apply_url && e.ts >= m.started_at);
+  if (!alreadyRecorded) {
+    const text = existsSync(m.result_file) ? readFileSync(m.result_file, 'utf8') : '';
+    let resultFile = m.result_file;
+    if (!parseJsonLines(text).some((o) => typeof o.outcome === 'string')) {
+      resultFile = join(tmpDir, `recovered-inflight-${m.row_id}-${Date.now()}.jsonl`);
+      writeFileSync(resultFile, `${JSON.stringify({
+        outcome: 'crashed',
+        reason: 'recovered_inflight',
+        detail: { run_id: m.run_id, started_at: m.started_at, result_file: m.result_file, result_file_present: text !== '' },
+      })}\n`, { mode: 0o600 });
+      lockFile(resultFile);
+    }
+    const rec = runNode(['shared/record_apply_outcome.mjs', '--row-id', String(m.row_id), '--result-file', resultFile], {
+      env: { MRWEIRDO_DB_PATH: m.work_db },
+    });
+    if (rec.stdout) process.stdout.write(rec.stdout);
+    if (rec.code !== 0) fail(`inflight recovery for row ${m.row_id} (marker kept at locks/inflight.json)`, rec);
+  }
+  clearInflight(home);
+}
+
 mkdirSync(tmpDir, { recursive: true });
 // The transit files written below (apply-result-*.jsonl, batch summaries) carry
 // what was actually typed into real forms（阶段 1 设计 §14.5 未明点 1，lead 裁决
@@ -254,6 +309,7 @@ progress('apply', `max=${formatMaxRows(maxRows)} role_targets=${roleTargets || '
 
 if (!dryRun) {
   acquireBatchLock();
+  recoverInflight();
 
   const dedupe = runNode(['shared/dedupe_jobs.mjs', '--apply']);
   if (dedupe.code !== 0) fail('dedupe', dedupe);
@@ -279,6 +335,10 @@ if (!dryRun) {
     progress('apply', 'liveness gate skipped by --skip-liveness');
   }
 }
+
+// L1 run target folded into today's tier; this is the user's first line.
+const budget = budgetLine(attemptIndex(readAll(home)), maxRows ?? tier, tier);
+progress('apply', budget.line);
 
 const queueRun = runNode(['shared/auto_apply_queue.mjs', '--summary']);
 if (queueRun.stderr) process.stderr.write(queueRun.stderr);
@@ -319,9 +379,25 @@ if (maxRows != null && rows.length < maxRows) {
 
 const summaries = [];
 const batchStartedAt = new Date().toISOString();
+const dispatchedOutcomes = [];
+let breakerState = null;
+let stoppedBy = null;
 for (let i = 0; i < rows.length; i += 1) {
   const row = rows[i];
   progress('apply', `row ${i + 1}/${rows.length}: ${row.id} ${row.company} - ${row.title}`);
+
+  // 投前权威闸（ADR-S7）: the ledger is re-read for EVERY row, so an attempt
+  // recorded a moment ago — by this batch or another session — is seen.
+  const guard = checkDispatch(row, attemptIndex(readAll(home)), budget, new Date());
+  if (!guard.ok) {
+    progress('apply', `guard: row ${row.id} not dispatched — ${guard.reason}${guard.ref_ledger_id ? ` (ledger ${guard.ref_ledger_id})` : ''}`);
+    summaries.push({ row_id: row.id, company: row.company, title: row.title, action: 'guard_blocked', reason: guard.reason, ref_ledger_id: guard.ref_ledger_id });
+    if (guard.reason === 'daily_cap_reached' || guard.reason === 'run_target_reached') {
+      stoppedBy = guard.reason;
+      break;
+    }
+    continue;
+  }
 
   const validate = runNode(['shared/validate_auto_row.mjs', '--row-id', String(row.id)]);
   if (validate.stdout) process.stdout.write(validate.stdout);
@@ -338,6 +414,7 @@ for (let i = 0; i < rows.length; i += 1) {
     writeFileSync(resultFile, `${JSON.stringify({
       outcome: 'needs_user',
       reason,
+      stage: PRE_DISPATCH_STAGE, // no driver ran: may_have_submitted=false
       validation: validationResult,
     })}\n`, { mode: 0o600 });
     lockFile(resultFile);
@@ -375,6 +452,14 @@ for (let i = 0; i < rows.length; i += 1) {
     ...(coverLetter.ok && coverLetter.path ? { MRWEIRDO_COVER_LETTER_PATH: coverLetter.path } : {}),
     ...(!coverLetter.ok ? { MRWEIRDO_COVER_LETTER_GENERATION_REASON: coverLetter.reason || 'cover_letter_generation_failed' } : {}),
   };
+  writeInflight(home, {
+    run_id: batchRunId,
+    work_db: dbPath(),
+    row_id: row.id,
+    apply_url: row.apply_url,
+    result_file: resultFile,
+    started_at: new Date().toISOString(),
+  });
   const code = await runTee([driverFor(row), row.apply_url, String(row.id)], resultFile, driverEnv);
   // 契约退出码（ADR-15）：0 提交 / 1 崩溃 / 2 需人看 / 3 验证码 / 4 超限。
   // 2-4 是驱动如实报告的正常结局；1 是机器坏了，必须响。
@@ -388,10 +473,14 @@ for (let i = 0; i < rows.length; i += 1) {
   if (record.stdout) process.stdout.write(record.stdout);
   if (record.stderr) process.stderr.write(record.stderr);
   if (record.code !== 0) {
-    progress('apply', `record failed for row ${row.id}; skipping this row, continuing batch`);
+    // The attempt may be unrecorded: dispatching more would step over it. Keep
+    // the in-flight marker (next run records it first) and stop, loudly.
+    console.error(`[apply-batch] ⚠️ record failed for row ${row.id} after its driver ran — stopping the batch; locks/inflight.json kept for recovery`);
     summaries.push({ row_id: row.id, company: row.company, title: row.title, result_file: resultFile, action: 'record_failed', reason: 'record_apply_outcome_nonzero' });
-    continue;
+    stoppedBy = 'record_failed';
+    break;
   }
+  clearInflight(home);
 
   const recorded = parseLastJson(record.stdout) || { action: 'recorded_unknown' };
   const driverOutcome = parseLastJson(readFileSync(resultFile, 'utf8')) || {};
@@ -411,16 +500,15 @@ for (let i = 0; i < rows.length; i += 1) {
   }
   summaries.push({ row_id: row.id, company: row.company, title: row.title, result_file: resultFile, job_report_path: jobReportPath, driver_outcome: driverOutcome.outcome || null, ...recorded });
 
-  if (recorded.action === 'submitted') {
-    appendFileSync(
-      join(home, 'daily_count.jsonl'),
-      `${JSON.stringify({
-        date: todayUtc(),
-        company: row.company,
-        apply_url: row.apply_url,
-        submitted_at: new Date().toISOString(),
-      })}\n`
-    );
+  // 连续故障熔断（DESIGN §4.4）: the same machine failure three times running
+  // means the machine, not the jobs — stop and ask.
+  dispatchedOutcomes.push(driverOutcome.outcome || 'crashed');
+  const b = breaker(dispatchedOutcomes);
+  if (b.open) {
+    console.error(`[apply-batch] ⚠️⚠️ breaker open: ${b.count} dispatches in a row ended ${b.outcome} — stopped dispatching; read the result files / screenshots before running again`);
+    breakerState = b;
+    stoppedBy = 'breaker_open';
+    break;
   }
 
   if (i < rows.length - 1 && paceMaxMs > 0) {
@@ -454,6 +542,9 @@ const batchSummary = {
   profile_gate: profileGate,
   started_at: batchStartedAt,
   finished_at: new Date().toISOString(),
+  budget,
+  breaker: breakerState,
+  stopped_by: stoppedBy,
   rows: summaries,
   report_path: reportPath,
 };
