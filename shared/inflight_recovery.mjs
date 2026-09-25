@@ -50,7 +50,9 @@ export function recoverInflight({ home, repoRoot, env, tmpDir, log = console.err
       env: { ...env, MRWEIRDO_DB_PATH: m.work_db },
       encoding: 'utf8',
     });
-    if (rec.stdout) process.stdout.write(rec.stdout);
+    // Recorder output is diagnostics for the human; callers own their stdout
+    // (stream_run prints exactly one JSON object there).
+    if (rec.stdout) process.stderr.write(rec.stdout);
     if ((rec.status ?? 1) !== 0) {
       if (rec.stderr) process.stderr.write(rec.stderr);
       throw new Error(`inflight recovery for row ${m.row_id} failed (marker kept at locks/inflight.json)`);

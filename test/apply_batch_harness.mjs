@@ -25,7 +25,7 @@ const STEP = `import { appendFileSync as __a } from 'node:fs';
 if (process.env.MRW_TEST_STEP_LOG) __a(process.env.MRW_TEST_STEP_LOG, process.argv[1].split('/').pop() + '\\n');
 `;
 const NOOP = `${STEP}console.log(JSON.stringify({ ok: true, stub: true }));\n`;
-const STUBS = {
+export const STUBS = {
   'dedupe_jobs.mjs': NOOP,
   'recompute_auto_apply_eligibility.mjs': NOOP,
   'supervisor_preflight.mjs': NOOP,
@@ -41,7 +41,7 @@ import { readFileSync } from 'node:fs';
 for (const row of JSON.parse(readFileSync(process.env.MRW_TEST_QUEUE, 'utf8'))) console.log(JSON.stringify(row));
 `,
 };
-const DRIVER_STUB = `
+export const DRIVER_STUB = `
 import { appendFileSync, readFileSync } from 'node:fs';
 const url = process.argv[2];
 appendFileSync(process.env.MRW_TEST_DRIVER_LOG, url + '\\n');
