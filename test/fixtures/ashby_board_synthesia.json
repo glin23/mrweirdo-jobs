@@ -1,0 +1,32 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "a7730e60-1f5c-4bf8-a059-f2975d893f10",
+      "title": "Proposal Manager",
+      "employmentType": "FullTime",
+      "isListed": true,
+      "jobUrl": "https://jobs.ashbyhq.com/synthesia/a7730e60-1f5c-4bf8-a059-f2975d893f10",
+      "applyUrl": "https://jobs.ashbyhq.com/synthesia/a7730e60-1f5c-4bf8-a059-f2975d893f10/application",
+      "publishedAt": "2026-09-21T15:54:55.609+00:00"
+    },
+    {
+      "id": "c3c79cb1-3ead-46ac-abf2-04502e4655bd",
+      "title": "SecOps Security Engineer (Staff-level, L6) ",
+      "employmentType": "FullTime",
+      "isListed": true,
+      "jobUrl": "https://jobs.ashbyhq.com/synthesia/c3c79cb1-3ead-46ac-abf2-04502e4655bd",
+      "applyUrl": "https://jobs.ashbyhq.com/synthesia/c3c79cb1-3ead-46ac-abf2-04502e4655bd/application",
+      "publishedAt": "2026-08-25T13:08:26.426+00:00"
+    },
+    {
+      "id": "11cac93d-fea6-4f22-add1-d4e3bb904b94",
+      "title": "Enterprise Account Executive",
+      "employmentType": "FullTime",
+      "isListed": true,
+      "jobUrl": "https://jobs.ashbyhq.com/synthesia/11cac93d-fea6-4f22-add1-d4e3bb904b94",
+      "applyUrl": "https://jobs.ashbyhq.com/synthesia/11cac93d-fea6-4f22-add1-d4e3bb904b94/application",
+      "publishedAt": "2024-03-27T15:27:47.413+00:00"
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { LIVENESS_STATUSES } from './constants.mjs';
 import { progress } from './progress.mjs';
+import { fetchJobs as fetchAshbyBoard } from './sourcing/ashby_board_api.mjs';
 
 function argValue(name, fallback = null) {
   const idx = process.argv.indexOf(name);
@@ -123,6 +124,49 @@ async function checkUrl(url, timeoutMs) {
   }
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// jobs.ashbyhq.com/<slug>/<posting-uuid>[/application] → { slug, postingId }.
+// Anything else (custom careers domains etc.) is not ours to parse → null.
+function parseAshbyPostingUrl(url) {
+  let u;
+  try {
+    u = new URL(String(url || ''));
+  } catch {
+    return null;
+  }
+  if (u.hostname.toLowerCase() !== 'jobs.ashbyhq.com') return null;
+  const [slug, id] = u.pathname.split('/').filter(Boolean).map((part) => decodeURIComponent(part));
+  if (!slug) return null;
+  return { slug, postingId: UUID_RE.test(id || '') ? id.toLowerCase() : null };
+}
+
+// Ashby pages are client-rendered: HTTP is always 200 and every page embeds
+// recaptchaPublicSiteKey, so the HTML says nothing about whether the posting
+// exists (live, taken-down and made-up IDs all read as bot_challenge). The
+// public posting API does: the posting ID is on the company board or it is not.
+// Could not ask (API error, no ID in the URL) → 'uncertain', never 'expired' —
+// our own blindness must not silently drop a live job.
+// `boardCache` (slug → Promise<Set<id>>) keeps a batch to one fetch per company.
+export async function checkAshbyPosting(url, boardCache = new Map()) {
+  const base = { ok: true, status: 0, final_url: url, method: 'ashby_posting_api' };
+  const parsed = parseAshbyPostingUrl(url);
+  if (!parsed?.postingId) {
+    return { ...base, ok: false, liveness_status: 'uncertain', reason: 'ashby_url_without_posting_id' };
+  }
+  const key = parsed.slug.toLowerCase();
+  if (!boardCache.has(key)) {
+    // fetchJobs returns [] for a 404 board (company gone) — no postings, so expired.
+    boardCache.set(key, fetchAshbyBoard(parsed.slug).then((jobs) => new Set(jobs.map((j) => String(j._id).toLowerCase()))));
+  }
+  try {
+    const ids = await boardCache.get(key);
+    return { ...base, liveness_status: ids.has(parsed.postingId) ? 'live' : 'expired' };
+  } catch (e) {
+    return { ...base, ok: false, liveness_status: 'uncertain', error: e.message };
+  }
+}
+
 function updateLiveness(db, rowId, status) {
   if (!LIVENESS_STATUSES.includes(status)) throw new Error(`invalid liveness status: ${status}`);
   db.prepare(`
@@ -187,10 +231,13 @@ export async function runLivenessGate({
     rows: [],
   };
 
+  const ashbyBoards = new Map();
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
     progress('liveness', `checking ${i + 1}/${rows.length}: ${row.id} ${row.company || ''}`);
-    const result = await checkUrl(row.apply_url, timeoutMs);
+    const result = parseAshbyPostingUrl(row.apply_url)
+      ? await checkAshbyPosting(row.apply_url, ashbyBoards)
+      : await checkUrl(row.apply_url, timeoutMs);
     updateLiveness(db, row.id, result.liveness_status);
     summary.checked += 1;
     summary.by_status[result.liveness_status] = (summary.by_status[result.liveness_status] || 0) + 1;
