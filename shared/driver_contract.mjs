@@ -132,13 +132,21 @@ export const PRE_DISPATCH_STAGE = 'pre_dispatch';
 //   1. pre-dispatch validation failure → false (no driver ran)
 //   2. a page verdict is present (the post-submit page was read) → true
 //   3. "<outcome>:<reason>" in PRE_SUBMIT_EXITS → false
-//   4. everything else → true — incl. driver_exception / died / recovered
-//      in-flight, and every needs_user / captcha_blocked / rate_limited exit
-//      (all GH/Ashby ones fire after submitAndCheck; 未明点 7 核对结论).
+//   4. needs_user / rate_limited carrying the page's required-field error list
+//      (missing / still_missing / last_missing, non-empty) → false: the page
+//      rejected the form (回炉第 1 轮, VERIFY_REPORT 第 2 轮 P1)
+//   5. everything else → true — incl. driver_exception / died / recovered
+//      in-flight, captcha_blocked, and needs_user without page evidence.
 export function deriveMayHaveSubmitted(o) {
   const valid = validateOutcome(o);
   if (valid.stage === PRE_DISPATCH_STAGE) return false;
   if (valid.verdict != null) return true;
   if (PRE_SUBMIT_EXITS.has(`${valid.outcome}:${valid.reason ?? ''}`)) return false;
+  // Submit was clicked, but the page stayed on the form listing required-field
+  // errors → the form was rejected; nothing reached the company. Judged on the
+  // page evidence, not the reason string (greenhouse builds reasons
+  // dynamically). No error list = no evidence = stays true.
+  const pageErrors = valid.missing ?? valid.still_missing ?? valid.last_missing;
+  if (['needs_user', 'rate_limited'].includes(valid.outcome) && Array.isArray(pageErrors) && pageErrors.length > 0) return false;
   return true;
 }

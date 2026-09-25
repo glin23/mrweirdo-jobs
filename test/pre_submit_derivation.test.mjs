@@ -64,3 +64,24 @@ test('输入不是合法结局 → 响亮报错，不猜', () => {
   assert.throws(() => deriveMayHaveSubmitted(null), /outcome/);
   assert.throws(() => deriveMayHaveSubmitted({ outcome: 'skip' }), /contract/);
 });
+
+// 回炉第 1 轮（VERIFY_REPORT 第 2 轮 P1）：按页面证据判，不按 reason 字符串判。
+test('needs_user / rate_limited 带页面错误清单（表单被拒、留在表单上）→ false', () => {
+  for (const o of [
+    { outcome: 'needs_user', reason: 'stuck_on_same_missing', missing: ['Why us?'] },
+    { outcome: 'needs_user', reason: 'profile_full_address_required', blockers: [], missing: ['Street address'] },
+    { outcome: 'needs_user', reason: 'essay_pending', pending: [], still_missing: ['Why us?'] },
+    { outcome: 'needs_user', reason: 'cover_letter_upload_failed', detail: {}, missing: ['Cover letter'] },
+    { outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: ['Phone'] },
+  ]) {
+    assert.equal(deriveMayHaveSubmitted(o), false, `${o.outcome}:${o.reason}`);
+  }
+});
+
+test('没有页面错误证据的仍保守 true（空清单、别的结局带清单都不算）', () => {
+  assert.equal(deriveMayHaveSubmitted({ outcome: 'needs_user', reason: 'stuck_on_same_missing' }), true);
+  assert.equal(deriveMayHaveSubmitted({ outcome: 'needs_user', reason: 'stuck_on_same_missing', missing: [] }), true);
+  assert.equal(deriveMayHaveSubmitted({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: [] }), true);
+  assert.equal(deriveMayHaveSubmitted({ outcome: 'crashed', reason: 'driver_exception', missing: ['x'] }), true);
+  assert.equal(deriveMayHaveSubmitted({ outcome: 'unknown', reason: 'no_errors_no_success', missing: ['x'] }), true);
+});

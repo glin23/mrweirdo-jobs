@@ -3,7 +3,8 @@
 // 「第 2 次运行重新找到同一岗位」用新行号、同链接的库行模拟（S3 工作库的样子）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { append, readAll } from '../shared/submission_ledger.mjs';
 import { makeBatchRig, gh, ashby } from './apply_batch_harness.mjs';
@@ -121,4 +122,42 @@ test('每行派单前现读账本：别的会话刚记的账，本批下一行�
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(rig.driverCalls(), [rows[0].apply_url]);
   assert.deepEqual(blocked(r.summary), ['already_attempted_fp']);
+});
+
+// 回炉第 1 轮（VERIFY_REPORT 第 2 轮 P1）：页面列出必填项错误 = 表单被拒、公司没收到。
+const STUCK = (missing) => ({ outcome: 'needs_user', reason: 'stuck_on_same_missing', missing });
+
+test('补信息回路：卡缺信息 → retry_gap_rows 放回队列 → 投前闸放行、第 2 次派单投成、不报重投', () => {
+  const rig = makeBatchRig('mrw-batch-gap-retry-');
+  const [row] = rig.addJobs([{ company: 'Synthesia', title: 'Ops Intern', apply_url: ashby('synthesia', 7) }]);
+  rig.script({ [row.apply_url]: STUCK(['What is your full address?']) });
+  const first = rig.run([row]);
+  assert.equal(first.status, 0, first.stderr);
+  assert.equal(readAll(rig.home)[0].may_have_submitted, false, 'the page rejected the form: nothing reached the company');
+
+  // The user answered; the onboard follow-up requeues the row (SKILL :434-443).
+  const gap = join(rig.base, 'gap.json');
+  writeFileSync(gap, JSON.stringify({ retry_candidates: [{ row_id: row.id, company: row.company, title: row.title, categories: ['user_full_address'] }] }));
+  const requeue = spawnSync(process.execPath, ['shared/retry_gap_rows.mjs', '--apply', '--gap-report', gap], { cwd: process.cwd(), env: rig.env, encoding: 'utf8' });
+  assert.equal(requeue.status, 0, requeue.stderr);
+  assert.equal(JSON.parse(requeue.stdout).summary.requeued, 1);
+
+  rig.script({});
+  const second = rig.run([row]);
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepEqual(blocked(second.summary), []);
+  assert.deepEqual(rig.driverCalls(), [row.apply_url, row.apply_url]);
+  assert.deepEqual(readAll(rig.home).map((e) => e.verdict), ['unknown', 'submitted']);
+  assert.doesNotMatch(second.stderr, /invariant_violation_reapplied/);
+});
+
+test('10 家全卡缺信息不吃光当日额度：第 11 家照投', () => {
+  const rig = makeBatchRig('mrw-batch-gap-tier-');
+  const rows = rig.addJobs(Array.from({ length: 11 }, (_, i) => ({ company: `Co${i}`, title: 'Intern', apply_url: gh(`co${i}`, i + 1) })));
+  rig.script(Object.fromEntries(rows.slice(0, 10).map((r) => [r.apply_url, STUCK(['Why us?'])])));
+  const r = rig.run(rows, ['--max', '50']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(rig.driverCalls().length, 11);
+  assert.deepEqual(blocked(r.summary), []);
+  assert.equal(readAll(rig.home).at(-1).verdict, 'submitted');
 });
