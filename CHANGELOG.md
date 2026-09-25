@@ -60,6 +60,29 @@ since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
 ### Fixed
+- **Form answers no longer leak into jobs.db** (2026-09-25, restart-apply
+  小修包, 第 7 轮验收 P2). `record_apply_outcome.mjs` wrote the whole driver
+  outcome — including every answer typed onto the form, work-authorization
+  answers among them — into `feedback.detail` of the world-readable jobs.db
+  and into the manual-review file. Answers now go to the 600 ledger only;
+  every DB / manual-review write uses a copy without them.
+- **Liveness can finally tell a dead Ashby posting from a live one**
+  (2026-09-25). Ashby pages are client-rendered, always HTTP 200 and all embed
+  `recaptchaPublicSiteKey`, so live, taken-down and made-up postings all read
+  as the non-blocking `bot_challenge`. `jobs.ashbyhq.com` rows are now checked
+  against Ashby's public posting API: ID on the board → `live`, not on it or
+  board gone → `expired`, API unreachable / no ID in the URL → `uncertain`
+  (never blocks). One board fetch per company per batch.
+- **Ashby rows whose form never loaded no longer loop forever** (2026-09-25).
+  Two exits in the Ashby driver still printed the legacy `skip`, which the
+  recorder refuses, so the row was never recorded and got re-picked every
+  batch. Both now go through the contract as `crashed`; a source guard fails
+  the tests if any driver prints a bare outcome line again.
+- **`demo:check` no longer reports "ready rows: 0" on macOS** (2026-09-25).
+  `supervisor_preflight --json` exited right after printing >64KB; macOS pipes
+  are asynchronous, so the parent got 65536 bytes, failed to parse, and showed
+  0. Preflight and demo:check now set `process.exitCode` and let stdout drain;
+  unreadable preflight output is a failing check with `ready_rows: null`, not 0.
 - **"How many did I apply to" now has one answer instead of three**
   (2026-07-30, 阶段 1「数字变真」包 2). The DB carried three submission cells
   giving three different totals (158 / 182 / 183). A new append-only ledger
