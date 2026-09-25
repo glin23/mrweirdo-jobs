@@ -17,7 +17,7 @@ function makeHome(prefix) {
   const db = new DatabaseSync(join(home, 'jobs.db'));
   db.prepare(`
     INSERT INTO jobs(company, title, apply_url, status)
-    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/1', '🤖 AI sourced')
+    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-000000000001', '🤖 AI sourced')
   `).run();
   const rowId = db.prepare('SELECT id FROM jobs').get().id;
   db.close();

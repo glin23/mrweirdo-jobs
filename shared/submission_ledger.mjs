@@ -20,7 +20,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { lockDir, lockFile } from './state_file_lock.mjs';
-import { SUBMITTED_STATUSES } from './job_identity.mjs';
+import { SUBMITTED_STATUSES, jobFingerprint } from './job_identity.mjs';
 
 export const LEDGER_RELPATH = 'log/submissions.jsonl';
 export const LEDGER_ERAS = Object.freeze(['v2', 'legacy']);
@@ -37,6 +37,22 @@ function assertEntryShape(entry) {
   if (!LEDGER_VERDICTS.includes(entry.verdict)) throw new Error(`ledger entry verdict "${entry.verdict}" not in ${LEDGER_VERDICTS.join('|')}`);
   if (!Number.isInteger(entry.job_id) || entry.job_id <= 0) throw new Error(`ledger entry job_id must be a positive integer, got ${JSON.stringify(entry.job_id)}`);
   if (typeof entry.outcome !== 'string' || !entry.outcome) throw new Error('ledger entry outcome (string) is required');
+  // 账本自带岗位身份（restart-apply ADR-S3，永久格式）：去重只认账本，所以每行
+  // 必须能推出指纹；「投过」的唯一口径 may_have_submitted 由 driver_contract
+  // 推导后写入，这里只认布尔。
+  if (typeof entry.apply_url !== 'string' || !entry.apply_url) throw new Error('ledger entry apply_url (string) is required');
+  if (!jobFingerprint(entry.apply_url)) throw new Error(`ledger entry apply_url yields no job fingerprint: ${entry.apply_url}`);
+  if (typeof entry.may_have_submitted !== 'boolean') throw new Error(`ledger entry may_have_submitted must be a boolean, got ${JSON.stringify(entry.may_have_submitted)}`);
+}
+
+// job_id is only an identity if one id never names two jobs. A second line for
+// the same job_id with a different apply_url means two runs collided on row
+// numbers — refuse loudly instead of silently merging two jobs' histories.
+function assertJobIdUnambiguous(home, entry) {
+  const clash = readAll(home).find((e) => e.job_id === entry.job_id && e.apply_url && e.apply_url !== entry.apply_url);
+  if (clash) {
+    throw new Error(`ledger job_id ${entry.job_id} already belongs to ${clash.apply_url} (line ${clash.id}); refusing to record ${entry.apply_url} under it`);
+  }
 }
 
 function writeLine(home, entry) {
@@ -59,6 +75,7 @@ export function append(home, entry) {
   };
   assertEntryShape(full);
   if (full.correction_of) throw new Error('append: use appendCorrection for correction lines');
+  assertJobIdUnambiguous(home, full);
   return writeLine(home, full);
 }
 
@@ -117,6 +134,12 @@ export function effectiveByJob(entries) {
     byJob.set(e.job_id, effective);
   }
   return byJob;
+}
+
+// Highest job_id the ledger has ever used (0 when empty). The per-run work DB
+// numbers its rows above this so v2 job_ids never repeat (DESIGN §3 initRunDb).
+export function maxJobId(entries) {
+  return entries.reduce((max, e) => (Number.isInteger(e.job_id) && e.job_id > max ? e.job_id : max), 0);
 }
 
 // ISO timestamp → sqlite datetime('now') shape (UTC), so rebuild output is

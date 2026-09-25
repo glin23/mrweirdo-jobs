@@ -15,6 +15,7 @@ import {
   appendCorrection,
   effectiveByJob,
   ledgerPath,
+  maxJobId,
   readAll,
   rebuild,
   sqliteTs,
@@ -22,11 +23,14 @@ import {
 import { onboardTestEnv } from './helpers.mjs';
 
 const mode = (p) => statSync(p).mode & 0o777;
+const ashbyUrl = (n) => `https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-${String(n).padStart(12, '0')}`;
 
 function baseEntry(jobId, verdict = 'submitted', extra = {}) {
   return {
     era: 'v2',
     job_id: jobId,
+    apply_url: ashbyUrl(jobId),
+    may_have_submitted: true,
     company_key: 'acme',
     title_key: 'ops intern',
     ats: 'ashby',
@@ -63,6 +67,38 @@ test('append：补全 id/ts、校验形状、落盘即 600/700，追加不重写
   assert.throws(() => append(home, { ...baseEntry(3), job_id: 'three' }), /job_id/);
   assert.throws(() => append(home, { ...baseEntry(3), correction_of: 'led_x' }), /appendCorrection/);
   assert.equal(readAll(home).length, 2, 'rejected entries never half-land');
+});
+
+test('账本自带岗位身份（ADR-S3）：apply_url 必须推得出指纹、may_have_submitted 必须是布尔', () => {
+  const home = mkdtempSync(join(tmpdir(), 'mrw-ledger-identity-'));
+  const { apply_url: _u, ...noUrl } = baseEntry(1);
+  assert.throws(() => append(home, noUrl), /apply_url/);
+  assert.throws(() => append(home, { ...baseEntry(1), apply_url: 'https://jobs.ashbyhq.com/acme/1' }), /fingerprint/);
+  const { may_have_submitted: _m, ...noFlag } = baseEntry(1);
+  assert.throws(() => append(home, noFlag), /may_have_submitted/);
+  assert.throws(() => append(home, { ...baseEntry(1), may_have_submitted: 'yes' }), /may_have_submitted/);
+  assert.throws(() => append(home, { ...baseEntry(1, 'legacy_unverified'), era: 'legacy', apply_url: 'https://x/legacy' }), /fingerprint/, 'legacy rows carry identity too');
+  assert.equal(readAll(home).length, 0);
+  append(home, { ...baseEntry(1), may_have_submitted: false });
+  assert.equal(readAll(home)[0].may_have_submitted, false);
+});
+
+test('行号不变量：同一 job_id 已记过另一个 apply_url → 响亮报错（撞号不许静默串号）', () => {
+  const home = mkdtempSync(join(tmpdir(), 'mrw-ledger-collide-'));
+  append(home, baseEntry(100001));
+  append(home, baseEntry(100001, 'not_submitted')); // same job, same url: a second attempt line is fine
+  assert.throws(() => append(home, { ...baseEntry(100001), apply_url: ashbyUrl(42) }), /job_id 100001/);
+  assert.equal(readAll(home).length, 2);
+});
+
+test('maxJobId：账本最大行号（空账本 0），更正行不影响', () => {
+  const home = mkdtempSync(join(tmpdir(), 'mrw-ledger-max-'));
+  assert.equal(maxJobId(readAll(home)), 0);
+  append(home, baseEntry(7));
+  const big = append(home, baseEntry(100005));
+  append(home, baseEntry(12));
+  appendCorrection(home, big.id, { verdict: 'not_submitted' }, 'proof.png');
+  assert.equal(maxJobId(readAll(home)), 100005);
 });
 
 test('readAll：坏行响亮报错并带行号——账本是机器写的，坏行=有人绕过写账人', () => {
@@ -105,7 +141,7 @@ function makeFunnelHome(prefix) {
   const db = new DatabaseSync(join(home, 'jobs.db'));
   db.prepare(`
     INSERT INTO jobs(company, title, apply_url, status, ats_platform)
-    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/1', '🤖 AI sourced', 'ashby')
+    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-000000000001', '🤖 AI sourced', 'ashby')
   `).run();
   const rowId = db.prepare('SELECT id FROM jobs').get().id;
   db.close();
@@ -138,7 +174,20 @@ test('漏斗：每次投递先落账本行——成的、没成的、崩的各�
   assert.deepEqual(entries.map((e) => e.outcome), ['submitted', 'not_submitted', 'crashed']);
   assert.equal(entries[0].answers[0].value, 'Yes', '全问答落盘 (ADR-16)');
   assert.ok(entries.every((e) => e.era === 'v2' && e.job_id === rowId && e.ats === 'ashby'));
+  // 账本自带岗位身份（ADR-S3）：链接来自岗位行；可能已提交按契约推导。
+  assert.ok(entries.every((e) => e.apply_url === 'https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-000000000001'));
+  assert.deepEqual(entries.map((e) => e.may_have_submitted), [true, true, true]);
   assert.equal(mode(ledgerPath(home)), 0o600);
+});
+
+test('漏斗：点提交前的出口记 may_have_submitted=false，verdict 仍是 unknown（页面没判，不撒谎）', () => {
+  const { home, env, rowId } = makeFunnelHome('mrw-ledger-presubmit-');
+  const r = record(env, rowId, home, { outcome: 'crashed', reason: 'ashby_form_not_loaded' });
+  assert.equal(r.status, 0, r.stderr);
+  const [e] = readAll(home);
+  assert.equal(e.outcome, 'crashed');
+  assert.equal(e.verdict, 'unknown');
+  assert.equal(e.may_have_submitted, false);
 });
 
 test('验收 V8：answers 只进账本，不进 jobs 表任何列', () => {
@@ -177,7 +226,7 @@ test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库
   const b = makeFunnelHome('mrw-ledger-p2-dup-');
   let db = new DatabaseSync(b.dbPath);
   db.prepare(`INSERT INTO jobs(company, title, apply_url, status, ats_platform)
-    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/2', '✅ 已投', 'ashby')`).run();
+    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/00000000-0000-0000-0000-000000000002', '✅ 已投', 'ashby')`).run();
   db.close();
   const rb = record(b.env, b.rowId, b.home, { outcome: 'submitted', verdict: 'submitted', answers });
   assert.equal(rb.status, 0, rb.stderr);

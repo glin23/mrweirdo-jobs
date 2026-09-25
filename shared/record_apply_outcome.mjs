@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
 import { onboardTmpPath } from './onboard_tmp.mjs';
-import { validateOutcome } from './driver_contract.mjs';
+import { deriveMayHaveSubmitted, validateOutcome } from './driver_contract.mjs';
 import { append as ledgerAppend, sqliteTs } from './submission_ledger.mjs';
 import { workAuthSources } from './answer_provenance.mjs';
 import { atsHome } from './paths.mjs';
@@ -101,7 +101,7 @@ try {
 }
 initDb();
 const db = new DatabaseSync(dbPath());
-const row = db.prepare('SELECT id, company, title, status, ats_platform FROM jobs WHERE id = ?').get(rowId);
+const row = db.prepare('SELECT id, company, title, status, ats_platform, apply_url FROM jobs WHERE id = ?').get(rowId);
 if (!row) {
   console.error(JSON.stringify({ ok: false, reason: 'row_not_found', row_id: rowId }));
   process.exit(1);
@@ -114,6 +114,7 @@ const pageVerdict = outcome.verdict && typeof outcome.verdict === 'object' ? out
 const ledgerEntry = ledgerAppend(atsHome(), {
   era: 'v2',
   job_id: rowId,
+  apply_url: row.apply_url,
   company_key: normalizeCompany(row.company),
   title_key: normalizeTitle(row.title),
   ats: row.ats_platform || null,
@@ -123,6 +124,8 @@ const ledgerEntry = ledgerAppend(atsHome(), {
   // in validateOutcome); anything else is honestly unknown.
   verdict: ['submitted', 'not_submitted'].includes(pageVerdict) ? pageVerdict
     : outcome.outcome === 'not_submitted' ? 'not_submitted' : 'unknown',
+  // 「投过」唯一口径（ADR-S6）：只在 driver_contract 推导，这里不写第二份规则。
+  may_have_submitted: deriveMayHaveSubmitted(outcome),
   reason: outcome.reason ?? null,
   evidence: outcome.evidence ?? null,
   answers: Array.isArray(outcome.answers) ? outcome.answers : [],
