@@ -448,6 +448,7 @@ fs.mkdirSync(outputDir, { recursive: true });
 progress('discovery', `sources=${sources.length} keywords=${keywords.length} run_id=${runId}`);
 const result = await discoverAll({
   keywords,
+  intent,
   sources,
   concurrency_per_source: concurrency,
   limit_per_source: limitPerSource,

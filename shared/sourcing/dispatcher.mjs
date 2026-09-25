@@ -84,6 +84,16 @@ const ADAPTERS = {
     },
   },
 
+  // 名单优先（restart-apply S4）: the user's target companies, every run. Never
+  // in DEFAULT_SOURCES — stream_run asks for it explicitly, before rotation.
+  watchlist: {
+    module: '../sourcing/watchlist_source.mjs',
+    async fetch({ intent, reportError }) {
+      const m = await import('./watchlist_source.mjs');
+      return m.fetchWatchlist(intent?.target_companies, { reportError });
+    },
+  },
+
   wellfound: {
     module: '../sourcing/wellfound_search.mjs',
     async fetch({ keywords, limit }) {
@@ -148,13 +158,18 @@ export async function discoverAll({
     throw new Error(`Unknown sources: ${unknown.join(', ')}. Available: ${ALL_SOURCES.join(', ')}`);
   }
 
+  const itemErrors = [];
   const results = await Promise.all(
     sources.map(async (sourceName) => {
       const adapter = ADAPTERS[sourceName];
+      // Per-item failures inside one source (one watchlist board down) land in
+      // errors next to whole-source failures — never swallowed.
+      const reportError = (e) => itemErrors.push({ source: sourceName, ...e });
       try {
         const jobs = await adapter.fetch({
           keywords,
           intent,
+          reportError,
           concurrency: concurrency_per_source,
           limit: limit_per_source,
           sourceWindowSize: source_window_size,
@@ -183,7 +198,7 @@ export async function discoverAll({
   }
 
   const by_source = Object.fromEntries(results.map((r) => [r.source, (r.jobs || []).length]));
-  const errors = results.filter((r) => !r.ok).map((r) => ({ source: r.source, error: r.error }));
+  const errors = [...results.filter((r) => !r.ok).map((r) => ({ source: r.source, error: r.error })), ...itemErrors];
 
   return {
     jobs: merged,

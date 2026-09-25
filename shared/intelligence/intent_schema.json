@@ -133,6 +133,19 @@
           "type": ["number", "null"],
           "description": "Minimum hourly wage user will accept for intern roles when explicitly stated in self-introduction or a later follow-up. Soft signal for scoring."
         },
+        "target_companies": {
+          "type": "array",
+          "description": "Optional. Companies scanned first on every run (restart-apply 名单优先). slug = the public job-board slug, verified against the board API; it is also the company name everywhere downstream (label is display only). Lever entries are reported as paused, not fetched.",
+          "items": {
+            "type": "object",
+            "required": ["ats", "slug"],
+            "properties": {
+              "ats": { "type": "string", "enum": ["ashby", "greenhouse", "lever"] },
+              "slug": { "type": "string" },
+              "label": { "type": ["string", "null"] }
+            }
+          }
+        },
         "exclude_role_keywords": {
           "type": "array",
           "description": "Role title fragments that should DROP results (whole-word, case-insensitive). Derived from the target-function anchor and obvious noise. Do not use one universal exclusion list: a SWE-seeking user must not exclude 'software engineer', while an Ops/PM-seeking user may exclude distant engineering/clinical/design/data roles when those are outside the stated target.",

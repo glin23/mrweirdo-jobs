@@ -1,0 +1,166 @@
+{
+  "_meta": {
+    "purpose": "AI 视频目标公司名单（restart-apply PRODUCT_SPEC §4.2 / ARCH_AUDIT）。预置数据，不会被自动使用：由引导步骤写进用户 search_intent.target_companies 后才生效。",
+    "verified_at": "2026-09-25",
+    "method": "公开接口只读 GET：Ashby https://api.ashbyhq.com/posting-api/job-board/<slug>、Greenhouse https://boards-api.greenhouse.io/v1/boards/<slug>/jobs；200 且有 jobs 数组才收录。slug 以实测为准，不猜。",
+    "not_found_slugs_tried": {
+      "Higgsfield": [
+        "higgsfield (404)"
+      ],
+      "Luma AI": [
+        "luma-ai (404)",
+        "luma (404)"
+      ],
+      "Black Forest Labs": [
+        "blackforestlabs (404)",
+        "bfl (404)"
+      ],
+      "OpusClip": [
+        "opus-clip (404)"
+      ],
+      "Runway": [
+        "runwayml (404)"
+      ],
+      "Pika": [
+        "pikalabs (404)"
+      ]
+    }
+  },
+  "target_companies": [
+    {
+      "ats": "ashby",
+      "slug": "runway",
+      "label": "Runway"
+    },
+    {
+      "ats": "ashby",
+      "slug": "lumaai",
+      "label": "Luma AI"
+    },
+    {
+      "ats": "ashby",
+      "slug": "synthesia",
+      "label": "Synthesia"
+    },
+    {
+      "ats": "ashby",
+      "slug": "elevenlabs",
+      "label": "ElevenLabs"
+    },
+    {
+      "ats": "ashby",
+      "slug": "higgsfieldai",
+      "label": "Higgsfield"
+    },
+    {
+      "ats": "ashby",
+      "slug": "mirage",
+      "label": "mirage"
+    },
+    {
+      "ats": "ashby",
+      "slug": "pika",
+      "label": "Pika"
+    },
+    {
+      "ats": "ashby",
+      "slug": "suno",
+      "label": "Suno"
+    },
+    {
+      "ats": "ashby",
+      "slug": "hedra",
+      "label": "Hedra"
+    },
+    {
+      "ats": "ashby",
+      "slug": "tavus",
+      "label": "Tavus"
+    },
+    {
+      "ats": "ashby",
+      "slug": "genmo",
+      "label": "Genmo"
+    },
+    {
+      "ats": "ashby",
+      "slug": "creatify",
+      "label": "Creatify"
+    },
+    {
+      "ats": "ashby",
+      "slug": "opusclip",
+      "label": "OpusClip"
+    },
+    {
+      "ats": "ashby",
+      "slug": "krea",
+      "label": "Krea"
+    },
+    {
+      "ats": "ashby",
+      "slug": "ideogram",
+      "label": "Ideogram"
+    },
+    {
+      "ats": "ashby",
+      "slug": "viggle",
+      "label": "Viggle"
+    },
+    {
+      "ats": "ashby",
+      "slug": "black-forest-labs",
+      "label": "Black Forest Labs"
+    },
+    {
+      "ats": "greenhouse",
+      "slug": "heygen",
+      "label": "HeyGen"
+    },
+    {
+      "ats": "greenhouse",
+      "slug": "descript",
+      "label": "Descript"
+    },
+    {
+      "ats": "greenhouse",
+      "slug": "stabilityai",
+      "label": "Stability AI"
+    },
+    {
+      "ats": "greenhouse",
+      "slug": "lightricks",
+      "label": "Lightricks"
+    }
+  ],
+  "skipped": [
+    {
+      "label": "Kapwing",
+      "reason": "Lever 板（0 岗），Lever 暂停中"
+    },
+    {
+      "label": "Captions",
+      "reason": "Ashby/Greenhouse 均 404（mirage 是否即 Captions 未核实）"
+    },
+    {
+      "label": "VEED",
+      "reason": "Ashby/Greenhouse 均 404"
+    },
+    {
+      "label": "InVideo",
+      "reason": "Ashby/Greenhouse 均 404"
+    },
+    {
+      "label": "D-ID",
+      "reason": "Ashby/Greenhouse 均 404"
+    },
+    {
+      "label": "Arcads",
+      "reason": "Ashby/Greenhouse 均 404"
+    },
+    {
+      "label": "Moonvalley",
+      "reason": "Ashby/Greenhouse 均 404"
+    }
+  ]
+}
