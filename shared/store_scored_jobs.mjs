@@ -11,6 +11,8 @@ import { assessFunctionRelevance, FUNCTION_RELEVANCE_TOO_DISTANT_REASON } from '
 import { progress } from './progress.mjs';
 import { DEFAULT_LEGITIMACY, LEGITIMACY_LEVELS } from './constants.mjs';
 import { onboardTmpPath } from './onboard_tmp.mjs';
+import { jdHash, recordSeen, scoringBasisVersion } from './seen_log.mjs';
+import { jobFingerprint } from './job_identity.mjs';
 
 function argValue(name, fallback = null) {
   const idx = process.argv.indexOf(name);
@@ -65,6 +67,13 @@ function hasCompleteScore(score = {}) {
     score.role_type_match.length > 0;
 }
 
+// 看过记录（restart-apply ADR-S5）: a scored job that is not eligible is written
+// down with the JD fingerprint and the basis it was judged against, so the next
+// run does not pay to score it again unless one of them changed.
+const scoringBasis = scoringBasisVersion(HOME);
+// JD 明写不办签证 (visa_compatible 0-2 per score_prompt.md) is its own code (PM R7).
+const VISA_BLOCKED_MAX = 2;
+
 const byUrl = new Map(scored
   .map((s) => [rowUrl(s), s])
   .filter(([url]) => Boolean(url)));
@@ -104,6 +113,7 @@ const summary = {
   by_ineligible_reason: {},
   by_legitimacy: {},
   skipped_unusable_apply_url: 0,
+  seen_unrecordable: 0,
 };
 
 if (scoreMissing.length > 0 && !allowPartialScores) {
@@ -213,10 +223,25 @@ for (const job of candidates) {
   bump(summary.by_platform, platform);
   bump(summary.by_legitimacy, legitimacy);
   if (!eligible) bump(summary.by_ineligible_reason, reason);
+  if (!eligible && score.fit_score != null && !jobFingerprint(applyUrl)) {
+    // Memory only (a missing line costs a re-score, never a re-application),
+    // so an unfingerprintable link is counted out loud rather than fatal.
+    summary.seen_unrecordable += 1;
+  } else if (!eligible && score.fit_score != null) {
+    recordSeen(HOME, {
+      code: (score.dim_scores?.visa_compatible ?? 10) <= VISA_BLOCKED_MAX ? 'visa_blocked' : 'not_fit',
+      apply_url: applyUrl,
+      company: row.company,
+      title: row.title,
+      jd_hash: jdHash(job.description),
+      basis_version: scoringBasis,
+      reason,
+    });
+  }
   if (summary.stored % 50 === 0) {
     progress('store', `stored=${summary.stored}/${usableCandidates.length} eligible=${summary.eligible}`);
   }
 }
 
-progress('store', `done stored=${summary.stored} eligible=${summary.eligible} skipped_unusable=${summary.skipped_unusable_apply_url}`);
+progress('store', `done stored=${summary.stored} eligible=${summary.eligible} skipped_unusable=${summary.skipped_unusable_apply_url}${summary.seen_unrecordable ? ` ⚠️ seen_unrecordable=${summary.seen_unrecordable} (no job fingerprint; will be re-scored next run)` : ''}`);
 console.log(JSON.stringify(summary, null, 2));
