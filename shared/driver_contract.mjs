@@ -99,3 +99,46 @@ export function recordFill(answers, entry) {
   });
   return answers;
 }
+
+// 「点提交之前」出口表（restart-apply DESIGN §3 / ADR-S6 第 2 轮）。Each key is
+// "<outcome>:<reason>" at an exit read-verified to fire BEFORE the first click
+// on Submit — the company received nothing:
+//   crashed:ashby_form_not_loaded    ashby_apply_driver main(), before uploadResume
+//   crashed:resume_upload_failed     ashby + greenhouse main(), before any submitAndCheck
+//   not_submitted:job_unavailable    greenhouse (page says closed) / lever, before submit
+//   crashed:cdp_goto_failed … submit_button_not_found   lever main() (Lever paused)
+// Lever's pre-click needs_user / captcha_blocked exits are deliberately NOT
+// listed: the key has no ATS, and the same keys (e.g. needs_user:
+// cover_letter_required_not_generated) are emitted by greenhouse AFTER a click.
+// A driver adding a pre-click exit must add its row here plus a test; a
+// missing row costs one retry, never a re-application.
+export const PRE_SUBMIT_EXITS = new Set([
+  'crashed:ashby_form_not_loaded',
+  'crashed:resume_upload_failed',
+  'not_submitted:job_unavailable',
+  'crashed:cdp_goto_failed',
+  'crashed:helpers_inject_fail',
+  'crashed:resume_upload_fail',
+  'crashed:resume_storage_timeout',
+  'crashed:submit_button_not_found',
+]);
+
+// apply_batch's synthesized line for a row that failed pre-dispatch validation:
+// no driver ran at all.
+export const PRE_DISPATCH_STAGE = 'pre_dispatch';
+
+// The ONE place "may this attempt have reached the company?" is decided
+// (ledger field may_have_submitted = the single 投过 predicate). Order:
+//   1. pre-dispatch validation failure → false (no driver ran)
+//   2. a page verdict is present (the post-submit page was read) → true
+//   3. "<outcome>:<reason>" in PRE_SUBMIT_EXITS → false
+//   4. everything else → true — incl. driver_exception / died / recovered
+//      in-flight, and every needs_user / captcha_blocked / rate_limited exit
+//      (all GH/Ashby ones fire after submitAndCheck; 未明点 7 核对结论).
+export function deriveMayHaveSubmitted(o) {
+  const valid = validateOutcome(o);
+  if (valid.stage === PRE_DISPATCH_STAGE) return false;
+  if (valid.verdict != null) return true;
+  if (PRE_SUBMIT_EXITS.has(`${valid.outcome}:${valid.reason ?? ''}`)) return false;
+  return true;
+}
