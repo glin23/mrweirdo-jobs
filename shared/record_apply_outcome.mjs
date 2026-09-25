@@ -56,7 +56,7 @@ function compactDetail(value) {
   return text.length > 600 ? `${text.slice(0, 597)}...` : text;
 }
 
-function appendManualReviewRow(reason, detail = outcome) {
+function appendManualReviewRow(reason, detail) {
   if (!MANUAL_REVIEW_REASONS.has(reason)) return;
   try {
     mkdirSync(dirname(MANUAL_REVIEW_PATH), { recursive: true });
@@ -129,7 +129,12 @@ const ledgerEntry = ledgerAppend(atsHome(), {
   work_auth_provenance: workAuthSources(atsHome()),
 });
 
-function writeFeedback(reason, detail = outcome) {
+// Answers belong to the ledger ONLY (600 file, ADR-16). Everything written below
+// — feedback.detail in the 644 jobs.db, the manual-review file — gets this copy
+// without them (第 7 轮验收 P2: 表单答案含工作授权族，曾随 detail 整段入库).
+const { answers: _ledgerOnlyAnswers, ...auditOutcome } = outcome;
+
+function writeFeedback(reason, detail) {
   try {
     db.prepare('INSERT INTO feedback(job_id, outcome, reason, detail) VALUES (?, ?, ?, ?)').run(
       rowId,
@@ -142,7 +147,7 @@ function writeFeedback(reason, detail = outcome) {
   }
 }
 
-function markSkipped(reason, detail = outcome, action = 'skipped') {
+function markSkipped(reason, detail = auditOutcome, action = 'skipped') {
   if (SUBMITTED_STATUSES.has(row.status)) {
     writeFeedback('not_downgrading_submitted_row', { reason, detail, current_status: row.status });
     console.log(JSON.stringify({ ok: true, action: 'unchanged', row_id: rowId, status: row.status }));
@@ -166,7 +171,7 @@ if (outcome.outcome !== 'submitted') {
   // essay_pending is a reason inside the needs_user family now (契约词汇表里
   // 没有它单独的席位), but its manual-review semantics are unchanged.
   if (outcome.outcome === 'needs_user' && outcome.reason === 'essay_pending') {
-    markSkipped('essay_pending_main_agent_required', outcome, 'essay_pending');
+    markSkipped('essay_pending_main_agent_required', auditOutcome, 'essay_pending');
     process.exit(0);
   }
   markSkipped(outcome.reason || outcome.outcome);
@@ -187,13 +192,13 @@ if (submittedDuplicate) {
   markSkipped('duplicate_same_company_title_already_submitted', {
     submitted_row_id: submittedDuplicate.id,
     submitted_status: submittedDuplicate.status,
-    driver_outcome: outcome,
+    driver_outcome: auditOutcome,
   });
   process.exit(0);
 }
 
 if (row.status !== '🤖 AI sourced' && !SUBMITTED_STATUSES.has(row.status)) {
-  markSkipped('row_status_changed_before_recording', { current_status: row.status, driver_outcome: outcome });
+  markSkipped('row_status_changed_before_recording', { current_status: row.status, driver_outcome: auditOutcome });
   process.exit(0);
 }
 
@@ -211,7 +216,7 @@ db.prepare(`
          updated_at = datetime('now')
    WHERE id = ?
 `).run(sqliteTs(ledgerEntry.ts), sqliteTs(ledgerEntry.ts), outcome.post_url || outcome.url || null, rowId);
-writeFeedback('submitted_verified', outcome);
+writeFeedback('submitted_verified', auditOutcome);
 console.log(JSON.stringify({
   ok: true,
   action: 'submitted',

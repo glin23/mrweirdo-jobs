@@ -157,7 +157,49 @@ test('验收 V8：answers 只进账本，不进 jobs 表任何列', () => {
   db.close();
   assert.ok(!JSON.stringify(row).includes(marker), 'answers must not land in the jobs table');
   assert.ok(readAll(home)[0].work_auth_provenance !== undefined, 'work-auth provenance snapshot attached');
-  void feedback; // feedback detail carries the driver outcome (audit trail), by design
+  // 第 7 轮验收 P2：feedback 表在 644 的 jobs.db 里，答案只属 600 的账本。
+  assert.ok(feedback.length > 0, 'the audit trail row is still written');
+  assert.ok(!JSON.stringify(feedback).includes(marker), 'answers must not land in the feedback table');
+});
+
+test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库路径都不带 answers', () => {
+  const marker = 'P2_MARKER_answers_belong_to_the_ledger_only';
+  const answers = [{ label: 'Are you authorized to work?', value: marker, source: 'profile', widget: 'combobox' }];
+
+  // ① 没投成（markSkipped 默认 detail）+ 进人工清单的 reason。
+  const a = makeFunnelHome('mrw-ledger-p2-skip-');
+  const ra = record(a.env, a.rowId, a.home, { outcome: 'needs_user', reason: 'cover_letter_file_required', answers });
+  assert.equal(ra.status, 0, ra.stderr);
+  const manual = readFileSync(join(a.home, 'run-tmp', 'manual_or_unsupported.json'), 'utf8');
+  assert.ok(!manual.includes(marker), 'answers must not land in the manual-review file');
+
+  // ② 已有同公司同岗位的已投行 → duplicate 路径把 driver_outcome 包进 detail。
+  const b = makeFunnelHome('mrw-ledger-p2-dup-');
+  let db = new DatabaseSync(b.dbPath);
+  db.prepare(`INSERT INTO jobs(company, title, apply_url, status, ats_platform)
+    VALUES ('Acme', 'Ops Intern', 'https://jobs.ashbyhq.com/acme/2', '✅ 已投', 'ashby')`).run();
+  db.close();
+  const rb = record(b.env, b.rowId, b.home, { outcome: 'submitted', verdict: 'submitted', answers });
+  assert.equal(rb.status, 0, rb.stderr);
+
+  // ③ 行状态在投递期间被改 → row_status_changed 路径同样包 driver_outcome。
+  const c = makeFunnelHome('mrw-ledger-p2-changed-');
+  db = new DatabaseSync(c.dbPath);
+  db.prepare("UPDATE jobs SET status = '⚠️ 跳过未投' WHERE id = ?").run(c.rowId);
+  db.close();
+  const rc = record(c.env, c.rowId, c.home, { outcome: 'submitted', verdict: 'submitted', answers });
+  assert.equal(rc.status, 0, rc.stderr);
+
+  for (const h of [a, b, c]) {
+    assert.equal(readAll(h.home)[0].answers[0].value, marker, 'the ledger still holds the full answers');
+    db = new DatabaseSync(h.dbPath);
+    const dump = JSON.stringify([
+      db.prepare('SELECT * FROM feedback').all(),
+      db.prepare('SELECT * FROM jobs').all(),
+    ]);
+    db.close();
+    assert.ok(!dump.includes(marker), `answers leaked into jobs.db (${h.home})`);
+  }
 });
 
 test('验收 V6：rebuild——正常态零差异；绕过漏斗改库被抓；--apply 修复且幂等；不碰账本没见过的行', () => {
