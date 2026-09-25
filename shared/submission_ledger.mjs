@@ -118,21 +118,24 @@ export function readAll(home) {
   return entries;
 }
 
-// Per job_id: the LAST non-correction line in file order, with corrections
-// applied (a correction overrides the entry it references; later corrections
-// to the same entry win). §14.3 rebuild 派生规则的实现。
-export function effectiveByJob(entries) {
+// Every attempt line (non-correction) with its corrections applied, in file
+// order (a correction overrides the entry it references; later corrections to
+// the same entry win). One line = one attempt — the dispatch guard counts these.
+export function effectiveEntries(entries) {
   const corrections = new Map(); // corrected entry id -> latest correction line
   for (const e of entries) {
     if (e.correction_of) corrections.set(e.correction_of, e);
   }
-  const byJob = new Map();
-  for (const e of entries) {
-    if (e.correction_of) continue;
+  return entries.filter((e) => !e.correction_of).map((e) => {
     const c = corrections.get(e.id);
-    const effective = c ? { ...e, ...c, id: e.id, ts: e.ts, corrected_by: c.id } : e;
-    byJob.set(e.job_id, effective);
-  }
+    return c ? { ...e, ...c, id: e.id, ts: e.ts, corrected_by: c.id } : e;
+  });
+}
+
+// Per job_id: the LAST effective line in file order. §14.3 rebuild 派生规则的实现。
+export function effectiveByJob(entries) {
+  const byJob = new Map();
+  for (const e of effectiveEntries(entries)) byJob.set(e.job_id, e);
   return byJob;
 }
 
