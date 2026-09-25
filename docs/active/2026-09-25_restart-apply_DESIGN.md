@@ -2,10 +2,10 @@
 Status: draft
 Owner: arnold-architect
 Type: design
-Reads: docs/active/2026-09-25_restart-apply_TASK.md（含关卡 1 决策）；docs/active/2026-09-25_restart-apply_PRODUCT_SPEC.md（第 1 轮 + 第 2 轮「即找即投模式」全文）；docs/active/2026-09-25_restart-apply_ARCH_AUDIT.md；docs/active/2026-09-25_restart-apply_BUG_REPORT.md；docs/active/2026-07-23_product-blueprint_DESIGN.md 第14节；docs/specs/master-plan.md；.claude/arnold/roles/（只有 builder.md / lead.md，没有 architect.md）；PROJECT_CONTEXT.yaml；.claude/file_size_limits.json；代码本体（discover_candidates / dispatcher / store_scored_jobs / local_db / auto_apply_queue / dedupe_jobs / recompute_auto_apply_eligibility / liveness_gate / apply_batch / apply_supervisor / batch_limit / record_apply_outcome / submission_ledger / driver_contract / job_identity / eligibility / prune_job_pool / greenhouse_apply_driver 片段 / onboard SKILL 第 4-7 步）；真实 jobs.db 只读查询
+Reads: docs/active/2026-09-25_restart-apply_TASK.md（含关卡 1 决策）；docs/active/2026-09-25_restart-apply_PRODUCT_SPEC.md（第 1 轮 + 第 2 轮「即找即投模式」全文）；docs/active/2026-09-25_restart-apply_ARCH_AUDIT.md；docs/active/2026-09-25_restart-apply_BUG_REPORT.md；docs/active/2026-07-23_product-blueprint_DESIGN.md 第14节；docs/specs/master-plan.md；.claude/arnold/roles/（只有 builder.md / lead.md，没有 architect.md）；PROJECT_CONTEXT.yaml；.claude/file_size_limits.json；代码本体（discover_candidates / dispatcher / store_scored_jobs / local_db / auto_apply_queue / dedupe_jobs / recompute_auto_apply_eligibility / liveness_gate / apply_batch / apply_supervisor / batch_limit / record_apply_outcome / submission_ledger / driver_contract / job_identity / eligibility / prune_job_pool / greenhouse_apply_driver 片段 / onboard SKILL 第 4-7 步）；真实 jobs.db 只读查询；第 2 轮追加：docs/active/2026-09-25_restart-apply_VERIFY_REPORT.md（小修包验收全文）、docs/specs/restart-apply.md（定稿）、driver_contract / 两驱动 crashed 与 essay_pending 出口 / sourcing/ashby_board_api / liveness_gate / state_file_lock 读码
 Blocks: restart-apply 施工包 S1-S5（builder）；PM 第 2 轮 V1-V13 验收（verify）
 Updated: 2026-09-25
-Iterations: 1
+Iterations: 2
 ---
 
 # 即找即投：架构设计（岗位库退役、跨运行去重、预算分层）
@@ -13,6 +13,10 @@ Iterations: 1
 > **边界自证**：本轮只写设计。没改代码，没 commit，没真投，没写 `~/.mrweirdo-jobs/`。对真实 `jobs.db` 只做了只读查询（`DatabaseSync(..., {readOnly:true})`），跑前跑后 `mtime=1782006129 size=1728512` 一致【实测】。
 > **证据标签**：【实测】是本轮亲手跑出来的；【读码】是读代码得出的；【沿用】是上游文档的实测，本轮没重跑；【推断】是有依据的推理；【猜】是没有证据的猜测。
 > **对齐说明**：写到一半时 lead 放开了 PM 第 2 轮规格，我已通读，本设计按它的 R1-R7、N 的含义、N×10 看的上限、「本地只留账本 + 看过记录 + 扫描游标」和 D8-D12 的推荐默认值来设计。技术上和 PM 有分歧的地方单独列出（第 5 节第 1-3 条）。
+> **第 2 轮修订（2026-09-25，按小修包 VERIFY_REPORT §5 / §10 必做项）**：
+> 1. ADR-S6 细化：「点提交之前」的失败（页面根本没判）推导为 `may_have_submitted=false`，不算投过、不占 60 天名额和日额度；同一岗位 60 天内最多失败 2 次，之后两道闸都拦（§3、§4.7、ADR-S6）。
+> 2. verify 的两个真 bug（essay_pending.jsonl 收全部问答；Ashby 接口 200 但回包形状不对被判下架）和 P3「Ashby 接口无超时」并入 **S1**，首批试投前必修（§2、§10）。
+> 3. 与定稿 `docs/specs/restart-apply.md` 有一处字面冲突，见未明点 12，**未改定稿**。
 
 ---
 
@@ -101,8 +105,9 @@ flowchart LR
 | 队列 | `auto_apply_queue.mjs` | **留，逻辑零改动** | 读的是工作库，天然只含本次运行的行。「队列从全库取」这个病因为换了库而消失，不用改代码 |
 | 存活 | `liveness_gate.mjs` | **留**（builder 小修包正在改它的 Ashby 判法） | 本设计不改它；「下架写看过记录」由 `apply_batch` 读它的 JSON 结果来做，和它的文件不重叠 |
 | 投递 | `apply_batch.mjs` | **改** | 真跑路径去掉 dedupe/recompute 两步；每行派单前过投前权威闸；在途标记；停写 `daily_count.jsonl` |
-| 投递 | 三个驱动 | **不动**；只有 greenhouse 驱动两处写死 `jobs.db` 的地方**必须改**（净减行） | 见 1.4 第 3 条，这是换草稿纸之后会出错的暗雷 |
-| 记账 | `record_apply_outcome.mjs` | **改**（排在 builder 小修包 P2 之后） | 账本行多记 `apply_url` 和 `may_have_submitted`；「投后才查重」那段改成违反不变量就响亮报错 |
+| 投递 | 三个驱动 | **基本不动**；greenhouse 驱动两处写死 `jobs.db` 的地方**必须改**（净减行）；GH/Ashby 两驱动的 `logEssayPending` 各改 1 行剥掉问答（净增 0，第 2 轮） | 见 1.4 第 3 条，这是换草稿纸之后会出错的暗雷；essay 日志外泄见 VERIFY_REPORT §5 真 bug 1 |
+| 记账 | `record_apply_outcome.mjs` | **改**（小修包 P2 已落 `072f203`，可直接接着改） | 账本行多记 `apply_url` 和 `may_have_submitted`（按 `driver_contract` 的「点提交前出口表」推导）；「投后才查重」那段改成违反不变量就响亮报错 |
+| 找岗/存活 | `sourcing/ashby_board_api.mjs` | **改**（第 2 轮，S1） | `fetchRaw` 加 15 秒超时；「板 404」和「回包形状不对」分开，后者 throw → 存活检查判 uncertain，不再误判下架 |
 | 账本 | `submission_ledger.mjs` | **改** | 新增 `backfill-legacy`（历史迁入）和 `attemptIndex()`（去重索引）；`rebuild` 只对历史档有意义 |
 | 清理 | `prune_job_pool.mjs` / 第 7 步 prune | **从运行链路里摘掉** | 工作库跑完就删；看过记录自己按 60 天压缩 |
 | 报告 | `apply_report.mjs` / `job_report.mjs` | **留** | 本次报告读工作库即可；总数改读账本 |
@@ -148,6 +153,9 @@ flowchart LR
 | `test/ledger_backfill.test.mjs` | ~150 | 历史迁入：行数守恒、幂等、`--dry-run` 不写文件、指纹全部可推 | S1 |
 | `test/apply_guard.test.mjs` | ~200 | 投前闸每条规则至少各有一正一反两个用例；日档位；超过 30 档没有确认参数就响亮失败 | S2 |
 | `test/inflight_recovery.test.mjs` | ~100 | 崩溃在点击提交之后、写账之前：下次运行补记 `unknown`，且不再重投 | S2 |
+| `test/pre_submit_derivation.test.mjs` | ~120 | 第 2 轮。`deriveMayHaveSubmitted` 查表：出口表里每一对各 1 例判 false；`driver_exception` / `driver_died_without_outcome` / `recovered_inflight` / 带页面判定对象的判 true；出口表外的新 reason 判 true。再加 `checkDispatch` 规则 5：60 天内同指纹点提交前失败 1 次放行、2 次拦、第 61 天放行；这类行不进「今日已尝试」、不进同公司 60 天计数 | S1/S2 |
+| `test/essay_pending_privacy.test.mjs` | ~60 | 第 2 轮。两个驱动的 `logEssayPending` 写出的行**不含 `answers` 键**（反向断言，补 VERIFY_REPORT §5 那处突变没咬住的缺口）；`--list-pending-essays` 照常能列出待写问题 | S1 |
+| `test/ashby_board_api_shape.test.mjs` | ~70 | 第 2 轮。替身 fetch：404 → `[]`；`{}` / `{success:false}` / `jobs` 非数组 → throw；挂起 → 超时 throw；存活检查对后两类判 `uncertain` | S1 |
 | `test/stream_run_e2e.test.mjs` + `test/fixtures/stream/` | ~350 | PM 验收 V1-V12，用假招聘板、假驱动、计数的假打分器，全部在临时家目录里跑 | S3/S5 |
 
 ### 2.2 修改
@@ -156,14 +164,19 @@ flowchart LR
 |---|---|---|---|---|
 | `shared/job_identity.mjs` | 45 | 加 `jobFingerprint(url) → {ats, job_id, fp} \| null`（纯函数，正则规则就是本轮实测用的那 4 条） | S1 | 否 |
 | `shared/submission_ledger.mjs` | 210 → ~300 | `append` 对 v2 行要求 `apply_url` 能推出指纹，推不出就 throw；新增 CLI `backfill-legacy [--apply]`；导出 `maxJobId()`；`rebuild` 在文件头注明「只作用于历史档」 | S1 | 否 |
-| `shared/record_apply_outcome.mjs` | 220 → ~230 | 账本行加 `apply_url`、`may_have_submitted`；投后查重段改为不变量违反时响亮退出 | S1/S2 | **是**（builder P2 隐私修复在改 `:160/:214`）→ **排在 P2 之后** |
+| `shared/record_apply_outcome.mjs` | 225 → ~235 | 账本行加 `apply_url`、`may_have_submitted`（调用 `deriveMayHaveSubmitted(outcome)`，不在本文件自己写规则）；投后查重段改为不变量违反时响亮退出 | S1/S2 | 小修包 P2 已落 `072f203`，不再冲突 |
+| `shared/driver_contract.mjs` | 101 → ~130 | 第 2 轮。新增 `PRE_SUBMIT_EXITS`（「点提交之前」出口表，见 §3）和 `deriveMayHaveSubmitted(outcome)`；出口表是驱动和记账人之间的契约，放在契约模块里 | S1 | 否 |
+| `shared/sourcing/ashby_board_api.mjs` | 234 → ~245 | 第 2 轮。`fetchRaw` 的 `fetch` 加 `signal: AbortSignal.timeout(15000)`（超时走现有「重试 1 次再 throw」）；`fetchJobs` 里 `data === null`（板 404）才返回 `[]`，`data` 非空但 `jobs` 不是数组 → throw `ashby_unexpected_shape`。`fetchJobsForCompany` 已有 catch，行为不变 | S1 | 否（小修包 `d326b17` 只改了 liveness_gate 的调用方）|
+| `shared/liveness_gate.mjs` | 小 | 第 2 轮。只改 `:159` 那行注释（「[] = 板 404」），逻辑零改动：throw 已由 `:165` 的 catch 判 `uncertain` | S1 | 否 |
+| `shared/state_file_lock.mjs` | 147 → 148 | 第 2 轮。`PII_TARGETS` 加 `'essay_pending.jsonl'`（600）。剥掉问答后它仍记着「投过哪家公司、卡在哪几道题」，和账本同级 | S1 | 否 |
+| `shared/ashby_apply_driver.mjs` | 1149，**超档，净增 0** | 第 2 轮。`logEssayPending` 函数体那 1 行改成写 `JSON.stringify({ ...rec, answers: undefined })`（`--list-pending-essays` 不读 answers【读码 `:953-1010`】）；stdout 的 `emitOutcome(rec)` 照旧带问答，记账人要写进账本 | S1 | 否 |
 | `shared/apply_batch.mjs` | 478 → ~540 | 真跑去掉 dedupe/recompute；每行派单前调 `checkDispatch()`，而且每行都重新读账本；在途标记写/清/恢复；删掉 `:414-424` 的 `daily_count` 写入；读存活检查的 JSON 结果，把下架的写进看过记录；needs_user 写看过记录；接熔断器 | S2/S3 | 否（小修包没有列它）|
 | `shared/local_db.mjs` | 541 → ~560 | 加 `initRunDb({ seqFloor })`：新建库后把 `sqlite_sequence` 设成 `max(账本最大 job_id, 100000)`，保证工作库行号全局不重复 | S3 | 否 |
 | `shared/store_scored_jobs.mjs` | 222 → ~245 | 不合资格的行调 `recordSeen()`（`not_fit` / `visa_blocked`，带 `jd_hash`）；`--run-id` 已经支持 | S3 | 否 |
 | `shared/discover_candidates.mjs` | 542 → ~580 | 接受 `--sources watchlist`；新增 `--no-cursor-advance`（由 stream_run 自己管游标）；产出里保留 `description` 供算 `jd_hash` | S3/S4 | 否 |
 | `shared/sourcing/dispatcher.mjs` | 229 → ~245 | 注册 `watchlist` 适配器 | S4 | 否 |
 | `shared/intelligence/intent_schema.json` | 小 | 加可选字段 `target_companies[{ats,slug,label}]` | S4 | 否 |
-| `shared/greenhouse_apply_driver.mjs` | 1894，**超档，净增 0** | `:561` 的 `hasPriorApplicationToCompany` 函数体换成调用 `apply_guard.priorApplicationToCompany`（约 -18 行）；`:758` 改走 `dbPath()`（约 ±0）；加 1 行 import | S3 | 否（小修包只动 ashby 驱动）|
+| `shared/greenhouse_apply_driver.mjs` | 1894，**超档，净增 0** | `:561` 的 `hasPriorApplicationToCompany` 函数体换成调用 `apply_guard.priorApplicationToCompany`（约 -18 行）；`:758` 改走 `dbPath()`（约 ±0）；加 1 行 import（S3）。第 2 轮：`logEssayPending`（`:1745`）同 ashby 驱动改 1 行剥掉问答（S1，净增 0） | S1/S3 | 否 |
 | `scripts/dashboard.mjs` | 小 | 「今日已尝试 / 档位」和「累计已投」改为从账本推导；删掉 `DAILY_CAP=50` | S5 | 否 |
 | `shared/supervisor_preflight.mjs` | 321 | 「账本↔库一致性检查」只核本次运行的工作库行 | S5 | **是**（小修包在修 Mac 管道截断）→ 排在其后 |
 | `.claude/skills/mrweirdo-onboard/SKILL.md` + `references/run-and-database.md` | 496 行文档 | 第 4-7 步重写成流式循环；去掉清单关卡（D8）和第 7 步 prune | S5 | 否 |
@@ -175,7 +188,7 @@ flowchart LR
 
 ### 2.4 文件膨胀分档
 
-新增和修改的文件全部在 800 行以下。唯一碰到的超档文件是 `greenhouse_apply_driver.mjs`，那里是**净减**。`ashby_apply_driver.mjs` 和 `ashby_helpers.js` 不碰。
+新增和修改的文件全部在 800 行以下。碰到的超档文件有两个：`greenhouse_apply_driver.mjs` 是**净减**；`ashby_apply_driver.mjs`（1149 行）第 2 轮只改 `logEssayPending` 里的 1 行，**净增 0**。`ashby_helpers.js` 不碰。VERIFY_REPORT 建议的「Ashby 表单没加载时先认 Job not found 页」会让超档的 ashby 驱动净增，本轮不采纳，见辩驳方向 7。
 
 ---
 
@@ -226,6 +239,18 @@ classDiagram
         +byCompanyTitle: Map~string,LedgerEntry[]~
         +byCompany: Map~string,string[]~  %% company_key -> ts[] (投过口径)
         +todayCount: number
+        +preSubmitFails: Map~string,string[]~  %% 第2轮 fp -> ts[] (may_have_submitted=false 且 outcome≠needs_user)
+    }
+    class DriverContract {
+        +OUTCOMES: string[]
+        +PRE_SUBMIT_EXITS: Set~string~  %% 第2轮 "outcome:reason" 点提交前出口表
+        +validateOutcome(o: object) DriverOutcome
+        +deriveMayHaveSubmitted(o: DriverOutcome) boolean  %% 第2轮 唯一推导处
+    }
+    class AshbyBoardApi {
+        +FETCH_TIMEOUT_MS: number  %% 第2轮 15000
+        +fetchJobs(slug: string, opts: object) Job[]  %% 404→[] 形状不对/超时→throw
+        +fetchJobsForCompany(name: string, slugs: string[], opts: object) Job[]
     }
     class ApplyGuard {
         +TIERS: number[]  %% [10,25,50]
@@ -234,6 +259,7 @@ classDiagram
         +dailyTier(env: object, confirmOver30: boolean) number
         +budgetLine(idx: AttemptIndex, target: number, tier: number) Budget
         +checkDispatch(job: JobRef, idx: AttemptIndex, budget: Budget, now: Date) GuardVerdict
+        +preSubmitFailCount(idx: AttemptIndex, fp: string, now: Date) number  %% 第2轮 60天窗口
         +priorApplicationToCompany(home: string, company: string) boolean
         +breaker(recent: string[]) BreakerState
     }
@@ -289,6 +315,7 @@ classDiagram
         +budget: Budget
         +attempted_this_run: number
         +scored_this_run: number
+        +pre_submit_fails_this_run: number  %% 第2轮 上限 max(3, max_attempts)
         +pool_fps: Set~string~
         +watchlist_done: boolean
         +windows_scanned: number
@@ -300,7 +327,7 @@ classDiagram
         +action: "score"|"done"
         +batch: number|null
         +batch_file: string|null
-        +reason: "target_reached"|"score_budget_reached"|"supply_exhausted"|"breaker_open"|null
+        +reason: "target_reached"|"score_budget_reached"|"supply_exhausted"|"breaker_open"|"pre_submit_fail_cap"|null
     }
     class RunReport {
         +submitted: string[]  %% "公司·岗位"
@@ -330,6 +357,8 @@ classDiagram
     StreamRun --> NextAction
     StreamRun --> RunReport
     StreamRun ..> InflightMarker : 恢复
+    SubmissionLedger ..> DriverContract : 记账人调 deriveMayHaveSubmitted
+    StreamRun ..> AshbyBoardApi : 名单/轮转找岗
 ```
 
 **签名约束（写死，不留给 builder 猜）**：
@@ -342,18 +371,29 @@ classDiagram
 
   `fp` 取 `"<ats>:<job_id>"` 并转小写，**不含 board**。理由：实测没有同一编号跨板出现，而 `gh_jid` 形式的链接本来就拿不到 board。四条都不中就返回 `null`。**派单路径上拿到 `null` 等于 bug，要响亮报错**，因为投递平台只有这三个。
 - `isAttempted(e)` 等价于 `e.may_have_submitted === true`，历史行一律为 true。它是「投过」的**唯一口径**，重投拦截、60 天计数、日额度三处共用，不许写第二份。
-- `may_have_submitted` 由 `record_apply_outcome` 在记账时推导，不改驱动：
-  - `outcome ∈ {submitted, not_submitted, unknown, crashed}` → true；
-  - 或者驱动产出里带了页面判定对象 `verdict`（说明读过提交后的页面）→ true；
-  - 其余（`needs_user`、`captcha_blocked`、`rate_limited` 且没有页面判定）→ false。
+- `may_have_submitted` 由 `record_apply_outcome` 在记账时调用 `driver_contract.deriveMayHaveSubmitted(outcome)` 推导，不改驱动。按顺序判，第一条命中即返回（第 2 轮修订）：
+  1. 驱动产出里带了页面判定对象 `verdict`（说明读过提交后的页面）→ **true**；
+  2. `"<outcome>:<reason>"` 在 `PRE_SUBMIT_EXITS` 出口表里 → **false**；
+  3. `outcome ∈ {submitted, not_submitted, unknown, crashed}` → **true**（含 `driver_exception`、`driver_died_without_outcome`、`recovered_inflight`：崩在哪一步说不清）；
+  4. 其余（`needs_user`、`captcha_blocked`、`rate_limited`）→ false（点击后出口的核对见未明点 7）。
 
-  **拿不准一律算 true**。宁可少重试一次，也不许重投一次。
+  `PRE_SUBMIT_EXITS` 首版（每条都已读码确认出口位于第一次点提交之前）：
+
+  | 出口 | 位置【读码】 | 页面上发生了什么 |
+  |---|---|---|
+  | `crashed:ashby_form_not_loaded` | `ashby_apply_driver.mjs:1048` | 投递表单没渲染出来 |
+  | `crashed:resume_upload_failed` | `ashby_apply_driver.mjs:1055`、`greenhouse_apply_driver.mjs:1793` | 简历没传上，还没点提交 |
+  | `not_submitted:job_unavailable` | `greenhouse_apply_driver.mjs:1781,1790` | 页面说岗位已关，没点提交；`apply_batch` 另写一条看过记录 `expired` |
+  | `crashed:cdp_goto_failed` / `helpers_inject_fail` / `resume_upload_fail` / `resume_storage_timeout` / `submit_button_not_found` | `lever_apply_driver.mjs:367-461` | Lever 暂停中，先登记，恢复 Lever 时直接可用 |
+
+  **出口表外的一律算 true**。驱动新增一个「点提交前」的出口，必须同时往表里加一行并补 1 条测试；漏加的后果是「少重试一次」，不会重投。**拿不准一律算 true**，宁可少重试一次，也不许重投一次。
+- **账本里怎么区分这两种 crashed**（不新增字段）：`outcome` 都是 `crashed`，`verdict` 都是 `unknown`（页面没给判定，这个词不撒谎），靠 `may_have_submitted` 区分——`false` = 页面没判、失败在点提交之前；`true` = 可能已提交。`reason` 说明是哪个出口。看板和报告只看 `may_have_submitted`，**不许**拿 `reason` 自己再推一遍。
 - `checkDispatch` 的判定顺序（全部都查，第一条命中的原因写进返回值）：
   1. 本次运行已到目标数，或今日额度已用完；
   2. 指纹命中「投过」；
   3. 公司+标题命中「投过」；
   4. 同公司 60 天内「投过」已经 ≥2 次；
-  5. 同一指纹 `may_have_submitted=false` 的行已有 ≥2 条（PM R2：最多重试 1 次）；
+  5. 同一指纹 60 天内「点提交前失败」已有 ≥2 次（`preSubmitFailCount`：`may_have_submitted=false` 且 `outcome≠needs_user` 的行；PM R2：最多重试 1 次）→ `pre_submit_retry_exhausted`。去重闸（打分前）调同一个函数，第 2 次失败之后的运行连打分都不打；满 60 天自动放开，再给 2 次；
   6. 同一指纹上次是 `needs_user`，并且 `fillBasisVersion` 没变过（PM R5）。
 - `dailyTier()`：读 `MRWEIRDO_DAILY_TIER`，缺省为 10。值 >30 且没有 `--confirm-tier-over-30` 时**响亮失败**（master-plan 规矩 1）。**「今日」按本机时区（现在是 EDT）的自然日算**，不按 UTC。见未明点 6。
 - `initRunDb({seqFloor})`：`seqFloor = max(maxJobId(账本), 100000)`。历史库最大行号约 3800，所以 v2 行号从 100000 起，和历史行号永不相交。**`append` 时要检查不变量：账本里如果已有同一 `job_id` 但 `apply_url` 不同的 v2 行，就 throw**。并发运行导致的撞号会在这里被抓住，不会静默串号。
@@ -480,7 +520,35 @@ N 超过档位但还有余额时（比如 N=50、档位 10、已用 3），第�
 
 ### 4.6 失败路 5：目标公司接口挂了
 
-单家公司失败只记进 `errors[{source:'watchlist', slug, error}]`，其余照常。结束报告里列出失败的公司名（PM 次指标：名单 100% 扫到，挂掉的列名）。
+单家公司失败只记进 `errors[{source:'watchlist', slug, error}]`，其余照常。结束报告里列出失败的公司名（PM 次指标：名单 100% 扫到，挂掉的列名）。第 2 轮起，Ashby 接口超时（15 秒 ×2 次）或回包形状不对都算「这家挂了」，进 `errors`，不会被当成「这家没有岗位」。
+
+### 4.7 失败路 6：点提交之前就失败（第 2 轮新增，ADR-S6）
+
+```mermaid
+sequenceDiagram
+    participant AB as apply_batch
+    participant G as apply_guard
+    participant D as Ashby 驱动
+    participant RO as record_apply_outcome
+    participant C as driver_contract
+    participant L as 账本
+    participant SR as stream_run(下一次运行)
+    Note over AB: 第 1 次运行
+    AB->>G: checkDispatch(岗位 X) — 60 天内点提交前失败 0 次
+    G-->>AB: ok
+    AB->>D: spawn
+    D-->>AB: {outcome:crashed, reason:ashby_form_not_loaded} exit 1
+    AB->>RO: --result-file
+    RO->>C: deriveMayHaveSubmitted → 出口表命中 → false
+    RO->>L: append(outcome=crashed, verdict=unknown, may_have_submitted=false)
+    Note over L: 不进「今日已尝试」, 不进同公司 60 天计数, 本次运行目标数不减
+    AB->>AB: pre_submit_fails_this_run += 1，熔断计数(连续 3 个 crashed 仍会熔断)
+    Note over SR: 第 2 次运行: 去重闸 preSubmitFailCount(X)=1 小于 2, 放行打分，派单又失败 → 计数 2
+    Note over SR: 第 3 次运行起: 去重闸计数=2, 丢弃不打分，就算漏过, checkDispatch 返回 pre_submit_retry_exhausted
+    Note over SR: 满 60 天最早那次滑出窗口, 自动放开再试
+```
+
+**同一次运行内的上限**：`pre_submit_fails_this_run ≥ max(3, max_attempts)` 时 `next` 返回 `done(reason=pre_submit_fail_cap)`，报告第一行写「连续有 K 家表单都没打开，已停，像是机器问题，请看截图」。这一条防的是「点提交前失败不减目标数，所以会一直换下一家接着崩」。
 
 ---
 
@@ -497,10 +565,17 @@ N 超过档位但还有余额时（比如 N=50、档位 10、已用 3），第�
 4. **历史 61 条「跳过未投」要不要迁进账本**：其中有驱动真跑过的（`stuck_on_same_missing` 13、`essay_pending` 4 等），也有纯去重跳过的（`duplicate_same_company_title_*` 约 19）【实测】。我的推荐：只迁**驱动真跑过的那些**，记成 `verdict:'unknown'`、`outcome:'legacy_attempt'`、`may_have_submitted=true`。这样它们永不自动重投，而且不计入「已投」。判断依据是 `feedback` 表里该行有没有驱动产出的结局。清单由 builder 在 `backfill-legacy --dry-run` 里列出来，给 lead 过目。
 5. **打分依据版本具体包含什么**：`score_prompt.md` 读不读 `profile.json`，我没核实【未验证】。builder 在 S3 里核对后定下来。如果包含了 `profile.json`，那么每回答一道身份问题，所有「不合适」都会作废重看，费钱。
 6. **D10（名单公司投前过目）的实现形态**：PM 说「答案已写好，回 1 投」，这需要一个「填好不提交、挂起等人」的驱动模式，现在三个驱动**都没有**【读码】。我建议第一版简化为：名单公司合格时**不自动投**，记一条看过记录 `held_for_review`，报告里给一行「Runway 有新岗 <链接>，回 1 我就投」；你回 1 以后，照常走驱动。「预先写好答案给你看」留到以后。这需要 PM 确认。
-7. **`may_have_submitted` 的推导需要逐个核对**：Ashby 的 `stuck_on_same_missing`（`ashby_apply_driver.mjs:1098`）是**点过提交**以后被页面校验拦下的。按我的规则它会被判成 false，允许重试。「前端校验拦下 = 服务器没收到」这一点【推断】没有验证过。builder 在 S1 要把三个驱动里每个 `needs_user` / `captcha_blocked` 出口逐个标出是在点击前还是点击后，点击后的出口一律改判 true。
+7. **`may_have_submitted` 的推导需要逐个核对**：Ashby 的 `stuck_on_same_missing`（`ashby_apply_driver.mjs:1098`）是**点过提交**以后被页面校验拦下的。按我的规则它会被判成 false，允许重试。「前端校验拦下 = 服务器没收到」这一点【推断】没有验证过。builder 在 S1 要把三个驱动里每个 `needs_user` / `captcha_blocked` / `rate_limited` 出口逐个标出是在点击前还是点击后，点击后的出口一律改判 true（第 2 轮补：`rate_limited:max_attempts_exceeded`（ashby `:1143`、GH `:1888`）是多轮点提交之后才出的，和 `stuck_on_same_missing` 同一类）。
 8. **一次运行看的上限 N×10**：这是 PM 定的默认值，没有数据支撑。我这边的约束是打分由主 agent 按每批 50 条做，N=10 时就是 2 批。**我没有打分花费的实测数字**，建议试投时顺便记录每批的 token 花费再校准。
 9. **总数口径会变**：`jobs.db` 冻结后，看板和报告的「累计已投」改为数账本里 `verdict ∈ {submitted, legacy_unverified}` 的有效行。迁入 182 条后应当是 182。Directive 7 条的更正（阶段一设计 §14.11）仍然等拍板，更正后会变成 175。
 10. **跟进/确认类功能会暂时失去数据源**：`mrweirdo-tracker` / `mrweirdo-confirm` / `v_followup_due` 都读 `jobs.db` 的 `outcome_status` 等列。冻结以后它们只能看到历史行。这些功能「从没跑起来过」（ARCH_AUDIT 差距 #12，`confirmed_at` 为 0 行），所以本设计不接它们，阶段 3 要基于账本重新设计。这一点**我在这里明说，不算静默降级**。
+
+**第 2 轮新增**：
+
+12. **与定稿字面冲突（未改定稿，请 lead 找拍板人确认措辞）**：定稿 `docs/specs/restart-apply.md`「去重」段写「投过（含 unknown）永不再投」。第 2 轮后，「点提交前就失败」的行在账本里 `verdict` 也是 `unknown`，但**允许 60 天内重试 1 次**。我的理解是定稿里的 unknown 指「点了提交、判不出」，也就是「可能已提交」，本设计与这个意思一致，只是字面对不上。建议定稿改成「投过（含可能已提交）永不再投」。拍板人如果认为「页面没判的失败也不许再试」，改法是把 `PRE_SUBMIT_EXITS` 清空，其余不动。
+13. **`driver_exception` 仍保守算 true**：GH/Ashby 驱动里打不开页面、注入脚本失败这类问题目前都走统一的 `driver_exception` 出口【读码 GH `:1893`、ashby `:1148`】，记账人分不出崩在点提交前还是后，所以算「可能已提交」、永不再投。代价：一次 Chrome 抖动就可能永久丢一个岗。要分开，得让驱动在点提交前后各带一个标记，两个驱动都是超档文件，只能等驱动拆分时做。**建议首批试投时统计 `driver_exception` 出现几次**，频繁再提前做。
+14. **`not_submitted:job_unavailable` 改判 false 是否越界**：verify 只点名了 crashed，这一条是我顺着同一规则补的：页面明说岗位已关、还没点提交，算投过会白占同公司 60 天名额。它同时写看过记录 `expired`，所以不会被反复打分。
+15. **上限数字没有数据**：「60 天内点提交前失败 2 次」沿用 PM R2「最多重试 1 次」；「单次运行上限 max(3, 可投数)」是我定的，试投后按实际失败率再校准。
 11. **我没验证的**：所有设计都没有真跑过。`initRunDb` 的 `sqlite_sequence` 预置在 `node:sqlite` 下是否生效，要 builder 在 S3 第一个测试里证明。账本读性能是【推断】：现在 182 行，每天增加 ≤10 行，一年约 4000 行，每行派单前读一次也在 10ms 量级。
 
 ---
@@ -509,10 +584,10 @@ N 超过档位但还有余额时（比如 N=50、档位 10、已用 3），第�
 
 | 属性 | 目标（量化） | 牺牲了什么 |
 |---|---|---|
-| Reliability 可靠性 | 重复投递 0（投前闸 + 崩溃恢复 + 行号不变量）；「投过」口径全仓只有 1 份（`isAttempted`）；PM V1：连跑两次第二次打分调用 0、驱动调用 0 | 拿不准就算「可能已提交」，这类岗位永不自动重试。**宁可漏投，不可重投** |
-| Performance 性能 | 每行派单前现读账本 <10ms（一年 4000 行内）【推断】；去重闸对 1000 条候选 <100ms【推断】；单家投递 1-3 分钟 + 防风控间隔 30-90 秒（现有）【读码】 | 每行都现读账本，不做缓存，多几毫秒 IO，换来并发正确 |
+| Reliability 可靠性 | 重复投递 0（投前闸 + 崩溃恢复 + 行号不变量）；「投过」口径全仓只有 1 份（`isAttempted`）；PM V1：连跑两次第二次打分调用 0、驱动调用 0 | 拿不准就算「可能已提交」，这类岗位永不自动重试。**宁可漏投，不可重投**。第 2 轮：只有出口表里读码确认过的「点提交前」失败才放开重试，60 天内最多 2 次；`driver_exception` 仍然一次就永久封（未明点 13） |
+| Performance 性能 | 每行派单前现读账本 <10ms（一年 4000 行内）【推断】；去重闸对 1000 条候选 <100ms【推断】；单家投递 1-3 分钟 + 防风控间隔 30-90 秒（现有）【读码】；第 2 轮：Ashby 单块板最坏 15 秒 ×2 + 退避，原先最坏约 10 分钟（undici 默认，VERIFY_REPORT §5）【沿用】 | 每行都现读账本，不做缓存，多几毫秒 IO，换来并发正确 |
 | Scalability 扩展性 | 日档位 10→25→50 只改环境变量；看过记录按 60 天压缩，日处理 100 家时上限约 6000 行（约 1.5MB） | 看过记录是 JSONL，不建索引；日处理上千时要换 SQLite（到阶段 4 再说） |
-| Security 安全 | 看过记录不存 JD 正文、不存答案；账本 600 权限（已有）；工作库跑完就删，打分明细不在本地过夜 | 事后查不到「某条不合适的岗当时分数多少」，只剩原因代码 |
+| Security 安全 | 看过记录不存 JD 正文、不存答案；账本 600 权限（已有）；工作库跑完就删，打分明细不在本地过夜；第 2 轮：问答只出现在账本一处，`essay_pending.jsonl` 剥掉问答并锁 600 | 事后查不到「某条不合适的岗当时分数多少」，只剩原因代码 |
 | Maintainability 可维护性 | 运行链路少 4 步（dedupe / recompute / 全库存活 / prune）；「队列从全库取」这类病因换库而消失，不靠改代码 | 多出 3 个新模块（guard / seen / stream_run）和 1 份历史档 |
 | Interoperability 互操作 | 驱动契约、账本契约、打分提示词零改动；名单来源复用现成的两个招聘板接口模块 | greenhouse 驱动必须改两处写死路径（净减） |
 | Compliance 合规 | 「超 30 档须亲自点头」落成代码拦截；「每批真跑须点头」改为「你说跑 N 就是点头」（D8，待拍板）；同公司 60 天最多 2 次落成代码 | 你失去「开跑前看清单再删几行」的能力（这是你自己要求去掉的） |
@@ -604,16 +679,29 @@ N 超过档位但还有余额时（比如 N=50、档位 10、已用 3），第�
   - 用 SQLite：当前量级用不上，JSONL 和账本同一套工具。否决。
 
 ### ADR-S6：「投过」唯一口径 = `may_have_submitted === true`；由它统一重投、60 天、日额度三处
-- **Status**：proposed（`not_submitted` 的归属待与 PM 对齐，见未明点 2）　**Date**：2026-09-25
-- **Context**：ARCH_AUDIT ADR-R2 用的口径是 `submitted ∪ unknown`；PM R1、R6 同口径。但「点提交前失败」和「点提交后看不懂」都是 `verdict=unknown`，现有字段分不开这两种【读码】。
+- **Status**：proposed（`not_submitted` 的归属待与 PM 对齐，见未明点 2；第 2 轮按 VERIFY_REPORT 修订推导规则，与定稿的字面冲突见未明点 12）　**Date**：2026-09-25（第 2 轮修订同日）
+- **Context**：
+  - ARCH_AUDIT ADR-R2 用的口径是 `submitted ∪ unknown`；PM R1、R6 同口径。但「点提交前失败」和「点提交后看不懂」都是 `verdict=unknown`，现有字段分不开这两种【读码】。
+  - 第 2 轮：小修包把 Ashby「表单没加载 / 简历传不上」两处改成 `crashed`（`7cd693c`）。verify 指出第 1 轮规则「`crashed` → 一律算投过」太粗：这两处失败都在点提交之前，公司那边什么都没收到，却会被永久封岗、占掉同公司 60 天 2 次名额、占掉当日额度。目标公司 22 家里 17 家用 Ashby，损失集中在最想投的那批【沿用 VERIFY_REPORT §5】。
 - **Decision**：
-  - 把判断从 `verdict` 挪到 `may_have_submitted` 上。
-  - 看板必须用两个不同的名字：「今日已尝试 N / 档位」和「已投 N」（ARCH_AUDIT 跨栈表沿用）。
+  - 把判断从 `verdict` 挪到 `may_have_submitted` 上。它是「投过」的唯一口径，重投拦截、60 天计数、日额度三处共用。
+  - **推导**：`driver_contract.deriveMayHaveSubmitted()` 是唯一推导处（§3）。出口在 `PRE_SUBMIT_EXITS` 表里（读码确认在第一次点提交之前）的判 false；「可能已提交」（点了提交后崩溃、崩在哪说不清、在途恢复）判 true，**仍永不再投**。
+  - **账本区分**：不新增字段。两种 crashed 的 `outcome`、`verdict` 相同，靠 `may_have_submitted` 和 `reason` 区分。
+  - **防烧预算的上限**：
+    - 跨运行：同一指纹 60 天内点提交前失败满 2 次，去重闸（打分前）和投前闸都拦（`pre_submit_retry_exhausted`）；满 60 天自动放开。次数从账本推导，不另存。
+    - 单次运行：点提交前失败累计达到 `max(3, 本次可投数)` 就停（`pre_submit_fail_cap`）；连续 3 个 crashed 的熔断照旧。
+  - 看板必须用两个不同的名字：「今日已尝试 N / 档位」和「已投 N」（ARCH_AUDIT 跨栈表沿用）。点提交前失败两个都不计，只进报告的「没投成」行。
 - **Consequences**：
-  - 好：一份口径管三处；点提交前失败能按 R2 重试 1 次。
-  - 坏：推导规则依赖驱动出口的位置，需要逐个核对（未明点 7）。
+  - 好：一份口径管三处；点提交前失败按 R2 重试 1 次；Ashby 表单偶发没加载不再永久丢岗；重试次数有硬上限，不会每次运行都在同一个岗上烧打分钱和驱动时间。
+  - 坏：
+    - 推导规则依赖驱动出口的位置，要逐个核对（未明点 7），并且出口表要跟着驱动改动维护；漏登记只会少重试，不会重投。
+    - `driver_exception` 分不出前后，仍然一次永久封（未明点 13）。
+    - 同一岗位最多被打分 2 次、派单 2 次才封住，比「第一次失败就封」多花一轮钱。
 - **Alternatives**：
   - 沿用 `verdict ∈ {submitted, unknown}`：会把 needs_user 也算进日额度，而且 R2 无法实现。否决。
+  - 第 1 轮规则「`crashed` 一律 true」：见上面 Context，封掉了明明没投出去的岗。否决。
+  - 点提交前失败满 2 次后写看过记录（`code: pre_submit_failed`）来拦：同一件事就有了账本和看过记录两个来源，看过记录还会被 60 天压缩改写，两边会对不上。账本里本来就有这些行，直接数就够了（字段克制）。否决，见辩驳方向 6。
+  - 给点提交前失败换一个 `verdict` 新值（如 `pre_submit_failed`）：`verdict` 是「页面说了什么」，页面什么也没说，写成别的值等于撒谎；而且账本格式是永久的，多一个枚举值就撤不掉。否决。
 
 ### ADR-S7：预算四层；投前权威闸放在「每行派单前」，每行现读账本
 - **Status**：proposed　**Date**：2026-09-25
@@ -674,6 +762,7 @@ N 超过档位但还有余额时（比如 N=50、档位 10、已用 3），第�
 | 公司键 | `company`（= 板 slug） | `company` | `company_key = normalizeCompany(company)` | `company_key` | `AttemptIndex.byCompany` | 跳过原因 `company_cooldown_60d` |
 | 标题键 | `title` | `title` | `title_key = normalizeTitle(title)` | `title_key` | `byCompanyTitle` | — |
 | 投过 | — | 不再承担 | `may_have_submitted === true` | — | `isAttempted()` | 「今日已尝试 N/档位」 |
+| 点提交前失败（第 2 轮） | — | — | `may_have_submitted === false` 且 `outcome ≠ needs_user`（含出口表里的 crashed / job_unavailable，也含 captcha_blocked、rate_limited） | — | `AttemptIndex.preSubmitFails` / `preSubmitFailCount()` | 报告「没投成：表单没打开」；两个计数都不含 |
 | 已投（计数） | — | 不再承担（历史档冻结） | 有效行 `verdict ∈ {submitted, legacy_unverified}` | — | — | 「已投 N」 |
 | JD 指纹 | `description` → `jd_hash` | 不存 | 不存 | `jd_hash` | `stillSeen()` | — |
 | 依据版本 | — | — | — | `basis_version` | `scoringBasisVersion` / `fillBasisVersion` | — |
@@ -706,13 +795,24 @@ N 超过档位但还有余额时（比如 N=50、档位 10、已用 3），第�
 
 **总改动量**：新模块 4 个（约 660 行）、修改 13 个文件（约 +250 行，greenhouse 驱动净减）、测试约 900 行、技能文档改写约 150 行。builder 工作量约 **4-5 天**【估算】。
 
-**前置**：builder 小修包 S0 已经在进行中，包括 P2 隐私、Ashby 存活检查改用公开接口、Ashby 旧词 `skip`、`demo:check` 在 Mac 上假报 0。验收并推送之后，下面的包才能开工。
+**前置**：builder 小修包 S0（P2 隐私、Ashby 存活检查改用公开接口、Ashby 旧词 `skip`、`demo:check` 在 Mac 上假报 0）已施工（`072f203` / `7cd693c` / `d326b17` / `29e6147`），verify 判 4/5 可推。推送之后，下面的包才能开工。
+
+**第 2 轮：S1 最终清单**（首批试投前必修，一次召唤做完）：
+1. `jobFingerprint`（`job_identity.mjs`）+ `test/job_fingerprint.test.mjs`。
+2. 账本两个新字段 + `backfill-legacy`（默认 dry-run）+ `test/ledger_backfill.test.mjs`。
+3. `record_apply_outcome` 写新字段；`driver_contract` 新增 `PRE_SUBMIT_EXITS` + `deriveMayHaveSubmitted`（ADR-S6 第 2 轮）+ `test/pre_submit_derivation.test.mjs` 的推导部分。
+4. 三个驱动的 `needs_user` / `captcha_blocked` / `rate_limited` 出口逐个标注点击前还是点击后（未明点 7）。
+5. **verify 真 bug 1（P2）**：GH/Ashby 驱动 `logEssayPending` 剥掉 `answers`（各 1 行，净增 0）；`PII_TARGETS` 加 `essay_pending.jsonl`；`test/essay_pending_privacy.test.mjs`。
+6. **verify 真 bug 2（P3）**：`ashby_board_api` 区分「板 404」和「回包形状不对」，后者 throw → 存活检查判 `uncertain`。
+7. **verify P3「Ashby 接口无超时」**：同文件同提交，`fetchRaw` 加 15 秒超时。5、6 两项共用 `test/ashby_board_api_shape.test.mjs`。
+
+第 5-7 项和 1-4 项没有文件重叠，也可以先单独提交；只要求在首批试投之前全部落地并验收。ADR-S6 的另外两块——投前闸规则 5（`preSubmitFailCount`，S2）和单次运行上限 `pre_submit_fail_cap`（`stream_run`，S3）——跟着所在模块走，和原计划一样排在试投之前。
 
 | 包 | 内容 | 工作量 | 风险 | 与 S0 重叠 | 单独可验收 |
 |---|---|:-:|:-:|---|---|
-| **S1 账本自足 + 历史迁入** | `jobFingerprint`；账本新增两个字段 + `backfill-legacy`（默认 dry-run）；`record_apply_outcome` 写新字段；三个驱动的出口逐个标注是在点击前还是点击后（未明点 7） | 中 | 中（账本格式是永久的） | **是**：`record_apply_outcome.mjs` → 排在 P2 之后 | 沙箱库跑 dry-run → apply → 核数 182；幂等；测试全绿 |
-| **S2 投前权威闸** | `apply_guard.mjs`；`apply_batch` 每行现读账本、在途标记、恢复、熔断、停写 `daily_count`；投后查重改成不变量 | 中 | 中 | 否（`record_apply_outcome` 的改动放在 S1 已经排好的位置之后） | `apply_guard.test` + `inflight_recovery.test`；替身驱动跑 V4、V5、V6、V9、V10 |
-| **S3 一次性工作库 + 看过记录 + 状态机** | `seen_log.mjs`、`stream_run.mjs`、`initRunDb`；`store_scored_jobs` 写看过；`discover_candidates` 接受窗口调用；**greenhouse 驱动两处写死路径（必须同包）** | 中-大 | 中高（动主链路） | 否（liveness 只读它的 JSON 结果，不改它的文件） | `stream_run_e2e`：V1、V2、V3、V7、V8、V11、V12、V13 |
+| **S1 账本自足 + 历史迁入 + 试投前必修** | 见上面「S1 最终清单」7 项 | 中（比第 1 轮多约半天） | 中（账本格式是永久的） | 否（P2 已落 `072f203`） | 沙箱库跑 dry-run → apply → 核数 182；幂等；推导表每条出口各 1 例；essay 日志无 `answers`；Ashby 替身 fetch 形状不对 / 挂起 → uncertain；测试全绿 |
+| **S2 投前权威闸** | `apply_guard.mjs`（含 `preSubmitFailCount` 和规则 5）；`apply_batch` 每行现读账本、在途标记、恢复、熔断、停写 `daily_count`；`not_submitted:job_unavailable` 写看过记录 `expired`；投后查重改成不变量 | 中 | 中 | 否（`record_apply_outcome` 的改动放在 S1 已经排好的位置之后） | `apply_guard.test` + `inflight_recovery.test` + `pre_submit_derivation.test` 的闸部分；替身驱动跑 V4、V5、V6、V9、V10 |
+| **S3 一次性工作库 + 看过记录 + 状态机** | `seen_log.mjs`、`stream_run.mjs`（含第 2 轮 `pre_submit_fail_cap`）、`initRunDb`；`store_scored_jobs` 写看过；`discover_candidates` 接受窗口调用；**greenhouse 驱动两处写死路径（必须同包）** | 中-大 | 中高（动主链路） | 否（liveness 只读它的 JSON 结果，不改它的文件） | `stream_run_e2e`：V1、V2、V3、V7、V8、V11、V12、V13 |
 | **S4 名单优先** | `watchlist_source` + dispatcher 注册 + intent schema；公司名用 slug | 小 | 低 | 否 | 替身板：名单 100% 扫到；单家挂掉只记 errors |
 | **S5 编排改写 + 退役** | onboard 第 4-7 步重写；看板改数账本；preflight 一致性检查只核本次运行；两份 -auto 说明书；D10 `held_for_review` | 中 | 中 | **是**：`supervisor_preflight.mjs` → 排在 S0 之后 | 真实档案只读物化进隔离家目录，按新第 4-7 步走一遍 `--no-submit` 全程 |
 
@@ -762,3 +862,18 @@ S0 → S1 → (S2 ‖ S4) → S3 → 试投 → S5
 **方向 5：`may_have_submitted` 让驱动自己上报**
 - 为什么诱人：信息最准，驱动最清楚自己点没点。
 - 否决理由：两个超档驱动只准净减，每个出口都要加字段，改动面落在最危险的文件上。改为在记账人处按「结局 + 有没有页面判定」保守推导，再由 builder 逐个核对出口位置来兜底（未明点 7）。以后驱动拆分时，可以再把这件事收归驱动上报。
+
+**方向 6（第 2 轮）：点提交前失败满 N 次后写一条看过记录来封岗**（派单里给的例子）
+- 为什么诱人：看过记录本来就是「打分前丢掉」的地方，自带 60 天过期和「JD 变了就重看」。
+- 否决理由：
+  - 失败次数已经一行一行躺在账本里，再写一份看过记录就有两个来源；看过记录每次 `start` 会被压缩改写，丢了或被压掉时，两边会说不一样的话。
+  - 投前闸本来就读账本，去重闸也已经调 `attemptIndex`，在索引里多数一个 `preSubmitFails` 就够了，零新字段、零新写入方。
+  - 效果一样：第 2 次失败之后连打分都不打，60 天后自动放开。
+
+**方向 7（第 2 轮）：Ashby 表单没加载时，驱动先认「Job not found」页，归 `not_submitted:job_unavailable`**（VERIFY_REPORT 建议）
+- 为什么诱人：和 GH 驱动对齐，岗位真没了就直接进看过记录 `expired`，不必白试第 2 次。
+- 否决理由（本轮不做，不是永不做）：
+  - `ashby_apply_driver.mjs` 1149 行，超档，只准净增 0；加一段页面识别必然净增。
+  - 派单前的存活检查已经走 Ashby 公开接口（`d326b17`），岗位真没了绝大多数在派单前就被拦下；剩下的只是「检查完到打开表单之间刚好下架」这种窄窗口。
+  - 有了第 2 轮规则，这种情况最多白试 2 次，下一次运行的存活检查也会把它判成 `expired`。
+  - 等 ashby 驱动拆分（超档问题解决）时再做。

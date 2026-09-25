@@ -50,3 +50,12 @@ Spawned_subtasks: none
 - Round 5 (arnold-builder 回报): 小修包 4 提交 `072f203` P2 隐私 / `7cd693c` Ashby 旧词→crashed + 三驱动绕契约守卫 / `d326b17` Ashby 存活改公开接口 / `29e6147` demo:check Mac 假 0；文档 `150d1df`，施工记录 `_BUILD_NOTES.md`。325→336 绿，CI 四步 0。偏离：结局词选 crashed 非 unknown。新发现未修：preflight 36 秒、Ashby 接口无超时、未公开直链 Ashby 岗可能误判下架、第 4 项测试 Linux 上改前也绿。
 - Round 5 lead 独立复验：干净 worktree 检出 `150d1df`，npm test **336/336 pass 0 fail**，role_guard_smoke 0、public_alpha_gate 0、node --check 全过。属实。
 - Round 5: 派 arnold-verify 验收小修包（含 crashed 偏离判断、新发现定级）。verify 判可推 → 按关卡 11 推送并知会。
+- Round 5 推送（arnold-ops）：文档提交 `0b51484`，连同此前 10 个本地提交共 11 个普通推送上 origin/main，`987a4f0` → `0b51484`，推后与远端无领先/落后。
+- Round 6 (arnold-architect 回报): DESIGN 第 2 轮修订（Iterations 2）。ADR-S6：点提交前出口表（`driver_contract.PRE_SUBMIT_EXITS`，读码确认）判 `may_have_submitted=false`，不算投过、不占 60 天名额与日额度；同岗 60 天内失败满 2 次两道闸都拦（账本推导，不写看过记录）；单次运行上限 max(3, 可投数)；点提交后崩溃 / `driver_exception` 仍 true 永不再投。S1 并入 essay_pending 剥问答+锁 600、Ashby 回包形状不对→uncertain、Ashby 15 秒超时。与定稿「投过（含 unknown）永不再投」字面冲突，见 DESIGN 未明点 12，待拍板人确认措辞。
+- Round 6 (arnold-architect 回报): DESIGN 第 2 轮修订。ADR-S6：确认发生在点提交前的失败不算投过、不占名额；同岗 60 天满 2 次拦下；单次运行累计 max(3, 可投数) 停；点提交后崩溃 / driver_exception 仍「可能已提交」永不再投。S1 最终清单 7 项（含 verify P2 essay_pending、P3 Ashby 回包形状、15 秒超时）。与定稿字面冲突见未明点 12（待拍板人确认）；未明点 6 D10 第一版简化（名单公司合格不自动投、交拍板人）待 S5 前确认。
+- Round 7: lead 裁决未明点 4（只迁驱动真跑过的）、5（施工中核对）、7（拿不准按可能已提交）；派 arnold-builder 施工 S1+S2（重试上限做成单一常量，待拍板人确认未明点 12）。
+- Round 7 (arnold-builder 回报): S1+S2 共 9 个代码提交 `07abffd`..`22bc56e`，未推。测试 336→404 全绿，CI 四步本地 exit 0。沙箱拷贝上迁入核数 182=182（另迁 33 条驱动跑过的跳过行，28 条不迁）。偏离 8 条已申报，最要紧的一条：推导改为「出口表外一律可能已提交」，所以 GH/Ashby 卡在缺信息的岗位也算投过。常量 `PRE_SUBMIT_RETRIES_60D=1`。真实家目录零写入；`--apply` 等 lead 执行。详见 BUILD_NOTES「第 2 次召唤」。
+- Round 8 lead 独立复验 S1+S2：干净 worktree 检出 `0638a41`，npm test **404/404**，role_guard_smoke 0、public_alpha_gate 0、node --check 全过。属实。派 arnold-verify 验收（重点：builder 偏离 1「表外一律可能已提交」致缺信息岗永不再投的代价）。
+- Round 9 (arnold-verify 回报): **回炉 3/5**。P1（本批引入）：偏离 1 使缺信息岗算投过，实跑「补信息再投」回路断、10 家卡缺信息吃光当日额度；历史 182 条已投中 41 条（22.5%）是补信息再投成功的。改法：`deriveMayHaveSubmitted` 按页面错误清单证据判 false（约 10 行）。P2（既存）：job_report 把答案原文写进 644 的 reports/jobs/*.md。其余（偏离 2/3、账本字段、迁入 182=182 幂等、最坏意图场景、16/16 突变）全过。
+- Round 9: lead 让 builder 回炉第 1 轮（P1 + P2），其余不动。
+- Round 8 (arnold-builder 回炉第 1 轮): `5284ff5` 页面列出必填项错误的 needs_user/rate_limited 判未投过（补信息回路、额度两条红测试转绿）；`180a640` job_report 剥掉表单答案、reports/jobs 锁 600。测试 404→409，CI 四步 exit 0，未推。S3 规则 6 落地前不得真跑 apply_batch 放量（BUILD_NOTES 已写明）。
