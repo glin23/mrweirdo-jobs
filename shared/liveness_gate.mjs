@@ -156,7 +156,8 @@ export async function checkAshbyPosting(url, boardCache = new Map()) {
   }
   const key = parsed.slug.toLowerCase();
   if (!boardCache.has(key)) {
-    // fetchJobs returns [] for a 404 board (company gone) — no postings, so expired.
+    // fetchJobs: [] = board 404 (company gone) — no postings, so expired. An
+    // unreadable 200 or a timeout throws → caught below as uncertain.
     boardCache.set(key, fetchAshbyBoard(parsed.slug).then((jobs) => new Set(jobs.map((j) => String(j._id).toLowerCase()))));
   }
   try {

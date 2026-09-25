@@ -18,6 +18,7 @@
 const ASHBY_ENDPOINT = 'https://api.ashbyhq.com/posting-api/job-board';
 const REQ_INTERVAL_MS = 1000; // 1 req/sec throttle
 const RETRY_BACKOFF_MS = 2000;
+export const FETCH_TIMEOUT_MS = 15000; // undici default was ~10 min per hung board
 const USER_AGENT = 'mrweirdo-jobs/1.3 (+https://github.com/glin23/mrweirdo-jobs)';
 
 let _lastRequestAt = 0;
@@ -36,10 +37,11 @@ async function throttle() {
 }
 
 /**
- * Fetch raw Ashby job board JSON for a single slug, with 1 req/sec throttle
- * and one retry on 5xx. 404 returns null (caller treats as empty).
+ * Fetch raw Ashby job board JSON for a single slug, with 1 req/sec throttle,
+ * a per-request timeout, and one retry on 5xx / network error / timeout.
+ * 404 returns null (the board does not exist).
  */
-async function fetchRaw(slug) {
+async function fetchRaw(slug, timeoutMs = FETCH_TIMEOUT_MS) {
   const url = `${ASHBY_ENDPOINT}/${encodeURIComponent(slug)}?includeCompensation=true`;
   for (let attempt = 0; attempt < 2; attempt++) {
     await throttle();
@@ -47,6 +49,7 @@ async function fetchRaw(slug) {
     try {
       resp = await fetch(url, {
         headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       if (attempt === 0) {
@@ -100,13 +103,21 @@ function normalizeJob(raw, slug) {
 /**
  * fetchJobs(slug, opts) — returns array of normalized jobs.
  *   opts.companyName: override `company` field on returned jobs.
+ *   opts.timeoutMs: per-request timeout (default FETCH_TIMEOUT_MS; test seam).
+ * Board 404 → [] (no board = no postings). A 200 whose body is not
+ * { jobs: [...] } THROWS: "the API answered something we cannot read" is our
+ * blindness, and must never be reported as "this company has no postings" —
+ * the liveness gate would turn that into expired on a live job.
  */
 export async function fetchJobs(slug, opts = {}) {
   if (!slug || typeof slug !== 'string') {
     throw new Error('fetchJobs: slug required');
   }
-  const data = await fetchRaw(slug);
-  if (!data || !Array.isArray(data.jobs)) return [];
+  const data = await fetchRaw(slug, opts.timeoutMs);
+  if (data === null) return [];
+  if (!data || typeof data !== 'object' || !Array.isArray(data.jobs)) {
+    throw new Error(`ashby_unexpected_shape: Ashby ${slug} answered 200 without a jobs array (${JSON.stringify(data).slice(0, 120)})`);
+  }
   const company = opts.companyName || slug;
   return data.jobs.map((j) => {
     const norm = normalizeJob(j, slug);
