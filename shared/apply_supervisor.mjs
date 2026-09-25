@@ -55,6 +55,8 @@ Options:
   --skip-liveness          Skip the Phase 2 URL liveness gate for this batch.
   --pace-min-ms N          Forwarded to apply_batch.
   --pace-max-ms N          Forwarded to apply_batch.
+  --stream-run ID          Forwarded to apply_batch (set by stream_run only).
+  --confirm-tier-over-30   Forwarded to apply_batch (the user said so himself).
 `);
 }
 
@@ -156,7 +158,8 @@ const applyArgs = ['shared/apply_batch.mjs', '--role-targets', roleTargets];
 if (maxRows != null) applyArgs.push('--max', String(maxRows));
 if (dryRun) applyArgs.push('--dry-run');
 if (hasArg('--skip-liveness')) applyArgs.push('--skip-liveness');
-for (const name of ['--pace-min-ms', '--pace-max-ms']) {
+if (hasArg('--confirm-tier-over-30')) applyArgs.push('--confirm-tier-over-30');
+for (const name of ['--pace-min-ms', '--pace-max-ms', '--stream-run']) {
   const value = argValue(name);
   if (value != null) applyArgs.push(name, value);
 }

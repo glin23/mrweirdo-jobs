@@ -29,9 +29,9 @@ import {
   checkDispatch,
   clearInflight,
   dailyTier,
-  readInflight,
   writeInflight,
 } from './apply_guard.mjs';
+import { recoverInflight } from './inflight_recovery.mjs';
 import { fillBasisVersion, readSeen, scoringBasisVersion, seenIndex } from './seen_log.mjs';
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
@@ -54,6 +54,16 @@ const skipLiveness = hasArg('--skip-liveness') || process.env.MRWEIRDO_SKIP_LIVE
 const paceMinMs = Math.max(0, Number(argValue('--pace-min-ms') || process.env.MRWEIRDO_APPLY_PACE_MIN_MS || 30000));
 const paceMaxMs = Math.max(paceMinMs, Number(argValue('--pace-max-ms') || process.env.MRWEIRDO_APPLY_PACE_MAX_MS || 90000));
 const batchRunId = `batch_${new Date().toISOString().replace(/[:.]/g, '-')}_${process.pid}`;
+// 流式模式（restart-apply ADR-S1）: stream_run hands over one scored batch in a
+// one-off work DB. Whole-DB dedupe / eligibility recompute have nothing to act
+// on there, the dispatch guard owns the run target (no queue pre-truncation),
+// and no report that keeps scores overnight is written under the home (V12).
+const streamRunId = argValue('--stream-run');
+const streamMode = streamRunId != null;
+if (streamMode && dbPath() === join(home, 'jobs.db')) {
+  console.error(`[apply-batch] --stream-run ${streamRunId} but the DB is the default jobs.db (${dbPath()}) — stream runs only ever write a one-off work DB (ADR-S4)`);
+  process.exit(1);
+}
 
 // L3 日档位（restart-apply ADR-S7）: read and validated before anything runs; a
 // tier above 30 without the user's explicit flag stops here, loudly.
@@ -67,7 +77,7 @@ try {
 
 const env = {
   ...process.env,
-  MRWEIRDO_MAX_AUTO_APPLY: maxRows == null ? '0' : String(maxRows),
+  MRWEIRDO_MAX_AUTO_APPLY: maxRows == null || streamMode ? '0' : String(maxRows),
   ...(roleTargets ? { MRWEIRDO_ROLE_TYPE_TARGETS: roleTargets } : {}),
 };
 
@@ -185,6 +195,28 @@ function driverFor(row) {
   throw new Error(`unsupported platform: ${row.ats_platform}`);
 }
 
+// ADR-S8: a lock whose holder process no longer exists (SIGKILL, power loss)
+// is taken over — out loud. A live holder, or a lock we cannot read, is left
+// alone and the open below refuses as before.
+function takeOverStaleLock(lockPath) {
+  if (!existsSync(lockPath)) return;
+  let pid;
+  try {
+    pid = JSON.parse(readFileSync(lockPath, 'utf8')).pid;
+  } catch {
+    return; // unreadable lock: not ours to judge; the 'wx' open refuses loudly
+  }
+  if (!Number.isInteger(pid)) return;
+  try {
+    process.kill(pid, 0);
+    return; // alive
+  } catch (e) {
+    if (e.code !== 'ESRCH') return; // EPERM = exists under another user
+  }
+  console.error(`[apply-batch] ⚠️ stale lock ${lockPath}: pid ${pid} is no longer running — taking it over`);
+  unlinkSync(lockPath);
+}
+
 function acquireBatchLock() {
   const locksDir = join(home, 'locks');
   const lockPath = join(locksDir, 'apply_batch.lock');
@@ -199,6 +231,7 @@ function acquireBatchLock() {
 
   let fd;
   try {
+    takeOverStaleLock(lockPath);
     fd = openSync(lockPath, 'wx');
     writeFileSync(fd, payload);
   } catch (e) {
@@ -240,37 +273,6 @@ function acquireBatchLock() {
   console.error(`[apply-batch] lock=${lockPath}`);
 }
 
-// 崩溃恢复（ADR-S8）: a marker left behind means a driver may have clicked
-// Submit and nobody recorded it. Record it FIRST (as the driver's own outcome
-// if it got that far, else crashed/recovered_inflight = may have submitted) —
-// before any new dispatch can re-apply to the same job. Recording failure
-// stops the run: an unrecorded attempt must be resolved, not stepped over.
-function recoverInflight() {
-  const m = readInflight(home);
-  if (!m) return;
-  console.error(`[apply-batch] ⚠️ found an unrecorded attempt from ${m.run_id}: row ${m.row_id} ${m.apply_url} (started ${m.started_at}) — recording it before anything else`);
-  const alreadyRecorded = readAll(home).some((e) => e.job_id === m.row_id && e.apply_url === m.apply_url && e.ts >= m.started_at);
-  if (!alreadyRecorded) {
-    const text = existsSync(m.result_file) ? readFileSync(m.result_file, 'utf8') : '';
-    let resultFile = m.result_file;
-    if (!parseJsonLines(text).some((o) => typeof o.outcome === 'string')) {
-      resultFile = join(tmpDir, `recovered-inflight-${m.row_id}-${Date.now()}.jsonl`);
-      writeFileSync(resultFile, `${JSON.stringify({
-        outcome: 'crashed',
-        reason: 'recovered_inflight',
-        detail: { run_id: m.run_id, started_at: m.started_at, result_file: m.result_file, result_file_present: text !== '' },
-      })}\n`, { mode: 0o600 });
-      lockFile(resultFile);
-    }
-    const rec = runNode(['shared/record_apply_outcome.mjs', '--row-id', String(m.row_id), '--result-file', resultFile], {
-      env: { MRWEIRDO_DB_PATH: m.work_db },
-    });
-    if (rec.stdout) process.stdout.write(rec.stdout);
-    if (rec.code !== 0) fail(`inflight recovery for row ${m.row_id} (marker kept at locks/inflight.json)`, rec);
-  }
-  clearInflight(home);
-}
-
 mkdirSync(tmpDir, { recursive: true });
 // The transit files written below (apply-result-*.jsonl, batch summaries) carry
 // what was actually typed into real forms（阶段 1 设计 §14.5 未明点 1，lead 裁决
@@ -310,17 +312,24 @@ progress('apply', `max=${formatMaxRows(maxRows)} role_targets=${roleTargets || '
 
 if (!dryRun) {
   acquireBatchLock();
-  recoverInflight();
+  try {
+    recoverInflight({ home, repoRoot, env, tmpDir, log: (m) => console.error(`[apply-batch] ${m}`) });
+  } catch (e) {
+    console.error(`[apply-batch] ${e.message}`);
+    process.exit(1);
+  }
 
-  const dedupe = runNode(['shared/dedupe_jobs.mjs', '--apply']);
-  if (dedupe.code !== 0) fail('dedupe', dedupe);
-  if (dedupe.stdout) process.stdout.write(dedupe.stdout);
-  if (dedupe.stderr) process.stderr.write(dedupe.stderr);
+  if (!streamMode) {
+    const dedupe = runNode(['shared/dedupe_jobs.mjs', '--apply']);
+    if (dedupe.code !== 0) fail('dedupe', dedupe);
+    if (dedupe.stdout) process.stdout.write(dedupe.stdout);
+    if (dedupe.stderr) process.stderr.write(dedupe.stderr);
 
-  const recompute = runNode(['shared/recompute_auto_apply_eligibility.mjs', '--apply']);
-  if (recompute.code !== 0) fail('recompute_auto_apply_eligibility', recompute);
-  if (recompute.stdout) process.stdout.write(recompute.stdout);
-  if (recompute.stderr) process.stderr.write(recompute.stderr);
+    const recompute = runNode(['shared/recompute_auto_apply_eligibility.mjs', '--apply']);
+    if (recompute.code !== 0) fail('recompute_auto_apply_eligibility', recompute);
+    if (recompute.stdout) process.stdout.write(recompute.stdout);
+    if (recompute.stderr) process.stderr.write(recompute.stderr);
+  }
 
   const preflight = runNode(['shared/supervisor_preflight.mjs', '--json']);
   if (preflight.stdout) process.stdout.write(preflight.stdout);
@@ -347,9 +356,9 @@ const seenBasis = { scoring: scoringBasisVersion(home), fill: fillBasisVersion(h
 const queueRun = runNode(['shared/auto_apply_queue.mjs', '--summary']);
 if (queueRun.stderr) process.stderr.write(queueRun.stderr);
 if (queueRun.code !== 0) fail('auto_apply_queue', queueRun);
-const rows = limitRows(parseJsonLines(queueRun.stdout), maxRows);
+const rows = streamMode ? parseJsonLines(queueRun.stdout) : limitRows(parseJsonLines(queueRun.stdout), maxRows);
 progress('apply', `queue_rows=${rows.length}`);
-if (maxRows != null && rows.length < maxRows) {
+if (!streamMode && maxRows != null && rows.length < maxRows) {
   const diag = runNode(['shared/queue_diagnostics.mjs', '--json']);
   if (diag.code === 0) {
     const parsed = parseLastJson(diag.stdout) || {};
@@ -492,7 +501,7 @@ for (let i = 0; i < rows.length; i += 1) {
     markCoverLetterUsed(row, coverLetter, resultFile);
   }
   let jobReportPath = null;
-  if (recorded.action === 'submitted') {
+  if (recorded.action === 'submitted' && !streamMode) {
     const jobReport = runNode(['shared/job_report.mjs', '--row-id', String(row.id), '--append-submission']);
     if (jobReport.stdout) process.stdout.write(jobReport.stdout);
     if (jobReport.stderr) process.stderr.write(jobReport.stderr);
@@ -533,7 +542,7 @@ if (crashedRows.length > 0) {
 }
 
 let reportPath = null;
-if (!dryRun) {
+if (!dryRun && !streamMode) {
   const report = runNode(['shared/apply_report.mjs', '--since', todayUtc()]);
   if (report.stdout) process.stdout.write(report.stdout);
   if (report.stderr) process.stderr.write(report.stderr);

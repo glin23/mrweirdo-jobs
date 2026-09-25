@@ -19,14 +19,19 @@ import { onboardTestEnv } from './helpers.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REAL_SHARED = join(ROOT, 'shared');
 
-const NOOP = `console.log(JSON.stringify({ ok: true, stub: true }));\n`;
+// Every stubbed step notes its own name in MRW_TEST_STEP_LOG, so a test can
+// assert which steps a mode runs and which it skips.
+const STEP = `import { appendFileSync as __a } from 'node:fs';
+if (process.env.MRW_TEST_STEP_LOG) __a(process.env.MRW_TEST_STEP_LOG, process.argv[1].split('/').pop() + '\\n');
+`;
+const NOOP = `${STEP}console.log(JSON.stringify({ ok: true, stub: true }));\n`;
 const STUBS = {
   'dedupe_jobs.mjs': NOOP,
   'recompute_auto_apply_eligibility.mjs': NOOP,
   'supervisor_preflight.mjs': NOOP,
   'liveness_gate.mjs': NOOP,
-  'job_report.mjs': `console.log('/tmp/stub-job-report.md');\n`,
-  'apply_report.mjs': `console.log('/tmp/stub-apply-report.html');\n`,
+  'job_report.mjs': `${STEP}console.log('/tmp/stub-job-report.md');\n`,
+  'apply_report.mjs': `${STEP}console.log('/tmp/stub-apply-report.html');\n`,
   'apply_gap_report.mjs': NOOP,
   'queue_diagnostics.mjs': `process.exit(1);\n`,
   'materialize_cover_letter.mjs': `console.log(JSON.stringify({ ok: false, reason: 'stub_no_cover_letter' })); process.exit(1);\n`,
@@ -65,6 +70,7 @@ export function makeBatchRig(prefix) {
     MRW_TEST_QUEUE: join(base, 'queue.json'),
     MRW_TEST_DRIVER_LOG: join(base, 'driver_calls.log'),
     MRW_TEST_DRIVER_SCRIPT: join(base, 'driver_script.json'),
+    MRW_TEST_STEP_LOG: join(base, 'steps.log'),
     MRWEIRDO_QUIET: '0',
   });
   delete env.MRWEIRDO_DAILY_TIER;
@@ -103,6 +109,9 @@ export function makeBatchRig(prefix) {
     },
     script(map) {
       writeFileSync(env.MRW_TEST_DRIVER_SCRIPT, JSON.stringify(map));
+    },
+    steps() {
+      return existsSync(env.MRW_TEST_STEP_LOG) ? readFileSync(env.MRW_TEST_STEP_LOG, 'utf8').split('\n').filter(Boolean) : [];
     },
     driverCalls() {
       return existsSync(env.MRW_TEST_DRIVER_LOG) ? readFileSync(env.MRW_TEST_DRIVER_LOG, 'utf8').split('\n').filter(Boolean) : [];
