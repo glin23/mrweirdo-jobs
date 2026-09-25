@@ -27,7 +27,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
-import { existsSync, mkdirSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { atsHome } from './paths.mjs';
 import { DEFAULT_OUTCOME_STATUS } from './constants.mjs';
 
@@ -263,6 +263,26 @@ function initSchema(d) {
 export function initDb() {
   db();
   return { ok: true, path: dbPath() };
+}
+
+// 一次性工作库（restart-apply ADR-S1）: a fresh DB for ONE run, same schema,
+// row ids continued from seqFloor so every id is globally unique — the ledger
+// identifies attempts by job_id. Refuses an existing path: continuing ids on
+// an old or the legacy DB is exactly the collision this exists to prevent.
+export function initRunDb({ path, seqFloor }) {
+  if (!Number.isInteger(seqFloor) || seqFloor <= 0) throw new Error(`initRunDb: seqFloor must be a positive integer, got ${JSON.stringify(seqFloor)}`);
+  if (!path) throw new Error('initRunDb: path is required');
+  if (existsSync(path)) throw new Error(`initRunDb: ${path} already exists — a work DB is always new`);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const d = new DatabaseSync(path);
+  try {
+    initSchema(d);
+    d.prepare(`INSERT INTO sqlite_sequence(name, seq) VALUES ('jobs', ?)`).run(seqFloor);
+  } finally {
+    d.close();
+  }
+  chmodSync(path, 0o600);
+  return { ok: true, path, seq_floor: seqFloor };
 }
 
 // Convert a JS object to {keys, placeholders, values} for INSERT/UPDATE.
