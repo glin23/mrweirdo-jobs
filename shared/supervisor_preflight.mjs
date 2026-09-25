@@ -318,4 +318,7 @@ if (process.argv.includes('--json')) {
   }
 }
 
-process.exit(result.ok ? 0 : 1);
+// exitCode, not process.exit(): on macOS a pipe write is async, and exiting
+// right after a >64KB console.log truncated the JSON at 65536 bytes for any
+// parent reading it (demo:check showed「ready rows: 0」). Let stdout drain.
+process.exitCode = result.ok ? 0 : 1;

@@ -153,9 +153,12 @@ if (existsSync(profilePath) && existsSync(intentPath) && existsSync(dbPath)) {
     env: { MRWEIRDO_MAX_AUTO_APPLY: maxRows, MRWEIRDO_LOCK_SWEEP: 'report' },
   });
   preflight = jsonParse(r.stdout, null);
-  facts.ready_rows = Array.isArray(preflight?.queue) ? preflight.queue.length : 0;
+  // Unreadable output means we do NOT know the queue — say so, never show 0.
+  check('supervisor_preflight_output_readable', preflight !== null,
+    preflight === null ? `exit=${r.code}; stdout_bytes=${Buffer.byteLength(r.stdout)}; ${(r.stderr || r.stdout).slice(0, 600)}` : '');
+  facts.ready_rows = Array.isArray(preflight?.queue) ? preflight.queue.length : null;
   facts.eligible_rows = preflight?.queue_diagnostics?.eligible ?? null;
-  if (!preflight?.ok) warn('supervisor_preflight_not_clean', (r.stdout || r.stderr).slice(0, 1000));
+  if (preflight && !preflight.ok) warn('supervisor_preflight_not_clean', r.stdout.slice(0, 1000));
   if (expectReady > 0 && facts.ready_rows < expectReady) {
     check('ready_rows_meet_demo_target', false, `expected=${expectReady}; ready=${facts.ready_rows}`);
   }
@@ -195,4 +198,6 @@ if (json) {
   console.log('Live demo flow: type /mrweirdo-jobskill, send resume path plus a short self-introduction, answer the three hard-boundary questions, then review the queue gate before the eligible batch.');
 }
 
-process.exit(result.ok ? 0 : 1);
+// exitCode, not process.exit(): --json output carries the whole preflight and
+// can exceed one pipe buffer; on macOS exiting early truncates it (see preflight).
+process.exitCode = result.ok ? 0 : 1;
