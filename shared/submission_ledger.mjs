@@ -20,7 +20,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { lockDir, lockFile } from './state_file_lock.mjs';
-import { SUBMITTED_STATUSES, jobFingerprint } from './job_identity.mjs';
+import { SUBMITTED_STATUSES, jobFingerprint, normalizeCompany, normalizeTitle } from './job_identity.mjs';
 
 export const LEDGER_RELPATH = 'log/submissions.jsonl';
 export const LEDGER_ERAS = Object.freeze(['v2', 'legacy']);
@@ -210,19 +210,143 @@ export function rebuild(home, db, { apply = false } = {}) {
   return report;
 }
 
+// Legacy timestamps come in two shapes: sqlite datetime('now') (UTC, no zone)
+// and ISO. Anything else is a data problem, not something to guess around.
+function legacyIso(value, jobId) {
+  const text = String(value ?? '');
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(text) ? `${text.replace(' ', 'T')}Z` : text;
+  const d = new Date(iso);
+  if (!text || Number.isNaN(d.getTime())) throw new Error(`backfill-legacy: row ${jobId} has no usable timestamp (${JSON.stringify(value)})`);
+  return d.toISOString();
+}
+
+// A feedback line was produced by a driver iff its detail is the driver's own
+// outcome object, serialized with "outcome" first; dedupe / requeue lines carry
+// other shapes ({"keep_id":..}, {"gap_report":..}). Matched as a prefix, not
+// parsed: the funnel truncated long details to 600 chars, so most driver lines
+// are no longer valid JSON.
+const DRIVER_DETAIL_RE = /^\s*\{"outcome":"/;
+function driverFeedbackTs(db, jobId) {
+  const rows = db.prepare('SELECT ts, detail FROM feedback WHERE job_id = ? ORDER BY ts, id').all(jobId);
+  const driverRows = rows.filter((r) => DRIVER_DETAIL_RE.test(String(r.detail ?? '')));
+  return { hasFeedback: rows.length > 0, lastDriverTs: driverRows.length ? driverRows[driverRows.length - 1].ts : null };
+}
+
+// 历史投递迁入（restart-apply ADR-S9 / 未明点 4 lead 裁决）. Reads the frozen legacy
+// jobs.db and appends era:'legacy' lines:
+//   * every 已投 / 已确认 row → outcome legacy_submitted, verdict legacy_unverified;
+//   * a 跳过未投 row only if a driver actually ran on it (driver outcome in its
+//     feedback) → outcome legacy_attempt, verdict unknown. Pure dedupe / manual
+//     skips are listed in not_migrated and left out.
+// All legacy lines are may_have_submitted:true — never auto re-applied.
+// Default is a dry-run plan. apply:true validates EVERY row first (one
+// unfingerprintable 已投 = refuse the whole batch, nothing written), skips
+// job_ids already migrated (idempotent), then re-reads the ledger and checks
+// the count and the fingerprint set against the DB.
+export function backfillLegacy(home, db, { apply = false } = {}) {
+  const already = new Set(readAll(home).filter((e) => e.era === 'legacy').map((e) => e.job_id));
+  const rows = db.prepare(`
+    SELECT id, company, title, apply_url, status, ats_platform, submitted_at, auto_submitted_at, updated_at, skip_reason
+      FROM jobs WHERE status IN (${[...SUBMITTED_STATUSES, '⚠️ 跳过未投'].map(() => '?').join(',')}) ORDER BY id
+  `).all(...SUBMITTED_STATUSES, '⚠️ 跳过未投');
+  const planned = [];
+  const notMigrated = [];
+  const unfingerprintable = [];
+  for (const row of rows) {
+    const submitted = SUBMITTED_STATUSES.has(row.status);
+    let ts;
+    let reason = null;
+    if (submitted) {
+      ts = legacyIso(row.submitted_at ?? row.auto_submitted_at ?? row.updated_at, row.id);
+    } else {
+      const { hasFeedback, lastDriverTs } = driverFeedbackTs(db, row.id);
+      if (!lastDriverTs) {
+        notMigrated.push({ job_id: row.id, company: row.company, skip_reason: row.skip_reason, why: hasFeedback ? 'no_driver_outcome_in_feedback' : 'no_feedback_rows' });
+        continue;
+      }
+      ts = legacyIso(lastDriverTs, row.id);
+      reason = row.skip_reason || null;
+    }
+    const fp = jobFingerprint(row.apply_url);
+    if (!fp) {
+      unfingerprintable.push({ job_id: row.id, company: row.company, apply_url: row.apply_url, status: row.status });
+      continue;
+    }
+    planned.push({
+      era: 'legacy',
+      job_id: row.id,
+      ts,
+      apply_url: row.apply_url,
+      company_key: normalizeCompany(row.company),
+      title_key: normalizeTitle(row.title),
+      ats: row.ats_platform || fp.ats,
+      outcome: submitted ? 'legacy_submitted' : 'legacy_attempt',
+      verdict: submitted ? 'legacy_unverified' : 'unknown',
+      may_have_submitted: true,
+      reason,
+      evidence: null,
+      answers: [],
+      work_auth_provenance: null,
+    });
+  }
+  const submittedPlan = planned.filter((e) => e.outcome === 'legacy_submitted');
+  const report = {
+    applied: Boolean(apply),
+    submitted: { count: submittedPlan.length },
+    attempts: { count: planned.length - submittedPlan.length, rows: planned.filter((e) => e.outcome === 'legacy_attempt').map((e) => ({ job_id: e.job_id, company_key: e.company_key, reason: e.reason })) },
+    not_migrated: notMigrated,
+    unfingerprintable,
+    already_migrated: planned.filter((e) => already.has(e.job_id)).length,
+    appended: 0,
+  };
+  if (!apply) return report;
+  if (unfingerprintable.length > 0) {
+    throw new Error(`backfill-legacy: ${unfingerprintable.length} row(s) yield no job fingerprint (job_id ${unfingerprintable.map((r) => r.job_id).join(', ')}); nothing written — fix the data first`);
+  }
+  for (const e of planned) {
+    if (already.has(e.job_id)) continue;
+    append(home, e);
+    report.appended += 1;
+  }
+  // 核数: every 已投 row in the DB has exactly one legacy_unverified line with
+  // the same fingerprint.
+  const legacy = readAll(home).filter((e) => e.era === 'legacy' && e.verdict === 'legacy_unverified');
+  const dbFps = rows.filter((r) => SUBMITTED_STATUSES.has(r.status)).map((r) => jobFingerprint(r.apply_url).fp).sort();
+  const ledgerFps = legacy.map((e) => jobFingerprint(e.apply_url).fp).sort();
+  report.verify = {
+    ok: dbFps.length === ledgerFps.length && dbFps.every((fp, i) => fp === ledgerFps[i]),
+    submitted_in_db: dbFps.length,
+    legacy_unverified_in_ledger: ledgerFps.length,
+    fingerprints_match: dbFps.length === ledgerFps.length && dbFps.every((fp, i) => fp === ledgerFps[i]),
+  };
+  if (!report.verify.ok) throw new Error(`backfill-legacy: count check failed ${JSON.stringify(report.verify)}`);
+  return report;
+}
+
 // CLI: `node shared/submission_ledger.mjs rebuild [--apply]`
+//      `node shared/submission_ledger.mjs backfill-legacy [--apply]`
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (invokedDirectly) {
   const cmd = process.argv[2];
-  if (cmd !== 'rebuild') {
+  if (cmd !== 'rebuild' && cmd !== 'backfill-legacy') {
     console.error('usage: node shared/submission_ledger.mjs rebuild [--apply]');
-    console.error('  (backfill-legacy 属包 3，等拍板人对历史更正点头后才实现)');
+    console.error('       node shared/submission_ledger.mjs backfill-legacy [--apply]   (default: dry-run plan)');
     process.exit(2);
   }
   const { atsHome } = await import('./paths.mjs');
   const { DatabaseSync } = await import('node:sqlite');
   const { dbPath, initDb } = await import('./local_db.mjs');
   const apply = process.argv.includes('--apply');
+  if (cmd === 'backfill-legacy') {
+    // The legacy DB is only ever READ here — no initDb (it would migrate/create).
+    if (!existsSync(dbPath())) throw new Error(`backfill-legacy: legacy DB not found at ${dbPath()}`);
+    const legacyDb = new DatabaseSync(dbPath(), { readOnly: true });
+    const report = backfillLegacy(atsHome(), legacyDb, { apply });
+    legacyDb.close();
+    console.log(JSON.stringify(report, null, 2));
+    if (!apply) console.error(`[submission_ledger] dry-run: would append ${report.submitted.count} legacy_submitted + ${report.attempts.count} legacy_attempt line(s); re-run with --apply`);
+    process.exit(0);
+  }
   initDb();
   const db = new DatabaseSync(dbPath(), { readOnly: !apply });
   const report = rebuild(atsHome(), db, { apply });
