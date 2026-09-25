@@ -1,14 +1,15 @@
 ---
-Status: buildable_final_after_gate8（批次 A 已施工并验收；批次 B 的 B0+B1 已提交未推送；本版为关卡 7 纠正前提 + 关卡 8 两项拍板后的**可施工定稿**）
+Status: buildable_final_after_gate10（阶段 0 已推送 `e124773`；本版新增 §14 = 关卡 10 拍板的五阶段方案里**阶段 1「数字变真」的可施工设计**；§0-§13 为历史定稿不再改动）
 Owner: arnold-architect
 Type: DESIGN
-Iterations: 4
-Updated: 2026-07-26
+Iterations: 5
+Updated: 2026-07-30
 Reads: docs/active/2026-07-23_product-blueprint_TASK.md, docs/active/2026-07-23_product-blueprint_BUILD.md, docs/active/2026-07-23_product-blueprint_RISK_REPORT.md, docs/specs/product-blueprint.md, PROJECT_MEMORY.md, PROJECT_CONTEXT.yaml, .claude/phase_schemas.yaml, .claude/file_size_limits.json, .claude/arnold/roles/builder.md, shared/apply_gap_report.mjs, shared/missing_field_questions.mjs, shared/answer_routing.mjs, shared/answer_templates.mjs, shared/profile.template.json, shared/validate_user_profile.mjs, shared/supervisor_preflight.mjs, shared/apply_batch.mjs, shared/apply_supervisor.mjs, shared/retry_gap_rows.mjs, shared/greenhouse_apply_driver.mjs, shared/ashby_apply_driver.mjs, shared/greenhouse_value_rules.mjs, shared/answer_buckets.mjs, scripts/public_alpha_gate.mjs, scripts/secure_profile_files.sh, setup.sh, .claude/skills/mrweirdo-onboard/SKILL.md, .claude/skills/mrweirdo-onboard/references/intake-and-profile.md, .claude/skills/mrweirdo-onboard/references/run-and-database.md, test/apply_gap_report.test.mjs, test/personal_facts_guard.test.mjs
 Reads_v2: docs/active/2026-07-23_product-blueprint_BUILD.md（第 24 节八处偏离 / 第 26 节三条旧 bug / 第 31-32 节回炉）, docs/active/2026-07-23_product-blueprint_VERIFY_REPORT.md（结论明细与风险段）, docs/active/2026-07-23_product-blueprint_FORENSIC.md（截图取证与四条建议）, docs/active/2026-07-23_product-blueprint_STATE_AUDIT.md（权限盘点）, docs/active/2026-07-23_product-blueprint_TASK.md（关卡 2 / 关卡 3 拍板）, shared/personal_fact_gate.mjs, shared/missing_field_questions.mjs, shared/apply_gap_report.mjs, shared/profile.template.json, shared/lever_apply_driver.mjs, shared/ashby_apply_driver.mjs, shared/greenhouse_helpers.js, shared/cdp.mjs, shared/cover_letter_materials.mjs, scripts/secure_profile_files.sh, .claude/skills/mrweirdo-ashby-auto/SKILL.md, .claude/skills/mrweirdo-onboard/references/intake-and-profile.md
 Reads_v3: docs/active/2026-07-23_product-blueprint_TASK.md（关卡 3 与关卡 7 的拍板）, docs/active/2026-07-23_product-blueprint_BUILD.md（施工记录第 45-82 节，B1 的实现与四轮验收后现状）, docs/active/2026-07-23_product-blueprint_VERIFY_REPORT.md（验收报告第 1-4 轮）, shared/work_auth_identity.mjs, shared/personal_fact_gate.mjs, shared/answer_routing.mjs, shared/apply_batch.mjs, shared/supervisor_preflight.mjs, shared/missing_field_questions.mjs, .claude/skills/mrweirdo-onboard/references/intake-and-profile.md, test/greenhouse_driver_harness.mjs, test/ashby_driver_harness.mjs, test/fixtures/ashby_questions.json, PROJECT_MEMORY.md, ~/.mrweirdo-jobs/essay_pending.jsonl（真实题面语料，只读）, ~/.mrweirdo-jobs/feedback.jsonl（只读）, ~/.mrweirdo-jobs/profile.json（只读）, ~/.mrweirdo-jobs/jobs.db（只读打开）
 Reads_v4: docs/active/2026-07-26_work-auth-rethink_PRODUCT_SPEC.md（pm 的第 5.2 / 5.3 / 5.4 / 5.5 / 7 / 8 节）, shared/answer_templates.mjs, shared/answer_bank.json, shared/answer_buckets.mjs, shared/greenhouse_apply_driver.mjs（第 585-730 行的推断点）, shared/apply_gap_report.mjs（note 与类目对照表）, shared/missing_field_questions.mjs（问题模板与写回白名单）, test/answer_templates.test.mjs
-Blocks: arnold-builder（B1′ 前提纠正 + 第 19 处编造 + 批次 B 剩余 / C 施工）
+Reads_v5: docs/specs/master-plan.md（阶段 1 段）, docs/specs/product-anatomy.md（结构问题三 + 只修一处论证）, docs/active/2026-07-29_product-anatomy_ARCH_MAP.md（附录 C 本机数据库实查 / 附录 D 成功判定证据 / 附录 E 代码坐标）, docs/active/2026-07-29_github-benchmark_ARCH_NOTES.md（§10 / §11 三件现成方子）, docs/specs/label-key-binding.md, docs/active/2026-07-23_product-blueprint_FORENSIC.md（6 张假成功截图实况）, shared/record_apply_outcome.mjs, shared/local_db.mjs, shared/job_identity.mjs, shared/ashby_apply_driver.mjs:420-442, shared/greenhouse_apply_driver.mjs:1266-1340+1783-1907, shared/lever_apply_driver.mjs, shared/lever_helpers.js:444-460, shared/cdp.mjs:343-348, scripts/dashboard.mjs:126-138, shared/queue_diagnostics.mjs, shared/auto_apply_queue.mjs, shared/apply_report.mjs, shared/answer_provenance.mjs, .claude/skills/mrweirdo-{greenhouse,ashby,lever}-auto/SKILL.md（截图段）, ~/.mrweirdo-jobs/jobs.db（immutable=1 只读，stat 前后 mtime=1782006129 / size=1728512 零差异）
+Blocks: arnold-builder（阶段 1「数字变真」施工，§14）, arnold-verify（阶段 1 验收，§14.12）
 ---
 
 > **本版是可施工定稿（第四版）。** 批次 A 已施工（10 个提交）并经 verify 独立验收；
@@ -2302,3 +2303,513 @@ lead 的裁决（不打绕行补丁，并入写入侧统一上锁）是对的，
 
 **❌ 方向 6：把那道门做成「警告」而不是「硬失败」，让用户自己决定要不要继续。**
 听起来更尊重用户。**否决理由**：警告在自动化流程里等于不存在——主对话看到一条 WARN 会继续往下跑（`supervisor_preflight` 现在就有 5 类 WARN，全都被无视着），然后整批空跑。而且「要不要继续」这个问题本身是假选择：继续的结果是 100% 的行投不出去，没有任何用户会选它。**给一个只有一个正确答案的选择题，是把决策成本转嫁给用户。**
+
+---
+
+# §14 阶段 1「数字变真」施工设计（2026-07-30，关卡 10 拍板方案的第 1 阶段）
+
+> **边界声明（第 5 轮）**：只改本文件；没写实现代码、没跑投递、没开浏览器、没做 git 写操作、
+> 没动 `/tmp/mrweirdo-onboard`。为查证读了 `~/.mrweirdo-jobs/jobs.db`（`immutable=1` 只读打开）——
+> **跑前跑后 `stat` 同值：mtime 1782006129 / size 1728512 字节，零写入**。
+> 方子大半是现成的（§13.7 / ADR-8 / ADR-9 / ARCH_NOTES §11 三件），本节的活是把它们整合成可施工整体。
+
+## 14.0 给拍板人（人话版）
+
+**现在的病**：你问「我投了几家」，系统里有三个格子给出三个数（158 / 182 / 183），谁也不是权威；
+而「算不算投出去了」这个判断本身，三个平台各有一套认字规则，其中 Ashby 那套里有一条会把
+「你已经投过了，我们**没能提交**」这样的失败页认成成功——历史上 6 张假「成功」截图就是它干的
+（**本轮我拿那段失败页文字喂了现网正则，当场复现：`already applied…application` 那一支命中，判成功**）。
+
+**这一阶段做四件事**：
+1. **立一本只许追加的账**：每次投递（不管成没成）记一行——判定是什么、证据截图在哪、当时每道题填了什么。
+   以后「投了几家」只有一个出处：数这本账。数据库里那三个格子降级为「照账本重算出来的缓存」，
+   附一条一键重算命令，任何时候怀疑数字都能重算核对。
+2. **换一个不会说谎的判定器**：读提交后页面上的字，明确说成功→「已投」；明确说失败→「未投」；
+   **看不懂→「不确定」，绝不默认成功**。三个平台共用这一个判定器，不再各养一套。
+3. **留证升级**：截图从「一屏」改成「整页」（历史截图只有 2/50 拍到关键题，等于没留证）；
+   文件名由代码按判定结果起，不再出现「文件名写成功、页面写失败」。
+4. **历史 183 条怎么办**：绝大多数**当年填了什么已经查不回来了**（取证报告已定论），所以**不重算、
+   如实标注「历史账、未验证」**；只有 Directive 那 7 条有截图铁证是失败的，**照证据更正**——
+   更正后你看板上的「已投」数字会降 7 左右。**这个数字变化需要你点头**（见 §14.11）。
+
+**验收就两句话（已拍死）**：三个数变一个数；把那张假「成功」截图上的文字喂给新判定器，它必须说「这不是成功」。
+
+## 14.1 Implementation Approach（实现思路）
+
+### 14.1.1 需求难点（四条，逐条对应一个设计选择）
+
+**难点一：正典放哪——数据库整体降不了级，但「这一件事实」可以。**
+career-ops 的教义是「文件为唯一正典、SQLite 是可删可重建的派生索引」（issue #918）。我们的 `jobs.db`
+装着找岗、打分、去重等一大家子事实，整库降级为派生**不现实也没必要**。设计选择：**把教义收窄到
+「投出去了没有」这一件事实**——新建 append-only（只许追加）账本
+`~/.mrweirdo-jobs/log/submissions.jsonl`，它是这件事实的唯一权威；`jobs` 表的
+`submitted_at` / `status`（已投档）/ `auto_submitted_at` 三处降级为**派生缓存**，
+由 `node shared/submission_ledger.mjs rebuild` 随时从账本重算。写这本账的入口只有一个：
+`record_apply_outcome.mjs`——它今天就是全部驱动产出进数据库的唯一漏斗（实读代码确认），
+**信息最丰富处恰好已经存在，不用新造收口**。
+
+**难点二：判定器还是字面匹配，怎么不重蹈 label-key-binding 的覆辙。**
+「投出去了没有」的判定本质上仍是读页面文字（业内无银弹，ai-job-agent 同档做法），
+label-key-binding 的教训不是「别用字面」，而是四个具体病灶，逐个对着解：
+- **病灶 A「多份实现各自漂移」**（今天 Ashby / Greenhouse / Lever 三套规则，Ashby 多出的那一支正是事故根源）
+  → **唯一实现** `submissionVerdict()`，三个驱动一律 import，源码扫描守卫禁止驱动内再出现本地成功正则；
+- **病灶 B「有序规则链，插一行会盖住上面某行且无人知晓」**（21 道规则先后顺序即优先级）
+  → 判定器用**集合语义不用链**：确认表 / 否认表两组正则**全部都查、不短路**，结论只看「命中了哪几组」，
+  插入新规则**不可能**遮蔽旧规则；
+- **病灶 C「两个判错方向后果不对等却被同等对待」** → 编码不对等性：两组都命中或都不命中 → `unknown`；
+  `unknown` 在下游**永远不算已投**（宁可少计一家，不可虚报一家——与「宁可多问」同一条判据）;
+- **病灶 D「规则没有夹具，改了不知道漂没漂」** → 每条正则**必须**有至少一个对应文本夹具，
+  测试遍历导出的规则表逐条核对夹具存在性，缺夹具即红（golden 评测集思路的最小版）。
+
+**难点三：净增 0 硬约束下往三个驱动里塞「全问答落盘」。**
+`greenhouse_apply_driver.mjs` 1914 行、`ashby_apply_driver.mjs` 1170 行，均超 800 上限、锁死净增 0。
+预算：删掉驱动内联成功正则（各 1 长行）+ 内联截图拼名（各 1-2 行）+ 注释可省行，换取在
+**填空函数的定义处**（不是每个调用点）各加 1-2 行调用 `recordFill()`。三个驱动的填空动作各自收敛在
+少数几个函数里（实读：ashby `fillTextInQuestion` 等 3 处、lever `answerForField` 1 处、
+greenhouse 同族数处），**在函数定义内记录 = 调用点零改动**。lever（489 行）无约束。
+若 builder 实做时预算不够，**上报 lead，不许为凑行数删守卫或注释**。
+
+**难点四：历史 183 条的诚实处置。**
+取证报告已定论：「历史上填了什么」的证据链已走完、走不通（截图只拍一屏、日志只记缺什么不记填什么）。
+**重算是伪选项**——没有输入。设计选择：一次性 backfill 把 183 条迁入账本、逐条标
+`era:'legacy', verdict:'legacy_unverified'`（历史账，如实承认未验证）；**唯有铁证在手的例外**：
+Directive 8 行全标着「✅ 已投」（本轮只读实查：id 304-311），而取证报告证实其中 7 张截图页面写着
+「We couldn't submit your application」（没能提交）、仅 1 张真成功——这 7 条走**追加 correction 行**
+（照 career-ops `status-log.tsv` 体例：账本永不原地改，改错补更正行），重算后翻成未投。
+其余 175 条无证据不动。**已投数字会降约 7，需拍板人过目**（§14.11）。
+
+### 14.1.2 方案总览（一句话）
+
+**一个判定器（唯一实现、无默认成功）→ 一份退出契约（三驱动同形、无路径谎报）→
+一本追加账（唯一正典、含整页证据与全问答）→ 三个数改为同一条派生（附重算命令）→
+新写入点出生即上锁（B3-a 并入）。**
+
+### 14.1.3 B3-a（写入侧统一上锁）并入本阶段——结论：并入
+
+lead 倾向并入，我同意，理由三条：① 本阶段新增两类写入点（账本 JSONL 含全问答 = 全仓库密度最高的
+PII 文件；整页截图比单屏含更多明文个人信息），**新写入点出生即 644 = 边修旧账边欠新账**；
+② §13.4 设计现成（模块清单、触发点、边界处理、验收全写好了），增量只是把
+`submissions.jsonl` 加进 `PII_TARGETS`，工程量一个提交；③ 上锁模块必须**先于**留证模块进场
+（`captureEvidence` 落盘即 chmod 600 依赖它），排序天然靠前，不拖主线。
+
+## 14.2 File List（文件清单）
+
+### 新建（5 个模块 + 5 份测试 + 1 组夹具）
+
+| 文件 | 约行数 | 干什么 |
+|---|---:|---|
+| `shared/submission_evidence.mjs` | ~180 | `submissionVerdict()` 纯函数 + 确认/否认规则表（导出，供夹具测试遍历）+ `captureEvidence()` 整页截图与按判定命名（§13.7 定的形状，签名扩为 `{bodyText, url}`，理由见 §14.3） |
+| `shared/submission_ledger.mjs` | ~220 | 账本读写：`append()` / `appendCorrection()` / `readAll()`；CLI 子命令 `rebuild`（账本→重算 DB 三列，带 `--dry-run` 默认档）与 `backfill-legacy`（一次性历史迁移） |
+| `shared/driver_contract.mjs` | ~70 | 统一退出契约：`OUTCOMES` 枚举 + 退出码映射表 + `emitOutcome()`（唯一出口）+ `validateOutcome()`（漏斗侧校验）+ `recordFill()`（全问答累积器） |
+| `shared/state_file_lock.mjs` | ~80 | §13.4 原样落地（`lockFile` / `lockDir` / `PII_TARGETS` / `sweep`），`PII_TARGETS` 增加 `log/submissions.jsonl` |
+| `test/fixtures/submission_pages/` | 10+ 个 `.txt` | 页面文案夹具：**6 张 Directive 假成功的横幅原文**（取证报告已转写，不含个人信息）+ 真成功横幅（julius / acorns / lever thanks / greenhouse confirmation）+ 双命中样张 + 全不命中样张 |
+| `test/submission_verdict.test.mjs` / `test/submission_ledger.test.mjs` / `test/driver_contract.test.mjs` / `test/state_file_lock.test.mjs` / `test/verdict_single_impl_guard.test.mjs` | 各 ~80-150 | 见 §14.12 验收标准；最后一个是源码扫描守卫（驱动内禁止本地成功正则、账本只许 `record_apply_outcome.mjs` 写——照 `visa_status` 读点白名单守卫（提交 `77ed7a7`）同款体例） |
+
+### 修改（10 处）
+
+| 文件 | 现行数 → 约束 | 改什么 |
+|---|---|---|
+| `shared/record_apply_outcome.mjs` | 176 → ~240 | ① `validateOutcome()` 校验驱动产出（未知 outcome 字符串 = bug，**响亮退出非静默兜底**）；② 每次调用**先追加账本行**（含判定、证据路径、answers、work-auth 来源快照）再更新 DB；③ 成功路仅在 `verdict === 'submitted'` 时走；④ feedback 表新写入统一用 `submitted`（结束 `submitted`/`success` 双命名，历史行不动） |
+| `shared/ashby_apply_driver.mjs` | 1170 → **净增 0** | 删 `:427` 内联成功正则（含肇事的 `already applied…` 支）→ 页面回传 `bodyText+url`，判定在 node 侧走 `submissionVerdict`；`:1083` 一次性 `/tmp` 截图同行改 `captureEvidence`；填空函数定义处挂 `recordFill` |
+| `shared/greenhouse_apply_driver.mjs` | 1914 → **净增 0** | 同上：删 `:1272-1276` 内联正则（`strictSuccess`+`greenhouseConfirmation` 的 URL 信号并入唯一判定器）；`:1829` `/tmp` 截图同行改；填空函数挂 `recordFill` |
+| `shared/lever_apply_driver.mjs` | 489（有余量） | `Lever.checkSuccess()` 只回传 `{bodyText, url}` 原料，**判定收归 node 侧唯一判定器**；`answerForField` 挂 `recordFill`；现有 pre/post 截图改走 `captureEvidence` |
+| `shared/lever_helpers.js` | 693（有余量） | `checkSuccess()` 瘦身为取证原料函数（不再自带成功正则——否则守卫拦不住第四份实现） |
+| `shared/cdp.mjs` | 378 → +~10 | `screenshot` 子命令加 `--full-page`：先滚到底（触发懒加载）再 `Page.captureScreenshot{captureBeyondViewport:true}`（§13.7 确认仍适用，无变化） |
+| `shared/job_identity.mjs` | 小 | 导出唯一派生谓词 `SUBMITTED_WHERE_SQL`（= `status IN SUBMITTED_STATUSES`，rebuild 保证与 `submitted_at` 非空互为充要）——**「一个数」的那一个出处** |
+| `scripts/dashboard.mjs`（:126-131）/ `shared/queue_diagnostics.mjs` / `shared/auto_apply_queue.mjs` / `shared/apply_report.mjs` | 各小改 | 计数与筛选一律引 `SUBMITTED_WHERE_SQL`；`apply_report` 的 `COALESCE(submitted_at, auto_submitted_at, …)` 排序键保留（排序不是计数），计数行换谓词 |
+| `scripts/secure_profile_files.sh` + `shared/supervisor_preflight.mjs` | 小 | 前者改为调 `state_file_lock.sweep`（不再自维护第二份清单）；后者加 sweep 补网 WARN + **账本↔DB 一致性检查**（对不上 = 有人绕过漏斗写库，响） |
+| `.claude/skills/mrweirdo-{greenhouse,ashby,lever}-auto/SKILL.md` 截图段 | 各净减 | 「`mkdir`+拼名字+`cdp.mjs screenshot`」整段换一行 `node shared/submission_evidence.mjs --tab … --phase before_submit`（§13.7 原样） |
+
+**模块拆分映射（给 ui 倒推用）**：本阶段无用户界面改动；用户可见变化 = 报告/看板上「已投」只剩一个数 +
+截图文件名后缀变为 `after_<判定>`。
+
+## 14.3 数据结构与接口
+
+```mermaid
+classDiagram
+    class SubmissionEvidence {
+        +CONFIRM_PATTERNS: VerdictRule[]
+        +DENY_PATTERNS: VerdictRule[]
+        +submissionVerdict(input: PageSignal) Verdict
+        +captureEvidence(tab, opts: EvidenceOpts) Promise~EvidencePaths~
+    }
+    class PageSignal {
+        +bodyText: string
+        +url: string
+    }
+    class VerdictRule {
+        +id: string
+        +re: RegExp
+        +fixture: string
+    }
+    class Verdict {
+        +verdict: "submitted"|"not_submitted"|"unknown"
+        +confirmHits: string[]
+        +denyHits: string[]
+    }
+    class DriverContract {
+        +OUTCOMES: enum
+        +EXIT_CODES: map
+        +emitOutcome(obj: DriverOutcome) never
+        +validateOutcome(obj) DriverOutcome
+        +recordFill(log: FillEntry[], entry: FillEntry) void
+    }
+    class DriverOutcome {
+        +outcome: "submitted"|"not_submitted"|"needs_user"|"captcha_blocked"|"rate_limited"|"crashed"|"unknown"
+        +reason: string|null
+        +verdict: Verdict|null
+        +job_id: number
+        +url: string
+        +evidence: EvidencePaths|null
+        +answers: FillEntry[]
+    }
+    class FillEntry {
+        +label: string
+        +value: string
+        +source: "profile"|"bank_default"|"derived"|"user_confirmed"|"left_blank"
+        +widget: string
+    }
+    class SubmissionLedger {
+        +append(home, entry: LedgerEntry) void
+        +appendCorrection(home, refId, patch, evidence) void
+        +readAll(home) LedgerEntry[]
+        +rebuild(home, db, opts) RebuildReport
+        +backfillLegacy(home, db) BackfillReport
+    }
+    class LedgerEntry {
+        +id: string
+        +ts: string
+        +era: "v2"|"legacy"
+        +job_id: number
+        +company_key: string
+        +title_key: string
+        +ats: string
+        +outcome: string
+        +verdict: string
+        +evidence: EvidencePaths|null
+        +answers: FillEntry[]
+        +work_auth_provenance: object|null
+        +correction_of: string|null
+    }
+    class StateFileLock {
+        +PII_TARGETS: list
+        +lockFile(path) void
+        +lockDir(dir, opts) void
+        +sweep(home) SweepReport
+    }
+    class RecordApplyOutcome {
+        +main(rowId, resultFile) exitCode
+    }
+    class JobIdentity {
+        +SUBMITTED_STATUSES: Set
+        +SUBMITTED_WHERE_SQL: string
+    }
+    SubmissionEvidence --> PageSignal : 输入
+    SubmissionEvidence --> Verdict : 输出
+    SubmissionEvidence ..> StateFileLock : 截图落盘即上锁
+    DriverContract --> DriverOutcome : 唯一出口
+    DriverOutcome --> Verdict : 内嵌
+    DriverOutcome --> FillEntry : answers
+    RecordApplyOutcome ..> DriverContract : validateOutcome
+    RecordApplyOutcome --> SubmissionLedger : 唯一写账人
+    SubmissionLedger --> LedgerEntry : 一行一条
+    SubmissionLedger ..> JobIdentity : rebuild 写回派生列
+    SubmissionLedger ..> StateFileLock : 账本落盘即上锁
+```
+
+**关键签名说明（写死，不留给 builder 猜）**：
+- `submissionVerdict({bodyText, url})`——比 §13.7 的 `bodyText` 单参**多收一个 `url`**。
+  理由（实读三驱动后的修正）：Lever 的正常成功态是**跳转** `/thanks` 路径、Greenhouse 有
+  `/confirmation` URL 信号，都是比文案更硬的确认证据；不收 URL，Lever 一族全得靠文案兜。
+  URL 命中进 `confirmHits`，参与同一套集合结论，不开旁路。
+- 结论规则（集合语义，与 §13.7 一致）：`confirm 命中 ∧ deny 未命中 → submitted`；
+  `deny 命中 ∧ confirm 未命中 → not_submitted`；**其余一律 `unknown`**。无任何默认成功路径。
+- `emitOutcome()`：打印唯一一行结构化 JSON 到 stdout + `process.exit(EXIT_CODES[outcome])`。
+  退出码抄 ai-job-agent 形状：`0`=submitted / `2`=needs_user（卡必填，含 essay_pending 族）/
+  `3`=captcha_blocked 或超时 / `4`=rate_limited（步数或额度超限）/ `1`=crashed。
+  `not_submitted` 与 `unknown` 归 `2`（都需要人看）。**驱动内除 usage 报错外禁止裸 `process.exit`**。
+- `validateOutcome()`：outcome 不在枚举内 → **throw（响亮失败）**；驱动整行 JSON 都没有
+  （中途崩死）→ 合成 `outcome:'crashed'` 记账（不是静默 skip——AIHawk #919 六十七条评论骂的
+  就是「坏了不出声」）。现网 `driver_no_structured_outcome` 那条兜底保留语义但换名归入 `crashed`。
+- `rebuild` 派生规则：对每个 `job_id` 取账本**最后一条有效行**（correction 覆盖被更正行）；
+  `verdict==='submitted'` → `status='✅ 已投'` + `submitted_at`（取账本 ts，幂等）；其余 → 不动或按
+  correction 翻回。**默认 `--dry-run` 只打印 diff，`--apply` 才写库**（与 ai-job-agent 的
+  「默认试跑、显式开投」同一条纪律）。`auto_submitted_at` 降级为「怎么投的」元数据，不再当计数键
+  （25 条「auto 有、submitted 空」的历史错位由 backfill 一次性归一）。
+
+## 14.4 调用流
+
+### 14.4.1 正常路：一次真实投递从点提交到数字入账
+
+```mermaid
+sequenceDiagram
+    participant B as apply_batch.mjs
+    participant D as 驱动(gh/ashby/lever)
+    participant DC as driver_contract
+    participant SE as submission_evidence
+    participant RO as record_apply_outcome
+    participant L as submissions.jsonl(账本)
+    participant DB as jobs.db(派生缓存)
+    B->>D: 派单(row_id, url, 档案)
+    D->>D: 逐题填表, 每次落笔 recordFill({label,value,source})
+    D->>SE: captureEvidence(phase=before_submit) — 滚到底+整页截图+chmod600
+    D->>D: 点提交, 等页面稳定
+    D->>D: 页面取原料 {bodyText, url}
+    D->>SE: submissionVerdict({bodyText,url})
+    SE-->>D: {verdict:'submitted', confirmHits:[…], denyHits:[]}
+    D->>SE: captureEvidence(phase=after_submit, verdict) — 命名 …_after_submitted.png
+    D->>DC: emitOutcome({outcome:'submitted', verdict, evidence, answers}) → exit 0
+    B->>RO: --row-id --result-file
+    RO->>DC: validateOutcome(解析出的 JSON)
+    RO->>L: append(LedgerEntry{era:'v2', verdict, evidence, answers, provenance快照})
+    RO->>DB: status='✅ 已投' + submitted_at(与账本同源)
+    Note over L,DB: 账本是正典; DB 是缓存, 随时 rebuild 复核
+```
+
+### 14.4.2 失败路 1（本设计的核心保护，= Directive 事故的反面）：页面明说「没能提交」
+
+```mermaid
+sequenceDiagram
+    participant D as 驱动
+    participant SE as submission_evidence
+    participant RO as record_apply_outcome
+    participant L as 账本
+    participant DB as jobs.db
+    D->>D: 点提交后页面出现 "We couldn't submit your application…"
+    D->>SE: submissionVerdict({bodyText,url})
+    SE-->>D: {verdict:'not_submitted', denyHits:['couldnt_submit','already_applied']}
+    Note over SE: 旧 Ashby 正则在这里判 success=true(本轮已复现)——新判定器否认表命中即非成功
+    D->>SE: captureEvidence(after_submit) — 文件名 …_after_not_submitted.png(名字不再说谎)
+    D->>DC: emitOutcome({outcome:'not_submitted', reason:'page_states_failure'}) → exit 2
+    RO->>L: append(verdict:'not_submitted')
+    RO->>DB: markSkipped — 这一行永远进不了「已投」
+```
+
+### 14.4.3 失败路 2：驱动中途崩死，一行 JSON 都没吐
+
+```mermaid
+sequenceDiagram
+    participant RO as record_apply_outcome
+    participant L as 账本
+    participant DB as jobs.db
+    RO->>RO: parseOutcome(result-file) → null
+    RO->>RO: 合成 {outcome:'crashed', reason:'driver_died_without_outcome'}
+    RO->>L: append(verdict:'unknown', outcome:'crashed')
+    RO->>DB: markSkipped + feedback 记账
+    Note over RO: 批次汇总里 crashed 单列高亮——静默空转是 AIHawk 被骂最凶的死法, 必须响
+```
+
+### 14.4.4 失败路 3：判定器看不懂（两组都命中 / 都不命中）
+
+判定 `unknown` → 截图命名 `…_after_unknown.png` → outcome `unknown`（exit 2）→ 账本如实记
+`unknown` → DB 走 skip、理由 `unknown_submission_state` → 缺口报告把它列进**人工核对清单**
+（今天的 `unknown_state_no_errors_no_success` 已是这个语义，只是从「Ashby 特产」升为三驱动统一档）。
+**全链路不存在任何把 unknown 转写成 submitted 的路径**——这句话本身是一条测试（§14.12-V3）。
+
+### 14.4.5 重算路：怀疑数字时任何人可复核
+
+`node shared/submission_ledger.mjs rebuild`（默认 dry-run）→ 逐 job_id 取账本末条有效行 →
+打印「账本说 X / DB 现在是 Y」的差异表 → 人看过 → `--apply` 写回。幂等：连跑两次 `--apply`，
+第二次 diff 必须为空（§14.12-V6）。
+
+## 14.5 Anything UNCLEAR（未明点，如实）
+
+1. **answers 全问答会路过 `/tmp` 的驱动结果文件**（驱动 stdout → result-file → 漏斗解析）。
+   账本与截图有 600 上锁，但这个中转 log 是会话级临时文件、权限没人管。我倾向本阶段先接受并如实标注
+   （它生命周期短、目录本就存 pending 题面），**若 lead 认为不可接受**，备选是驱动把 answers 旁写
+   600 文件、outcome 行里只留路径——多一个写入点，B3-a 正好也管得住。待 lead 一句话。
+2. **`'✅ 已投'` 这种带 emoji 的中文字符串当状态枚举**长期是否合理——本阶段只把它变成「唯一谓词的
+   实现细节」（藏进 `SUBMITTED_WHERE_SQL`），不动值本身；改值是表结构变更，不属于本阶段。
+3. **feedback 表历史行的 `success`(15 条)/`submitted`(110 条) 双命名**：新写入统一 `submitted`，
+   历史行不回填（回填 = 原地改历史，与 append-only 教义相反）。读侧若有按 `success` 过滤的地方
+   （grep 未发现生产读点，只在报告里展示）由 builder 施工时再扫一遍确认。
+4. **Directive 之外还有没有假成功**：50 张截图只覆盖 30 家公司/约 50 次投递，剩余 130+ 次连截图都没有。
+   `already applied` 那支肇事正则 2026-05-26 前就在线上——**无法排除还有未被拍到的假成功**，
+   也无法证明有。backfill 全部标 `legacy_unverified` 正是对这件事的诚实表达。
+5. **`unknown` 行要不要自动重试**：本设计只把它列进人工核对清单，不自动重试（重试可能造成重复投递，
+   踩防拉黑规矩）。阶段 2「预览=实投」做重试策略时再议。
+
+## 14.6 8 项质量属性取舍表（阶段 1 专表）
+
+| 属性 | 目标（可量化） | 牺牲了什么（显式） |
+|---|---|---|
+| Reliability 可靠性 | 假成功率：6 张历史夹具 0 通过；无默认成功路径（测试钉死） | **计数宁可偏低**：unknown 不计入已投，真成功但页面文案怪异的会被少计——用人工核对清单兜，不用猜 |
+| Maintainability 可维护性 | 判定实现 3 套→1 套；加一条规则 = 表里加一行 + 一个夹具 | 加规则比以前多一步（必须配夹具），故意的摩擦 |
+| Security/Privacy 安全 | 账本/截图落盘即 600；写入点收口 1 处 | `/tmp` 中转文件权限本阶段不管（UNCLEAR-1，标给 lead） |
+| Performance 性能 | 整页截图较单屏增 ~1-2 秒/次、体积 ~3-5 倍 | 换「以后查得出当时填了什么」；50 张历史截图命中率 2/50 就是不付这个成本的下场 |
+| Scalability 扩展性 | 账本 JSONL 顺序追加，日百量级 = 每天百行，十年不成瓶颈 | 不做索引不做分片——查询靠 rebuild 进 SQLite，账本自己不服务查询 |
+| Interoperability 互操作 | 退出契约三驱动同形，阶段 4 的 5 个半成品驱动照抄即可转正 | 旧 result-file 解析兼容层保留一版（crashed 合成），多背一段代码 |
+| Compliance 合规 | 留证「判不出写 unknown」与免责声明的「投递留证」承诺对齐；不再有文件名谎报 | 历史截图文件名不改名（它们是 bug 的物证，改名=毁证；账本 correction 行去纠数字） |
+| Cost 成本 | 零新依赖、零服务；全部本地文件 + node:sqlite | 无 |
+
+**最大的一笔显式牺牲**：**真话优先于好看**——更正 7 条 Directive 后「已投」数字下降，
+且 unknown 档会让未来的数字偏保守。这是拍板人「数字变真」的字面要求，不是副作用。
+
+## 14.7 ADR（架构决策记录）
+
+### ADR-13：「投出去了没有」的唯一正典 = append-only 账本；DB 三列降级为派生缓存
+
+- **Status**: accepted　**Date**: 2026-07-30
+- **Context**: 同一事实三个格子三个数（158/182/183，本轮只读实查复核一致）；结构病三的切口已拍板选在这件事实上；career-ops 教义（文件正典/库为派生/永不允许第二正典）是业内已验证落法（ARCH_NOTES §10/§11）。
+- **Decision**: `~/.mrweirdo-jobs/log/submissions.jsonl` 为这一件事实的唯一权威；只许追加，改错走 correction 行；唯一写账人 `record_apply_outcome.mjs`（守卫锁定）；`jobs` 表相关三列由 `rebuild` 重算，读侧一律走 `SUBMITTED_WHERE_SQL` 唯一谓词。
+- **Consequences**: 好——数字可复核、可重建，「修好一处不等于修好」的病根在这件事实上被拔掉；坏——多一个文件、多一条重算命令要教育用户；账本损坏时 DB 缓存还在（互为备份的副产品）。
+- **Alternatives**: ① DB 自己当正典（选举 status 为准）——否，三个格子谁当权威都只是换个赢家，不解决「写入多处、彼此漂移」；② 整库照 career-ops 降级为派生——否，`jobs.db` 还管找岗打分，工程量与收益完全不成比例。
+
+### ADR-14：判定器唯一实现、集合语义、二义即 unknown、每规则带夹具
+
+- **Status**: accepted　**Date**: 2026-07-30
+- **Context**: 三驱动三套成功规则且已漂移（Ashby 多出的 `already applied…` 支就是 6 张假成功的直接肇事者，本轮喂真实失败横幅当场复现 `true`）；label-key-binding 定稿点名有序规则链与不对等判错的病。
+- **Decision**: `submissionVerdict({bodyText,url})` 全仓库唯一实现；确认/否认两组正则全查不短路，结论只看集合命中组合；两组同中或同空 → `unknown`；`unknown` 下游永不折算为已投；每条规则表项必须携带夹具文件名，测试遍历验证。
+- **Consequences**: 好——插规则不可能遮蔽旧规则、判定漂移会被夹具当场抓住；坏——新平台文案怪异时会多出 unknown 需人工看（这是设计意图不是缺陷）。
+- **Alternatives**: ① 沿用各驱动自带正则只删肇事支——否，第四份实现出现只是时间问题（Lever 已经有了）；② 上模型判定页面截图——否，把「判定可信」建在另一个不可断言的判断上，且每次投递多一笔模型花费（career-ops 用户的第一抱怨就是贵）。
+
+### ADR-15：三驱动统一退出契约，无路径默认成功，未知状态必须响
+
+- **Status**: accepted　**Date**: 2026-07-30
+- **Context**: ai-job-agent 的五驱动统一退出码是「判不出时绝不谎报成功」的现成合同（ARCH_NOTES §7.3/§11-2）；我们现网驱动全部 exit 0 + 各自拼 outcome 字符串，`record_apply_outcome` 对没吐 JSON 的驱动静默转 skip。
+- **Decision**: `driver_contract.mjs` 枚举 outcome + 退出码（0 submitted / 2 needs_user 族 / 3 captcha / 4 rate_limited / 1 crashed）；`emitOutcome()` 是驱动唯一出口；漏斗侧 `validateOutcome()` 对枚举外字符串 throw；无 JSON 合成 `crashed` 并在批次汇总高亮。captcha 与 blocked 是一等公民状态不是失败遮羞布。
+- **Consequences**: 好——阶段 4 的 5 个半成品驱动转正时合同现成；「选择器烂掉必须响」（master-plan 反面清单）有了执行面；坏——退出码语义变更需同步 3 份 -auto 技能说明书对退出码的解读段。
+- **Alternatives**: 只统一 JSON 不统一退出码——否，调用侧（bash 技能层）第一眼看的就是退出码，两层语义不一致就是下一个「文件名与页面不符」。
+
+### ADR-16：每条投递全问答落盘进账本（F6），来源词汇对齐 answer_provenance
+
+- **Status**: accepted　**Date**: 2026-07-30
+- **Context**: 取证定论「历史 183 次投递答了什么不可考」；GodsScion（2,635 星单人项目）默认就记每投递全问答（ARCH_NOTES §5.4）；我们的 F6 挂账两轮未做。
+- **Decision**: 驱动在填空函数定义处累积 `FillEntry{label,value,source,widget}`，随 outcome 上交，漏斗写入账本行；`source` 词汇与 `PROVENANCE_SOURCES` 对齐；工作授权族答案额外附 `workAuthSources()` 快照（「这格是谁定的」在投递现场再留一份底）。**留痕只用于报告与审计，不参与填表判断**——ADR-4 原样适用于账本。
+- **Consequences**: 好——「以后可查」从愿望变机制；坏——账本成为 PII 密度最高的文件（B3-a 上锁为前置）；驱动净增 0 预算吃紧（§14.1.1 难点三）。
+- **Alternatives**: 抄 GodsScion 落 CSV——否，我们的答案含多行文本与结构化来源，JSONL 与现有 `feedback.jsonl` 工具链同形。
+
+### ADR-17：历史 183 条标 legacy 不重算；仅有铁证的 7 条 Directive 走 correction
+
+- **Status**: proposed（更正后的数字变化需拍板人过目，§14.11）　**Date**: 2026-07-30
+- **Context**: 历史证据链已由取证走完：绝大多数投递「当时页面说了什么」无据可查；唯 Directive 7 张截图明写「没能提交」+ 1 张真成功，DB 里 8 行全标已投（id 304-311，本轮只读复核）。
+- **Decision**: `backfill-legacy` 一次性迁移：凡三格任一有值的行入账本、标 `era:'legacy', verdict:'legacy_unverified'`；Directive 7 行各追加 correction（携带截图路径为证据指针）→ rebuild 后翻为未投；25 条「auto 有 submitted 空」归一为同一时间戳来源。历史截图**不重命名不删除**（物证）。
+- **Consequences**: 好——历史与新账同一本、同一谓词，「三个数」从此只有一个出处；坏——已投总数下降约 7 且 legacy 档永远带着「未验证」的尾巴——**这是诚实，不是缺陷**。
+- **Alternatives**: ① 历史全部重判——没有输入，伪选项；② 历史不入账、报告里两套数字并列——否，那是把「同一事实多份」原样保留，只是换了名字。
+
+## 14.8 跨栈一致性字段对照表
+
+| 概念 | 页面层 | 驱动层 | 契约层 | 账本层 | DB 派生层 | 报告/看板层 |
+|---|---|---|---|---|---|---|
+| 投出去了 | 确认文案/URL 信号 | `Verdict.verdict='submitted'` | `outcome='submitted'`, exit 0 | `verdict:'submitted'` | `status='✅ 已投'` ∧ `submitted_at` 非空（互为充要） | `SUBMITTED_WHERE_SQL` 计数 |
+| 明确没投出去 | 失败文案 | `'not_submitted'` | `'not_submitted'`, exit 2 | 同名 | skip + `skip_reason` | 未投明细 |
+| 判不出 | 两组同中/同空 | `'unknown'` | `'unknown'`, exit 2 | 同名 | skip + `unknown_submission_state` | 人工核对清单 |
+| 当时填了什么 | 表单控件值 | `FillEntry[]` | `answers` | `answers` | 不落库（隐私） | 审计时读账本 |
+| 证据 | 整页渲染 | `EvidencePaths` | `evidence` | `evidence` | `confirmation_url` 沿用 | 截图路径 |
+
+命名规则：全链 snake_case，无驼峰转换层；`verdict` 与 `outcome` 是两个概念（页面判定 vs 驱动整体结局），
+**禁止混用**——`outcome:'submitted'` 必须由 `verdict:'submitted'` 推出，反向不成立（verdict submitted
+但重复投递守卫拦下时 outcome 是 skip 族）。
+
+## 14.9 本项目铁律对照
+
+`.claude/arnold/roles/architect.md` 不存在——项目未定义 architect 岗位补充说明。
+登记表 `ci_smoke.main_chain`（简历上传→…→一键投递→投递报告→持续跟进）已核对：本设计只动
+「投递报告」的数字来源与「一键投递」的收尾判定，主链其余环节零接触；`schema_upgrade_path` /
+`isolation_field` 均未填，跳过。数据表结构变更仅限**新增派生语义**（无新列、无删列、无改类型）——
+`jobs` 表零 DDL，账本是新文件不是新表。
+
+## 14.10 拆分清单（给 lead 的派工建议）
+
+**总改动量估算**：新代码 ~550 行 + 测试 ~500 行 + 夹具 10+ 个文本文件 + 3 份技能说明书小改；
+驱动侧净增 0（两个超限文件）。**9 个提交、3 个施工包，建议分 2-3 轮召唤 builder**（包 1+2 一轮可完成，
+包 3 涉及拍板人点头后再动）：
+
+| 序 | 提交 | 内容 | 单独检出能跑绿吗 |
+|---:|---|---|---|
+| 1 | `feat(lock): 写入侧统一上锁模块`（B3-a） | `state_file_lock.mjs` + 测试 + `secure_profile_files.sh` 委托 + preflight sweep | ✅ 纯增 |
+| 2 | `feat(verdict): 投递判定唯一实现, 判不出写 unknown` | `submission_evidence.mjs`（判定部分）+ 夹具（含 6 张假成功横幅原文）+ 测试 | ✅ 纯函数自带测试 |
+| 3 | `feat(evidence): 整页截图, 文件名由判定决定` | `cdp.mjs --full-page` + `captureEvidence` + 3 份 -auto 说明书截图段 | ✅ |
+| 4 | `feat(contract): 三驱动统一退出契约` | `driver_contract.mjs` + 三驱动接 `emitOutcome`/删内联成功正则/Lever 判定收归 node 侧 + 漏斗 `validateOutcome` | ✅ 驱动替身测试（gh/ashby 已有 harness 体例，lever 照建） |
+| 5 | `feat(answers): 每条投递全问答随 outcome 上交`（F6） | 三驱动填空函数挂 `recordFill` + 契约 answers 字段测试 | ✅ |
+| 6 | `feat(ledger): 投递账本, record_apply_outcome 成为唯一写账人` | `submission_ledger.mjs` append/readAll + 漏斗接线 + append-only 测试 | ✅ |
+| 7 | `feat(derive): 三个数变一个数` | `SUBMITTED_WHERE_SQL` + dashboard/diagnostics/queue/report 四读点换谓词 + rebuild 命令 + 幂等测试 | ✅ |
+| 8 | `fix(history): 历史 183 条入账标 legacy, Directive 7 条照证据更正` | `backfill-legacy` + correction + **拍板人点头后才跑 `--apply`**；单独成提交、单独可回退（改变用户可见数字） | ✅ |
+| 9 | `test(guard): 判定唯一实现与账本唯一写点守卫` | 源码扫描守卫（驱动禁本地成功正则 / 账本只许漏斗写）——**守卫必须站在被守代码之后**（Round 24 教训） | ✅ |
+
+包 1 = 提交 1-3（地基与留证），包 2 = 提交 4-7（契约与正典，互相耦合勿拆轮），包 3 = 提交 8-9。
+9 个提交全部完成前不推送——与批次 A/B 同规矩。
+**现有真实用户零变化对照（照惯例）**：两棵 `git worktree --detach` 树、同一份夹具、真实档案只读物化进
+隔离家目录、跑前跑后 stat 快照逐行零差异；**唯二有意的可见变化单独报**：① 提交 8 的数字下降（拍板项）
+② 截图文件名后缀换新（`post_submit` → `after_<判定>`）。
+
+## 14.11 需要拍板人一句话的事（唯一一件）
+
+**Directive 那 7 条要不要照证据更正。** 现状：看板把它们计在「已投」里；证据：7 张截图页面明写
+「没能提交」（取证报告逐张核过，是本项目「文件名说谎」bug 的唯一现场物证）。更正后「已投」总数
+降约 7。我的建议是更正（数字变真是本阶段的名字），但**这是他看得见的数字变化，按红线不替他决定**。
+选「不更正」也有正当落法：correction 行照记（账本诚实），rebuild 对 legacy 行只补不翻——
+两种落法工程上都支持，等一句话。
+
+## 14.12 验收标准（给 verify）
+
+**拍死的两条（master-plan 阶段 1 原文，一字不改）**：
+
+- **V1 三个数变一个数**：真实库只读副本上跑 backfill+rebuild 后，`submitted_at 非空` /
+  `status ∈ SUBMITTED_STATUSES` / 账本 settled-submitted 计数**三者相等**；dashboard、
+  queue_diagnostics、apply_report 三个出口打出的「已投」是**同一个数字**（实跑三个命令对数，
+  不接受读代码推断）。
+- **V2 假成功夹具**：6 张 Directive 假「成功」截图的横幅原文逐条喂 `submissionVerdict` →
+  **全部 `not_submitted`，零个 `submitted`**。
+
+**补充（我的）**：
+
+- **V3 无默认成功钉死**：① 空字符串 / 乱码 / 与两表皆无关的正文 → 全部 `unknown`；② 两组同时命中的
+  构造样张 → `unknown`；③ 源码级断言：全链 grep 不到任何「unknown → submitted」的转写路径，且
+  `record_apply_outcome` 只在 `verdict==='submitted'` 时进成功分支（先红后绿：先把旧 Ashby 正则
+  的行为写成会红的断言，看它红，再接新判定器变绿）。
+- **V4 规则-夹具全覆盖**：遍历导出的 `CONFIRM_PATTERNS`/`DENY_PATTERNS`，每条规则的 `fixture`
+  文件存在且喂进判定器命中该规则——**缺一条夹具测试即红**。
+- **V5 守卫先红后绿**：源码扫描守卫（驱动内本地成功正则 / 账本第二写点）先构造违例看红、再看绿。
+- **V6 账本纪律**：append-only（写入后文件前缀哈希不变，只许变长）；correction 覆盖语义正确；
+  `rebuild --apply` 连跑两次第二次 diff 为空（幂等）；`rebuild` 默认 dry-run 不碰库（stat 断言）。
+- **V7 退出契约**：三驱动替身各跑五种结局，断言退出码 0/2/3/4/1 与 JSON outcome 一致；枚举外字符串
+  喂漏斗 → 响亮失败非静默 skip；无 JSON 结果文件 → 合成 `crashed` 且账本有行。
+- **V8 全问答**：替身跑一次投递，断言账本行 `answers[]` 覆盖全部实际落笔字段、每条带 `source`，
+  且工作授权族附 provenance 快照；断言 answers **没有**被写进 jobs 表任何列。
+- **V9 留证**：整页截图高度 > 视口高度（--full-page 生效）；文件名后缀与账本 verdict 逐字一致；
+  落盘后 stat 600；`before_submit` 截图先滚到底（懒加载题可见——用长表单夹具页验证）。
+- **V10 历史迁移**：沙箱库跑 backfill → 账本行数 = 三格任一有值的行数；legacy 行全带
+  `legacy_unverified`；correction 恰好 7 条且各带证据指针；25 条错位行归一；**除 Directive 7 行外
+  逐行零变化**（新旧 DB 全表 diff）。
+- **V11 惯例项**：CI 四步本地串行全绿 + `demo:check` exit 0；创始人家目录跑前跑后 stat 逐行零差异
+  （测试全程 `MRWEIRDO_HOME` 隔离）；`/tmp/mrweirdo-onboard` 文件数不减；两棵树对照表交账，
+  唯二有意变化（§14.10 末）单列不混入「零变化」。
+
+## 14.13 讨论中辩驳过的方向（第 5 轮）
+
+**❌ 方向 18：正典放 `jobs` 表自己——三个格子选 `status` 当权威，另两个改成跟着它写，不新建账本。**
+最小改动，一个 UPDATE 语句的事，且不引入新文件。**否决理由**：它只统一了「今天的赢家」，没消灭
+「多处写入、彼此漂移」的机制——下一个人再加一列（比如阶段 3 的 confirmed_at 家族）时，
+没有任何东西阻止第四个数出现。而且表列是原地改写的，Directive 那种「当年写错了」的事故会**再次
+无痕消失**；账本的 correction 行恰恰把「错过、后来更正了」变成永久可查的历史。career-ops 把
+「永不允许第二正典」写成教义并配迁移测试，就是在防这条最省事的路。
+
+**❌ 方向 19：判定器沿用三驱动现有正则，只删 Ashby 肇事的那一支 `already applied…`。**
+一行删除就能让 6 张假成功不再复发，风险最小。**否决理由**：① 三套实现还在漂移（本轮实测同一段
+失败文案 Ashby 判 true、Greenhouse 判 false——同一个产品对同一页面两个答案）；② Lever 的第四套
+藏在注入页面的 helpers 里，node 侧守卫根本看不见它；③ 「删一支」解决的是这一支，
+label-key-binding 的教训是**结构在发作**——不换集合语义 + 夹具制，下一支肇事正则只是没写出来。
+
+**❌ 方向 20：整页截图对 PII 太敏感，改成只截「确认横幅区域」的小图。**
+隐私面小、文件小、看起来更「克制」。**否决理由**：取证报告第四节的根因就是「留证机制从一开始就没
+对准要留的东西」——只截横幅 = 只留判定的证据、不留「当时填了什么」的证据，而后者才是历史 183 次
+不可考的痛处（R4 的原话：否则下次再出同类问题，一样查不出来）。隐私的正解是 600 上锁（B3-a 并入的
+理由之一），不是把证据剪掉。
+
+**❌ 方向 21：全问答落盘直接复用 `answer_provenance.json`，不在账本里再存一份。**
+一处留痕，看起来更「唯一正典」。**否决理由**：两者记的是不同的事实——provenance 记「档案里这格
+是谁定的」（跨投递、随档案演化原地更新），账本 answers 记「**那一次投递**实际打到表单上的是什么」
+（一次性、永不再改）。把一次性事实塞进会演化的文件，等于把「当时」和「现在」再次变成同一个字节
+——本项目刚为这个病修了一整轮（§13 全部）。正确关系是账本行**快照引用** provenance（ADR-16）。
+
+**❌ 方向 22：历史 183 条全部按「文件名 + 现存截图」重判一遍，能翻案的都翻案。**
+听起来比「只更正 7 条」更彻底。**否决理由**：输入不存在——50 张截图之外的 130+ 次投递连一屏都没有，
+而 50 张里 48 张拍的是顶部或确认页、判不出实质内容（取证逐张核过）。「重判」在没有输入的地方
+只能靠猜，猜出来的 `submitted` 与编造同罪。彻底 ≠ 把无证据的格子也填满；彻底 = 有证据的全办
+（7 条办了）+ 无证据的如实标注（`legacy_unverified`）。
+
+**❌ 方向 23：退出契约先只上 Greenhouse（存量 88%），另两家下一阶段再接。**
+改动面小、最快见效。**否决理由**：验收拍死的是「三个数变一个数」，只接一家 = 账本里 Greenhouse
+说话算数、另两家继续旧病，同一张报表上又是两种可信度——这正是「同一事实多份」换了件衣服。
+且 Lever/Ashby 的接线量并不大（Lever 489 行有余量；Ashby 是删正则换 import，净减）。

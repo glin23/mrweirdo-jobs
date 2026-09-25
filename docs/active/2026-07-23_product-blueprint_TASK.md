@@ -343,7 +343,27 @@ Spawned_subtasks: none
 - Round 56: lead 派 arnold-verify 第 5 轮验收阶段 0（完全独立实测，施工记录缺失更不采信自述；已提醒 lead 误报教训——链上复核须用独立路径）。**verify 判「可推」前不推送**
 - Round 57 **暂停记录（2026-07-30 凌晨）**: 基础设施一夜 10 次中断（断流卡住 / 连接中断 / 529 过载），builder 与 verify 均反复被杀。verify 第 5 轮已落盘章节骨架（VERIFY_REPORT `:2343`），验到 A1 门语义探针为止。**lead 按预算停止重试**，等基础设施稳定后续验
 - Round 57 暂停时的现场快照: tip `264a7af`、本地领先 origin/main **26** 提交未推、工作区脏 3 文件（TASK.md 与 hook_hits 为 lead 改动；BUILD.md 仅 frontmatter 两行为 builder 遗留）、npm test **257/257 全绿**（lead 干净检出验过 + 链上 6 提交逐个验绿）
-- Round 57 续跑清单（谁接手谁照办）: ① 续 verify 第 5 轮（从 A1 接，按「先最小证据链、每项落盘」的优先级）② verify 判「可推」→ lead 推送（拍板人已授权，推前知会）③ builder 补 BUILD §85（一次 Edit，60 行内）④ 推送后进阶段 1「数字变真」（方案见 `docs/specs/master-plan.md`） **持 F-1 但学校还没批下工作许可的学生，产品是永远拦着他，还是给一条别的路？** 这是产品取舍，工程定不了。verify 并建议把三个驱动「年满 18」无条件答 Yes 与 §10-C 的 ①③④ 一起排进 B2，否则引导里「问了满 18 岁」这半句**现在是纯负收益**
+- Round 57 续跑清单（谁接手谁照办）: ① 续 verify 第 5 轮（从 A1 接，按「先最小证据链、每项落盘」的优先级）② verify 判「可推」→ lead 推送（拍板人已授权，推前知会）③ builder 补 BUILD §85（一次 Edit，60 行内）④ 推送后进阶段 1「数字变真」（方案见 `docs/specs/master-plan.md`）
+- Round 58: arnold-verify 完成第 5 轮（基础设施恢复后续跑）。**判「可推」，质量分 4/5 放行，真 bug 0**。全部独立实测：A1 门语义 14 形态全对、A2 真值表 10×5 逐格 19/19（不写格磁盘实测 null）、A3 接缝（defer 独立 note+类目、答过零重问）、A4 问句零术语、A5 三层零泄漏（中文档案喂 125 条模板）、A6 真实档案 125 键仅 1 键变且恰为设计点名那句、B 七档案端到端 42/42、C1-C14 **14/14 全做**、8 提交独立路径逐个检出全绿（含 lead 没盖到的两个）。扣分：一处未申报偏离（门谓词多读严格类型值——方向安全且为真实用户必需，实证核过；因 BUILD §85 缺失无人申报）+ 2 处注释漂移 P3
+- Round 58: arnold-ops 完成收口提交与推送。`e124773`（10 个 docs 文件，+1890/-6）连同此前 26 个共推 **27 提交**；`origin/main`：`8f9e546` → **`e124773`**，本地与远端一致。**阶段 0 完成**——版本分叉消灭，线上第一次拿到身份问答全套修复
+- Round 59: lead 进阶段 1「数字变真」，派 architect 出施工设计（唯一正典落点 + 统一退出码 + 全问答落盘 + 整页留证，整合 DESIGN §13.7/ADR-9 与 ARCH_NOTES §11 现成方子）
+- Round 60: architect 完成阶段 1 设计（DESIGN §14，+515 行，Edit 追加零覆盖）。**唯一正典** = `log/submissions.jsonl` 追加账本、唯一写账人 `record_apply_outcome.mjs`、DB 三列降派生缓存 + 一键重算、四读点走同一条谓词（ADR-13）。**实测抓到肇事者**：Ashby 正则把 `already applied…` 失败横幅判 `success=true`，现网代码当场复现——6 张假成功截图即它所为。历史 183 条标 `legacy_unverified` 不重算，仅 Directive 7 条有截图铁证走更正（ADR-17）。**B3-a 上锁并入本阶段**（账本是全库 PII 密度最高的新文件）。切分 9 提交 3 包
+- Round 60 lead 两条裁决: ① UNCLEAR-1（answers 途经 /tmp 中转文件无锁）→ **并入本批上锁**，谁写谁锁份内事 ② §14.11（Directive 7 条更正后「已投」183→约 176）→ **照 ADR-17 更正**。判据：关卡 10 拍的「数字变真」正是为此，7 条有页面铁证「couldn't submit」，留着才是违背拍板；**已通知拍板人数字将下降（通知非请示），其余 176 条无证据定真假、标 legacy 不动**
+- Round 60: lead 派 builder 施工阶段 1 包 1（提交 1-3：锁 + 判定器 + 留证）
+- Round 61: builder 完成包 1 + §85 补账（5 提交 `9a490cb`→`987a4f0`，未 push）。判定唯一实现 `submission_evidence.mjs`（集合语义、双命中/零命中=unknown、无默认成功）；**Ashby 肇事正则拔除**（驱动 + `ashby_helpers.js:763` 同款一并，后者不在设计文件清单——清单遗漏已申报）；6 张 Directive 假成功横幅转写回归夹具永久钉死；写入侧上锁全接线（含 run-tmp 700、UNCLEAR-1 兑现）；整页留证 `--full-page` + 判先于拍 + 文件名代码起 + 落盘即 600
+- Round 61 builder 报三件: ① `ashby_helpers.js` 设计清单遗漏（已改并申报，建议 architect 补录）② demo:check 照设计字面写会 chmod 用户 50 张截图，加 `MRWEIRDO_LOCK_SWEEP=report` 只看不动模式（请 architect 认可回写）③ 突变复原差点冲掉未提交实现，靠备份救回零丢失——小步提交纪律再次保命
+- Round 61 证据: 链上 4 提交独立干净检出全绿（257→268→277→285）、tip CI 四步 0/0/0/0、demo:check 0、新模块覆盖 95.0%/89.5%、创始人家目录 841 条 stat diff=0、共享目录 168→168
+- Round 61 **lead 独立复验**: 干净检出 tip `987a4f0` → **285/285 pass、fail 0**，CI 四步 + demo:check 全 0。属实
+- Round 61: lead 派 verify 验收包 1（§14.12 V2/V3/V4 + BUILD §88 两条 preflight 命令；V9 整页高度需活 Chrome，无则如实标跳过）
+- Round 62: verify 完成第 6 轮。**可推，4/5，真 bug 0**。V2 六张假成功全判非 submitted + 309 真成功判对；V3 无默认成功 6 处突变全被咬住；肇事正则全库零残留；上锁沙箱 17 项全对且 demo:check 不碰用户截图；builder 三条申报全部成立。扣分三条归包 2：① 英文否定「not successfully submitted」会误判 submitted（补 deny 规则）② sweep 不下潜已 700 的嵌套子目录（P3）③ **jobvite/icims 半成品 helpers 藏同一句肇事文案**（建议提前拔）。V9 无活 Chrome 如实跳过，首个真实批次人工看一眼闭环
+
+**关卡 11 决策**：🩺 🔒 [用户] 拍板（2026-07-30）—— **推送规矩改定**：今后每包只要 ① verify 判「可推」② lead 干净副本复验全绿，**直接推并知会，不再逐次请示**。不变的例外：**真投递每批必问、删除必问、超 30/天 档必问**。已存进长期记忆
+
+- Round 62: lead 推送包 1（`e124773` → **`987a4f0`**，本地与远端一致）；派 builder 施工包 2（提交 4-7：统一退出契约 + 全问答落盘 + 账本与派生重算，并入 verify 三条扣分项）
+- Round 63: builder 完成包 2（5 提交，tip `1880fd0`，未 push）。① 统一退出契约 `driver_contract.mjs`（七码表、emitOutcome 唯一出口、旧词响亮拒绝；GH/Lever 成功判定收编进唯一判定器；失败页第 1 次短路不再烧 4 次重试）② 全问答落盘（只进账本不进 jobs 表）③ 唯一正典账本 `log/submissions.jsonl` + 唯一写账人 + rebuild 幂等 + preflight「绕过漏斗写库」硬检查 ④ verify 三扣分全修。**V5 实跑：158/182/183 → 三读点同出 182**（全等待包 3 backfill）。顺手修 dashboard 今日额度丢「已确认」行的真 bug（已申报，方向收紧）。偏离 7 处（§97），2 条建议 architect 回写
+- Round 63 证据: 测试 285→**325 全绿**、4 提交独立检出各绿、CI 四步 0/0/0/0、新模块覆盖 100%/95.7%、真实 jobs.db 零写入（mtime/size 前后同值）
+- Round 63 **lead 独立复验**: 干净检出 tip `1880fd0` → **325/325、CI 四步 + demo:check 全 0**。属实
+- Round 63: lead 派 verify 第 7 轮验收包 2（V5-V8 + 三扣分复核 + dashboard 顺手修的严格度照 R5 偏离 ②） **持 F-1 但学校还没批下工作许可的学生，产品是永远拦着他，还是给一条别的路？** 这是产品取舍，工程定不了。verify 并建议把三个驱动「年满 18」无条件答 Yes 与 §10-C 的 ①③④ 一起排进 B2，否则引导里「问了满 18 岁」这半句**现在是纯负收益**
 - Round 31 arnold-builder 完成 B0 + B1（3 个本地提交 `8eb581c` / `66882ab` / `5e4f76a`，未 push，`origin/main` 仍 `8f9e546`）: ① **B0 洞 2 修完**（守卫放宽成只认题面、`:1142` 无选择器也进 pending、去重键改题面），`ashby_apply_driver.mjs` **1170 → 1170 净增 0**；② **B0 附加**：动态 note 前缀规则落地，但**不是「前缀→类目」查表**（偏离 1，见 BUILD §52）——前缀只否掉唯一那条不看档案的结论 `agent_profile_backed`，类目仍由题面给、并统一过 `categoryAnswered`；`relocation_commitment_policy_unset` 进精确表；③ **B1 全做完**：新建 `shared/work_auth_identity.mjs`（纯函数，5 情形 × 4 字段 20 格全断言，行/分支/函数覆盖率均 100%），门在阻塞时同时给「卡在哪 / 三条查证去处 / 查到就能续上」并带 `asked_in_this_batch`（判据取自 `answer_provenance`，不是从 `visa_status` 非空猜），引导说明书 A0 改三个是非题、删掉「留 null 让门去问」那段、A2 加满 18 岁半句
 - Round 31 证据: `npm test` **190 → 212 全绿**；CI 四步 × **链上三个提交**各自在 `git worktree --detach` 干净检出上跑（全 exit 0）；`demo:check` exit 0；`~/.mrweirdo-jobs/` 跑前跑后 stat 快照 7205 条**逐行零差异**
 - Round 31 **唯一一处真实用户可见的行为改变，需 verify 重点复核**: 地点类目的「已答过吗」谓词从 `commitments 非空` 改成**按城市判**（偏离 2）。60 格新旧对照 **57 格逐字一致**，变的 3 格全在地点族——他答过 Bay Area/NY/US 却没答过 Denver，旧谓词让报告说「档案里有，别问用户」而驱动手里根本没这个值 = **行无声卡住**；改后变成问他一句。**代价：将来可能被多问一次没答过的城市**

@@ -2,8 +2,8 @@
 Status: done_pending_review
 Owner: arnold-verify
 Reads: docs/active/2026-07-23_product-blueprint_TASK.md, docs/active/2026-07-23_product-blueprint_DESIGN.md, docs/active/2026-07-23_product-blueprint_BUILD.md, docs/active/2026-07-23_product-blueprint_RISK_REPORT.md, docs/active/2026-07-23_product-blueprint_FORENSIC.md, PROJECT_MEMORY.md, PROJECT_CONTEXT.yaml, .claude/arnold/roles/builder.md, .claude/arnold/roles/lead.md, shared/apply_gap_report.mjs, shared/missing_field_questions.mjs, shared/personal_fact_gate.mjs, shared/record_profile_answers.mjs, shared/answer_provenance.mjs, shared/answer_routing.mjs, shared/greenhouse_apply_driver.mjs, shared/ashby_apply_driver.mjs, shared/profile.template.json, shared/answer_bank.json, shared/supervisor_preflight.mjs, shared/apply_batch.mjs, scripts/secure_profile_files.sh, test/apply_gap_report.test.mjs, test/greenhouse_work_auth_driver.test.mjs, .claude/skills/mrweirdo-onboard/SKILL.md, .claude/skills/mrweirdo-onboard/references/intake-and-profile.md, .claude/skills/mrweirdo-onboard/references/run-and-database.md, .github/workflows/ci.yml
-Mode: strict（第 1 轮 批次 A）/ daily（第 2 轮 批次 B 的 B0+B1）/ daily+（第 3 轮 Round 35，含不可逆动作取证）/ daily+（第 4 轮 Round 37，回炉三件聚焦复核）/ daily+（第 5 轮 阶段 0，施工记录缺失全独立实测）
-Iterations: 6
+Mode: strict（第 1 轮 批次 A）/ daily（第 2 轮 批次 B 的 B0+B1）/ daily+（第 3 轮 Round 35，含不可逆动作取证）/ daily+（第 4 轮 Round 37，回炉三件聚焦复核）/ daily+（第 5 轮 阶段 0，施工记录缺失全独立实测）/ strict（第 6 轮 阶段 1 包 1，判定+锁+留证全独立实测）/ strict（第 7 轮 阶段 1 包 2，契约+账本+谓词全独立实测）
+Iterations: 7
 Updated: 2026-07-30
 Type: VERIFY_REPORT
 Reads_round2: 设计稿（对号入座问法 / Ashby 阻塞信号 / 批次 B 验收标准 / 方法论复盘 那几节）, 施工记录第 45-54 节, PROJECT_MEMORY.md, PROJECT_CONTEXT.yaml, shared/work_auth_identity.mjs, shared/personal_fact_gate.mjs, shared/apply_gap_report.mjs, shared/ashby_apply_driver.mjs, shared/missing_field_questions.mjs, shared/apply_batch.mjs, shared/supervisor_preflight.mjs, shared/answer_provenance.mjs, shared/paths.mjs, shared/onboard_tmp.mjs, shared/local_db.mjs, shared/cover_letter_materials.mjs, scripts/intake_resume.sh, scripts/demo_check.mjs, test/ashby_driver_harness.mjs, test/ashby_pending_note.test.mjs, test/work_auth_identity.test.mjs, test/helpers.mjs, 引导说明书 intake-and-profile.md, .github/workflows/ci.yml
@@ -2509,3 +2509,237 @@ scripts/coverage_matrix_check.mjs:145 / 191 / 202       /tmp/coverage_*.json
 - 真值表模块 `shared/work_auth_identity.mjs`：Q3 问句「你现在手上已经有一份批下来的、允许你在美国工作的证件吗？」与 DESIGN §13.3.1 逐字一致，**问句无 CPT/OPT/EAD**；Q5 问句无术语；Q4_NOTICE 含「这三个字会被原样打到真实雇主的表单上」原话（关卡 8 决定一）。`WHERE_TO_CHECK` 第 3 条含「EAD 卡（Employment Authorization Document…）」——属指路说明（派遣单豁免项），且已按 §13.3.2 挪到 Q4 旁边（`where_to_check_ref`）而非门前。
 - 「不写」实现形态：模块用「`answers` 里**不出现该键**」表达「不写」，并返回 `unwritten_paths` 清单——与 DESIGN「不写 ≠ false ≠ 空串」语义相容（档案上该格保持 null 由写回口保证，待实测确认）。
 - 第 9 行纪律（Q5=unclear 不写、不许拿 Q4 补）代码注释与实现均在（`typeof input.sponsorshipNeededFuture === 'boolean'` 才写）；第 10 行（漏斗没跑过）由 `identitySituation` 直接 throw 兑现「Fail Fast，缺答案是调用方 bug」。
+
+---
+
+# 第 6 轮验收 — 阶段 1 包 1（4 代码提交 `9f73b3d` 锁 / `713aa4c` 判定 / `c3dd9be` 留证 + `9a490cb` §85 补账）｜2026-07-30
+
+## R6-§0 验到哪了（断线接续锚点）
+
+- 状态：进行中。验收对象 tip `987a4f0`，本地领先 origin/main 5 提交。lead 已独立复验干净检出 285/285 + CI 四步 + demo:check 全 0——本轮不重复，只抽查。
+- 计划项：V1 假成功夹具 + 自造刁钻文案 → V3 无默认成功（读码+突变）→ 肇事正则全库反扫 → V-锁（§13.4 沙箱 + §88 两条 preflight 命令 + demo:check 不碰真截图）→ V-留证（判先于拍/名随判定/600；V9 需活 Chrome 否则如实跳过）→ 老坑回归（三态读法/突变抽查/真实用户零变化）→ builder 三条申报逐条判断。
+- 硬边界遵守情况：零 push、零 git 写、不改 TASK、`~/.mrweirdo-jobs/` 只读（收尾附 stat 证据）、不真投、不开浏览器碰真实网站。
+
+## R6-§1 验收范围
+
+- 本包适用验收标准：DESIGN §14.12 之 **V2 / V3 / V4**（V1 三个数变一个数属包 2-3 的账本与谓词，本包不适用；V9 整页高度需活 Chrome，见 R6-§5）。§13.4 上锁验收段、§13.7 留证规则。
+- Mode: strict（改核心数据流 + 安全边界，lead 派遣单点名独立实测）。
+
+## R6-§2 5 维高危区评估（测试前先做）
+
+| 维 | 本包对应物 | 密度 |
+|---|---|---|
+| 核心业务逻辑 | `submissionVerdict` 集合语义——「投出去了没有」的唯一判定 | 最高：夹具全遍历 + 自造样张 + 突变 |
+| 安全边界 | PII 上锁（截图/求职信/账本/run-tmp 600/700）；demo:check 不许改用户真实文件 | 高：沙箱 stat 断言 + report 模式双验 |
+| 集成点 | cdp.mjs 截图收口、preflight sweep 接线、-auto 说明书改判定调用 | 中：接线读码 + 沙箱实测 |
+| 用户体验主流程 | demo:check 主流程冒烟（ci_smoke.main_chain 启用） | 中：只读复跑 |
+| 性能 | 整页截图 +1-2s/次（设计已显式取舍） | 低：不测 |
+
+（各项结论随验随写，见下。）
+
+## R6-A V2 假成功夹具 + V4 规则-夹具全覆盖 + 自造刁钻样张 — ✅ 通过，附 1 条 ⚠️ 风险
+
+**方法**：独立探针（scratchpad `probe_verdict.mjs`），只 import 出货 `submission_evidence.mjs`，不经测试套件。
+
+- **V2**：6 张 Directive 假成功横幅夹具（304/305/306/307/308/311）逐张喂 `submissionVerdict` → **6/6 `not_submitted`**（deny 命中 `couldnt_submit`+`already_applied` 双条，confirm 零命中——横幅里的陷阱句「Thank you for your interest!」没有误触 `thank_you_for_applying` 正则，因为该正则要求 for 后接 applying/submitting/your application）。309 真成功横幅 → `submitted`。夹具保真度已对照 FORENSIC.md:61/193 的横幅原文（含弯引号 `couldn’t`），一致。
+- **V4**：遍历导出的 `CONFIRM_PATTERNS`(6)/`DENY_PATTERNS`(6) 共 12 条规则，每条 fixture 存在且喂进判定器**恰好命中本规则** 12/12 ✅（出货测试套件另有同款遍历，本探针独立复证）。
+- **自造 11 段刁钻样张**：双命中（收到+没提交）→ unknown ✅；纯中文成功文案零命中 → unknown ✅（诚实：不懂就说不懂）；全大写 → submitted ✅（i 标志）；中英混合确认+报错同屏 → unknown ✅；直引号 `could not` → not_submitted ✅（正则同时容纳弯/直引号）；URL 陷阱 `/thanksgiving` 不误触 `/thanks` ✅；**URL 确认信号 + 页面否认文案 → unknown ✅（URL 不是旁路，集合语义兑现）**；空对象/无参调用 → unknown 不抛错 ✅。
+- **⚠️ 风险（非本包回归，记录在案）**：英文否定陷阱 `Your application was not successfully submitted.` → confirm 命中 `ashby_success`、deny 零命中 → **判 submitted**。正则无否定前瞻，「not + 确认短语」方向的误判在机制上存在。缓解事实：① 现有全部真实失败横幅（Directive/Binti/系统错误）都有独立否认词，全被 deny 表接住；② 集合语义下补一条 deny 规则 + 夹具即可堵上（一行 + 一文件）。**建议包 2 顺手补 `not successfully submitted|was not submitted` 一条 deny 规则**。不构成回炉：无任何证据表明真实 ATS 用此措辞，且错误方向已被 6 条 deny 规则实证覆盖已知失败形态。
+
+## R6-B V3 无默认成功路径 — ✅ 通过（读码 + 4 处突变全部被测试咬住）
+
+**读码**：`submissionVerdict` 默认 `verdict='unknown'`，`submitted` 唯一赋值点条件为 `confirm>0 ∧ deny==0`；集合语义无短路；`evidenceFileName` 对 after_submit 无合法判定直接 throw（「never name a file success on faith」）；`captureEvidence` 页面读不出 → 空输入 → unknown（显式语义非吞错）。
+
+**突变实测**（每次突变→跑 `test/submission_verdict.test.mjs`（基线 9/9）→从 scratchpad 备份复原→`git diff` 0 行 + shasum 与 HEAD 逐字节一致；未用 git checkout，吸取 BUILD §91 方向 1 教训）：
+
+| 突变 | 结果 |
+|---|---|
+| 删 `not_submitted` 分支 | **2 红** ✅ |
+| 默认值 `unknown`→`submitted`（制造默认成功） | **3 红** ✅ |
+| submitted 条件去掉 `deny==0` 排他（双命中算成功） | **3 红** ✅ |
+| 删除 `already_applied` deny 规则整行 | **1 红**（V2 夹具测试当场抓住）✅ |
+
+## R6-C 肇事正则全库反扫 — ✅ 拔干净，附 2 处同族变体（半成品 helpers，非本包回归）
+
+**同款模式（`already applied` 当成功信号）全库 grep：零残留**。现存命中仅 3 处且全部合法：`submission_evidence.mjs:47`（deny 规则——方向已反转）、同文件注释、`dedupe_jobs.mjs:81`（去重 note 文案，非判定）。`ashby_helpers.js:760` 的 `checkSuccess` 现只认 `successfully submitted`，肇事支已拔；且 3 份 -auto 技能说明书判定段已全部改走 `submission_evidence.mjs` CLI（实查 lever/ashby/greenhouse 三份），`Ashby.checkSuccess` 无 -auto 调用方。驱动侧 `submitAndCheck`（`ashby_apply_driver.mjs:438`）实查已委托 `submissionVerdict`，node 侧判定。
+
+**换方向再扫（label-key-binding 教训应用）挖出同族变体**：`jobvite_helpers.js:586` 与 `icims_helpers.js:566` 的 `checkSuccess` 把 **`thank you for your interest` 判成功**——而 Directive 失败横幅正文恰恰含这句（「Thank you for your interest! You have already applied…」）。若这两个平台出现同类拦截页，同一事故会重演。缓解事实：两者是 v0.8 alpha 半成品（SKILL.md 自标「not yet live-verified」）、仅走用户单 URL 带提交门的技能、不在 -auto 批次里；builder §90 已申报「5 个半成品 helpers 属阶段 4 收编」但**未点名这条具体毒枝**。🟡 **建议阶段 4 收编时（或包 2 顺手）先删这两处 `your\s+interest` 分支**——一行删除，不用等整体收编。另核 `greenhouse_apply_driver.mjs:1274` 的 `thank you for your interest` 支：受 URL `/confirmation` 硬信号约束（合取），非裸文案判定，风险低，属包 2 提交 4 已排队的收归范围（§90 申报一致）。
+
+## R6-D 上锁（§13.4 + BUILD §88 两条 preflight 命令独立复跑）— ✅ 通过，附 1 条 🟡 P3 嵌套盲区
+
+**沙箱**（scratchpad `lockhome/`，造齐 §13.4 全部载体 + `log/submissions.jsonl` + `run-tmp` 共 17 个文件/目录，全 644/755）：
+
+- **sweep 默认档**：`MRWEIRDO_HOME=沙箱 node shared/state_file_lock.mjs sweep` → locked=17、failed=0、exit 0；**stat 逐项断言 18 条全对**（8 文件 600、4 目录 700、目录内文件 600、嵌套子目录 700+600）。
+- **sweep report 档**（`--report`）：apply=false、would_lock=17、locked=0，**stat 复查全部仍 644/755，零改动** ✅。
+- **空家目录**：missing=12、exit 0、不报错、不创建任何文件（`ls -A` = 0）✅。
+- **preflight 双模式（§88 两条命令独立复跑）**：report 模式（`MRWEIRDO_LOCK_SWEEP=report`）→ WARN `pii_lock_sweep` would_lock≥1、文件仍 644；默认模式 → locked、文件变 600。与 §88 自述一致 ✅。
+- **demo:check 不 chmod 用户截图（重点项）**：三层证据 ① 代码链实查：`demo_check.mjs:153` spawn preflight 时注入 `MRWEIRDO_LOCK_SWEEP=report`（env 为 `{...process.env, ...}` 合并、正确传递），preflight `:176` 据此 `apply:false` ② 沙箱实测：644 截图 + 644 cover_letter.pdf 的家目录跑 `npm run demo:check`（含 jobs.db，preflight 真跑到 sweep），跑后 **stat 仍 644/755 零改动** ③ 真实家目录只读旁证：50 张真实截图至今全部 `rw-r--r--`（builder 与 lead 已各跑过 demo:check，若 report 模式失灵早就被 chmod 了）✅。
+- **写入侧接线读码核对**：`cdp.mjs:211` 截图唯一收口落盘即 `lockFile`；`apply_batch.mjs:223` run-tmp `lockDir(recursive)` + `:105` 结果文件 `mode:0o600` 出生即锁 + `:452` 汇总锁；`cover_letter_materials.mjs:304-305` HTML/PDF 落盘即锁。四个写入点全接上 ✅（cdp 真实截图路需活 Chrome，与 V9 一并如实跳过，见 R6-E）。
+
+**🟡 P3（新发现，builder 未申报，非本包必修）**：`sweep()` 对**已是 700 的嵌套子目录不下潜**——`state_file_lock.mjs:117-119` 只在子目录 mode≠700 时才触发 `lockDir(recursive)`；实测「子目录 700 + 内有 644 文件」时该文件被 sweep 跳过（preflight 默认档 locked=1 而嵌套 b.png 仍 644）。**今天不咬人**：实查真实家目录 4 个 PII 目录全部平铺零子目录，且写入侧（cdp/apply_batch）对新文件出生即锁，此洞只在「已锁子目录里被第三方放进 644 文件」时暴露。建议包 2 一行修（`entry.isDirectory()` 分支无条件 `lockDir(path,{recursive:true})`，幂等不增成本）。
+
+## R6-E 留证（判先于拍 / 名随判定 / 落盘 600）— ✅ 通过；V9 整页像素高度如实跳过
+
+**方法**：独立探针（scratchpad `probe_evidence.mjs`），注入 runCdp 替身调用出货 `captureEvidence`，26/26 断言全过：
+
+- **判先于拍**：after_submit 的调用序列实测 `eval`（读页面）→ `screenshot`（拍照），文件名生成于判定之后 ✅。
+- **名随判定**：Directive 失败页 → `…_after_not_submitted.png`；真成功页 → `…_after_submitted.png`；页面读不出（eval 回非 JSON）→ 不抛错、`…_after_unknown.png` ✅。**非法 verdict（如 'success'）直接 throw**（「never name a file success on faith」）——文件名不可能再由 bash 字符串拼出 ✅。
+- **锁**：三场景截图落盘后 stat 全部 600、`log/screenshots` 目录 700（即使注入的 runner 不锁，captureEvidence 自己的 `lockFile` 兜住）✅。
+- **before_submit**：只拍不读页面（单次 screenshot 调用）、带 `--full-page` 旗、verdict=null ✅。调用方已传合法 verdict 时不重复读页面 ✅。
+- **V9（整页像素高度 > 视口、滚到底触发懒加载）**：**跳过——本机无活 Chrome**（`127.0.0.1:9222` 实探不通，且不许开浏览器碰真实网站）。代码层已核：`cdp.mjs:190-205` fullPage 路径先 `scrollTo(bottom)` → 等 800ms → `captureBeyondViewport:true`，旗子解析 `:363-365` 正确。建议 lead 下次真实批次首跑时人工看一眼首批截图高度即可闭环。
+
+## R6-F 老坑回归 — ✅ 通过
+
+- **三态真假读法零新增**：4 个代码提交改动文件全列（`git diff --stat e124773..987a4f0`，15 个代码/配置文件），**零个答案路径文件**（answer_routing / 驱动取值 / 模板均未动）；diff 新增行 grep 三态字段名（authorized_to_work / requires_sponsorship / visa_status / demographics / yes_no_defaults）**零命中**；`visa_status` 读点白名单守卫 + personal_facts_guard 重跑 **18/18 绿**。
+- **新测试突变抽查（非假绿证明，累计 6 处突变全部被咬住）**：verdict 4 处（见 R6-B）+ ⑤ `lockFile` 改假锁（谎报 locked 不 chmod）→ `state_file_lock.test.mjs` **3 红** ✅ ⑥ `captureEvidence` 删落盘 `lockFile` → `submission_evidence_capture.test.mjs` **2 红**（与 builder §87 自述突变 B 的 2 红完全一致，独立复现）✅。每次突变后复原并以 `git diff` 0 行确认。
+- **真实用户零变化**：本包不触答案路径（上条已证）；用户可见变化仅「截图文件名后缀换新」一条，正是 §14.10 声明的唯二有意变化之一（另一条数字下降属包 3，本包未动历史数据——`backfill/correction` 代码不存在于本包，实查无此模块）✅。
+- **全量回归**：所有突变复原后 `npm test` **285/285 pass、fail 0**（串行），工作区除 lead/architect 未提交文档稿与本报告外零脏文件。
+
+## R6-G builder 三条申报逐条技术判断
+
+1. **`ashby_helpers.js` 设计清单遗漏（已改并申报）**——**判断：改对了，且必须改**。实证：该文件 `checkSuccess` 与驱动内联正则是同一支肇事正则的两份拷贝，-auto 说明书此前正在调它；只删驱动那份 = 留一条活的假成功路。现查 `:760` 只认 `successfully submitted`、-auto 三份说明书判定已全部改走 evidence CLI、该函数已无 -auto 调用方。**同意补录进 DESIGN §14.2**（归 architect）；并提请注意 R6-C 挖出的同族毒枝（jobvite/icims `your interest`）builder 未点名。
+2. **`MRWEIRDO_LOCK_SWEEP=report` 模式（设计没写，builder 加）**——**判断：这是发现了设计缺口并正确补上，不是私自扩权**。设计只想到 preflight 补网上锁，没想到 demo:check（只读体检）也走 preflight——照字面写，一次体检就会 chmod 用户 50 张截图，「诊断」变「改动」，违反最小惊讶。实测三层证据（代码链 / 沙箱 644 保持 / 真实家目录 50 张至今 644）见 R6-D。**建议 architect 认可回写 DESIGN**，并把 `MRWEIRDO_LOCK_SWEEP` 写进 §14 环境变量语义（目前只活在代码注释里）。
+3. **突变复原差点冲掉未提交实现、靠备份救回**——**判断：自述可信，零残留**。验证：① tip 检出的 `submission_evidence.mjs` 与工作区 shasum 逐字节一致 ② 其自称「重做突变 B 得到真红 2 红」被本轮独立突变精确复现（同样 2 红）③ 285/285 全绿。教训本身（未提交状态只能用备份复原）已写进 BUILD §91，本轮验收全程照此执行（scratchpad 备份复原，未用 git checkout 复原未提交内容）。
+
+## R6-H §85 补账（`9a490cb`）核对 — ✅ 与第 5 轮独立实测一致
+
+§85.1 门谓词偏离申报与 R5-A1 的代为申报逐点一致（含「值只能开门不能关门」方向论证）；§85.2 C1-C14 对账表与 R5-C3 的 14/14 独立核对一致、落点提交对得上；§85.3 删句原文与 R5-A6「仅 1 键变化」一致，现查 `answer_bank` 模板尾句已无 `WORK_AUTH_SUMMARY` 渲染残留（`answer_templates.mjs:52` 的占位符生产方仍在但 ADR-12 已使其不读 visa_status，R5-A5 三层实测过，本包未触）。CHANGELOG Fixed 顶部 3 条在且内容与实际改动相符。**补账是补录不是新证据，措辞如实（自己写明「不重复自证」）**✅。
+
+## R6-§3 7 类测试技术覆盖
+
+① 等价类：verdict 三档结局各至少 3 例 ✓ ② 边界值：空串/无参/乱码 JSON/非法 phase/非法 verdict/空家目录 ✓ ③ 决策表：confirm×deny 2×2 全格（单确认/单否认/双命中/零命中）✓ ④ 状态迁移：before→after 两 phase + 判先于拍调用序 ✓ ⑤ 用例测试：demo:check 端到端沙箱 + preflight 双模式 ✓ ⑥ pairwise：N/A（参数空间 2×2 已被决策表穷尽，无需两两组合）⑦ 风险驱动：5 维定密度 + 6 处突变 + 换方向反扫 ✓。
+
+## R6-§4 5 轮回归循环记录
+
+①写测试：11+26 条探针断言，含 6 处「先看红」的突变（复现 bug 态）②跑全套：285/285 + demo:check 沙箱冒烟 ③红了辨析：demo:check 沙箱 exit=1 追因为假档案校验的正确失败（非 bug）；preflight 嵌套 644 未锁追因为 sweep 不下潜（真缺口，判 P3）④修后重跑：本轮零修（发现项全属排队包，见 R6-§6）⑤转 bug：无。
+
+## R6-§5 结论明细
+
+- ✅ 通过：V2（6 假成功全非 submitted + 309 真成功 submitted）/ V3（无默认成功，读码+6 突变）/ V4（12 规则夹具全覆盖）/ 肇事正则零残留 / §13.4 上锁全项 / §88 双模式复跑 / demo:check 零改动（三层证据）/ 留证契约 26 断言 / 老坑回归 / §85 补账。
+- ❌ 真 bug：**0**。
+- ⚠️ 风险 1：英文否定「not successfully submitted」判 submitted（机制性盲区，无真实语料佐证会出现；包 2 一行 deny 规则可堵）。
+- 🟡 P3 × 2：sweep 对已 700 嵌套子目录不下潜（今天零嵌套目录，写入侧兜底）；jobvite/icims 半成品 helpers `your interest` 判成功（同族毒枝，alpha 未上线、有提交门）。
+- 未覆盖（如实）：V9 整页像素高度（无活 Chrome）；cdp 真实 spawn 路径（同因）；chmod 失败分支（本机为属主造不出失败，builder §87 同样如实列过）。
+
+## R6-§6 Quinn 主动重构记录
+
+零重构。三条发现项均属包 2 / 阶段 4 已排队文件（驱动 / helpers / lock 模块），派遣单明令不顺手动排队项，且动了会打乱 §14.10 的提交切分。全部列明落点交 lead 排期。
+
+## R6-§7 质量 3 指标
+
+- 覆盖率：builder 自报 95.0%/89.5%（新模块）与缺口行清单如实，本轮抽验测试行为真实性（突变 6/6 咬住）而非复算数字。
+- `verify_self_miss_rate: 0%`（包 1 为本 verify 首验对象，本轮 3 条发现项无一属上轮该发现而未发现；如实报 0，非美化）。
+- 真 bug 数：0（⚠️×1 + 🟡×2 均未达回炉线）。
+
+## R6-§8 老坑清单核查
+
+`.claude/arnold/roles/verify.md` 不存在——项目未定义验收岗位补充说明。PROJECT_MEMORY 两条相关教训本轮兑现：「测试全绿≠测了什么」→ 6 处突变逐一验咬合；「假证据自查」→ demo:check 沙箱首跑发现 preflight 根本没执行（缺 jobs.db），补齐后才采信「零 chmod」结论（阳性对照思路）。
+
+## R6-§9 13 维深查（--strict）
+
+0 最高原则：未发现兜底遮盖，unknown 语义诚实 ✓ 1 并发时序：无新并发面（追加锁为幂等 chmod）✓ 2 数据一致性：本包不写 DB；文件名↔判定一致性已锁 ✓ 3 错误路径：唯一空 catch 为显式 unknown 语义（注释在）；cdp 失败 throw 不吞；sweep failed 收集上报 ✓ 4 边界值：见 §3 ② ✓ 5 数据隔离：登记表未填，跳过（单用户产品）6 移动端/浏览器：不适用（无 UI）；引号编码实测弯/直双容 ✓ 7 网络层：无新外呼 ✓ 8 性能资源：整页截图成本设计已显式取舍 ✓ 9 安全：PII 600/700 全链验证，report 模式防误改 ✓ 10 用户体验：demo:check 报 WARN 会说人话（Report-only mode 注释）✓ 11 未来扩展：集合语义 + 夹具制使加规则安全；已指出包 2 应补否定规则 ✓ 12 文档同步：CHANGELOG 3 条在、BUILD §86-92 齐、§85 欠账还清；缺口 = `MRWEIRDO_LOCK_SWEEP` 未进设计文档（已列 R6-G-2，归 architect）✓。
+
+## R6-§10 覆盖度评估 + 质量分
+
+**质量分 4/5 — 放行（可推）**。V2/V3/V4 全过硬，肇事正则连同 helpers 拷贝拔净，上锁与留证契约独立实测成立，突变证明测试真咬人，零写入创始人家目录（`find -newermt` 会话起点后 0 文件，chrome-profile 除外）。扣 1 分：机制性否定盲区 + 嵌套 sweep 盲区两处属「设计视野内应能想到」的缺口（均不回炉），V9 留待有浏览器时闭环。
+
+**边界自证**：零 push、零 git 历史写（仅用 git restore 复原本轮自己的突变，diff 归零有据）、TASK 未动、真实家目录零写入、未开浏览器、未真投递。
+
+## 试过的错误方向（第 6 轮，Iterations=1）
+
+**❌ 差点采信假证据**：demo:check 沙箱首跑输出零改动，本可直接下「report 模式有效」结论——但输出里没有 pii_lock_sweep 痕迹，追查发现沙箱缺 jobs.db、preflight 分支压根没跑，「零改动」是空转不是保护。补 jobs.db 重跑并确认 preflight 真执行到 sweep 后才收证。
+**❌ 想对真实家目录跑 demo:check 做终证**：若 report 模式真有 bug，这一跑就会 chmod 用户 50 张截图——用可能造成写入的手段去验「不写入」本身违反边界。改为沙箱同代码路径 + 真实目录只读旁证。
+
+# 第 7 轮验收 — 阶段 1 包 2（5 提交 `d04d8b1` 三扣分 / `a7857e1` 契约 / `896026d` 账本 / `d2488c2` 谓词 / `1880fd0` 施工记录）｜2026-07-30
+
+## R7-§0 验到哪了（断线接续锚点）
+
+- 状态：进行中。验收对象 tip `1880fd0`，本地领先 origin/main 5 提交。lead 已复验干净检出 325/325 + CI 四步 + demo:check 全 0——不重复，只抽查。工作区代码文件零脏（仅 lead/architect 文档稿），工作区代码 == tip。
+- 计划项：V5 三读点对数（真实库只读副本）→ 退出契约（七码表逐码测试 / 旧词响亮拒绝 / 失败页 attempt=1 短路独立复跑）→ 账本（第二写入口全库 grep / rebuild dry-run 与幂等 / 600 / preflight 绕过硬检查造违规）→ V8 答案只进账本 → 第 6 轮三扣分逐条复核（自造 3 段刁钻否定文案 / sweep 嵌套 / 毒枝零残留）→ dashboard「已确认」顺手修判定 → 老坑回归。
+- 硬边界：零 push、零 git 写、不改 TASK、`~/.mrweirdo-jobs/` 只读（开工 stat 快照 841 条已存 scratchpad，jobs.db mtime=1782006129 size=1728512）、不真投、不开浏览器。
+
+## R7-A V5 拍死项：三读点同出一个数 — ✅ 通过（真实库只读副本实跑）
+
+**方法**：`cp ~/.mrweirdo-jobs/jobs.db → scratchpad 沙箱家`，`MRWEIRDO_HOME=沙箱` 跑三个出货出口，未采信 BUILD §94 的数字。
+
+- `scripts/dashboard.mjs --once` → **`182 total ✅`**；`shared/apply_report.mjs` 生成的 HTML → **`<strong>182</strong>Submitted total`**（且报告落进沙箱 `reports/`，不落真实家）；谓词直查 `SUBMITTED_WHERE_SQL` → **182**。三数全等 ✅。
+- 副本上三格原值复核：`submitted_at 非空=158` / `auto_submitted_at 非空=183` / 谓词=182——与 BUILD §94 自述逐字对上；158/183 与 182 的全等确属包 3 backfill 范围（账本空，`rebuild` dry-run 实跑 `checked 0, changes []`）。
+- **绕过谓词反扫（全库 grep）**：queue_diagnostics `:89` / auto_apply_queue `:84` 均已走 `SUBMITTED_WHERE_SQL` ✅；其余命中逐个核：`retry_gap_rows.mjs:86`（防降级守卫，方向过含安全）、`local_db.mjs:469 queryRecentlyApplied`（confirm 技能故意只扫「已投未确认」，SKILL.md:144 明写该窄集是设计——非读数出口）、`apply_report.mjs:74`（逐行标签渲染非计数）。**🟡 P3**：`analyze_patterns.mjs:55/132` 内联写死 `'✅ 已投'||'✅ 已确认'`——今天与谓词集合逐字等价，但同一集合第三种拼法，谓词日后变它必漂移；建议包 3 顺手 import 常量。
+- 真实 `~/.mrweirdo-jobs/jobs.db` 全程零写入：跑后 `mtime=1782006129 size=1728512` 与开工快照同值。
+
+## R7-B 统一退出契约 — ✅ 通过（独立实测 + 1 处突变验咬合）
+
+- **七码表逐码有测试**：`driver_contract.test.mjs:17-24` 七个词逐个断言退出码且 `for (o of OUTCOMES)` 全覆盖守卫；独立重跑 contract 三套件 **21/21 绿**。
+- **旧词响亮拒绝（真漏斗实测，非单测转述）**：沙箱库造行后把 `{"outcome":"skip"}` / `essay_pending` / `error` / **无 verdict 的 submitted** / **verdict=unknown 的 submitted** 五种毒荷载逐个喂出货 `record_apply_outcome.mjs` CLI → **五次全部 exit 1**、stderr 带 `driver_outcome_contract_violation` 与 ADR-15 原文、行状态零变化、**账本零行**（`log/` 目录都没建）——拒绝发生在写账之前 ✅。
+- **失败页第 1 次短路（独立复跑 + 突变）**：`driver_exit_contract.test.mjs` 喂 Directive 横幅进出货 `main()`（harness 逐字读 `shared/*_apply_driver.mjs` 源码，实查三份 harness 均 `readFileSync(DRIVER_SRC)`）断言 `attempt=1`；**突变实证**：把 Ashby 终局条件改 `if (false && …)` → 该套件 **9 pass / 1 fail 当场红**，复原后 shasum 与备份逐字节一致、`git diff` 0 行。短路条件实读 `:1074-1081`：仅「verdict=not_submitted ∧ missing 为空」才终局——带可填字段的校验错误页仍走重试循环（BUILD §99 方向 2 的取舍实装无误）✅。
+- 正路核对：合法 submitted（带 verdict+answers）→ exit 0、账本先落行（600、目录 700）、DB `submitted_at` 与账本 ts 同秒同源 ✅。
+
+## R7-C V8 全问答 + ❌ 真 bug 1 处（P2）：answers 同时被抄进 644 的 jobs.db feedback 表
+
+- **V8 字面通过**（沙箱真漏斗实跑，非跑测试）：answers 数组完整落账本行（含 label/value/source/widget + work_auth_provenance 快照）；jobs 表 **全列扫描零命中** 答案文本 ✅；builder 的 V8 marker 测试确认走的是真漏斗 CLI ✅。
+- **❌ P2（命中维度 ②安全边界；本包引入）**：`record_apply_outcome.mjs:214` `writeFeedback('submitted_verified', outcome)` 与 `:160`（每次 skip 的 `detail=outcome`）把**整个 outcome JSON（compactDetail 截 600 字）写进 jobs.db 的 feedback 表**——本包给 outcome 挂上 answers 后，**真实表单答案（题面+所填值，含工作授权族）随之落进 644 的 jobs.db**。沙箱实证：feedback.detail 里躺着完整 358 字 answers JSON（`Are you authorized to work…: Yes` / `Full name: Test Student` 逐字在）。与 B3-a 设计根据直接矛盾（账本因「PII 密度最高」上 600 锁，同一批答案却进了不在 `PII_TARGETS` 里的 644 库）；DESIGN §14 对 feedback 只定了 outcome 词统一，从未授权 answers 入内。**builder 知情未申报**：V8 测试查了 feedback 后 `void feedback; // …by design` 刻意不断言——§97 七条偏离无此条、BUILD/CHANGELOG 全文无一字提及。修法一行：feedback/manual-review 的 detail 剥掉 answers（答案只属账本）。**不阻断本包但列必做**：真投递尚未恢复（阶段 2 在包 3 之后），必须在恢复投递前落地；一并请拍板人过目 jobs.db 本身该不该进 `PII_TARGETS`（真实家 644 至今）。
+
+## R7-D 第 6 轮三条扣分项逐条复核 — ✅ 三条全部真修
+
+1. **否定文案 deny 规则**（自造 9 段刁钻样张喂出货 `submissionVerdict`，非跑测试）：canonical「was not successfully submitted」/ 弯引号「hasn’t been successfully submitted」/ 语序反转「not submitted successfully」/「has not been successfully submitted」→ **全部 not_submitted**（deny `negated_success` 命中）；「not yet been submitted」（双插入词，正则容量外）与「确认词+否定同屏」→ **unknown**——与 §99 方向 1 声明的底线一致（**无一路能到 submitted，逐张验证成立**）；真成功两种写法**仍判 submitted**（lookbehind 未误杀真阳性）✅。
+2. **sweep 嵌套下潜**：沙箱造「700 子目录内藏 644 文件」（R6-D 当时实测被跳过的精确形态）→ 本版 sweep `locked=1`、该文件实测变 600 ✅（`sweepDir` 递归无条件下潜，读码与实测双证）。
+3. **jobvite/icims 毒枝**：全库 grep `your\s+interest` 判定支**零残留**（仅注释）；`ats_helpers_success_patterns.test.mjs` 从出货源码原样提取 patterns 数组（带提取失效守卫）喂 Directive 横幅原文 → 4/4 绿，真成功文案仍认得 ✅。
+
+## R7-E dashboard「已确认」行顺手修 — ✅ 该修、修对了（照 R5 偏离 ② 严格度独立判）
+
+- **该不该修**：dashboard 是 DESIGN §14.10 提交 7 点名的四读点之一，「换唯一谓词」在这个调用点的自然结果就是它——不修反而是四读点少换一个。且旧行为直接违背关卡 10 ③ 已拍板的防拉黑日上限（当天被确认的行从今日额度里静默消失 = 上限被放宽），修的方向是收紧。**不属越权扩范围**。
+- **修得对不对（独立老新对照，未采信 BUILD 先红自述）**：沙箱造三行（已投·今天 / 已确认·今天 / 已确认·6 月）→ 旧 SQL 今日计数 **1**（确认行逃逸）、新 SQL **2**（正确）、6 月历史确认行被 `submitted_at` 日期过滤正确排除（不多计）；dashboard 实跑显示 `quota 2/50 今` ✅。**突变 2**（谓词砍掉已确认）→ `submitted_predicate.test.mjs` **2 红**——该行为有测试钉住，非顺手改完没人守 ✅。
+- 申报合规：§97-3 显式申报 + 标明「唯一用户可见读数语义变化」，与实测一致。
+
+## R7-F 老坑回归 + 突变 — ✅ 通过
+
+- **三态零新增**：包 2 diff（`987a4f0..1880fd0`）新增行 grep 五个三态字段名 **0 命中**；答案路径 8 文件（answer_routing / answer_buckets / 模板 / 三态门 / work_auth_identity / personal_fact_gate / answer_provenance / apply_gap_report）`git diff` **零改动**——真实用户答案行为零变化（可见变化仅 R7-E 的今日额度收紧，已申报）。
+- **新测试突变 3 处全咬住（非假绿）**：① Ashby 终局条件改 `if(false&&…)` → exit 契约套件 **1 红** ② 谓词砍「已确认」→ **2 红** ③ 账本 writeLine 改 644 不上锁 → 账本套件 **1 红**。每次复原后 shasum 与备份逐字节一致、`git diff` 0 行（scratchpad 备份复原，未用 git checkout）。
+- **全量回归**：突变全部复原后 `npm test` **325/325 pass / 0 fail**（串行）；开工时也先跑过一次 325/325 做基线。
+- **创始人家目录零写入**：开工/收工两份 stat 快照（841 条目，排除 chrome-profile）`diff` = **0 行**；真实 jobs.db `mtime=1782006129 size=1728512` 前后同值；全部实测走 scratchpad 沙箱家（`MRWEIRDO_HOME`+`MRWEIRDO_DB_PATH`+`MRWEIRDO_ONBOARD_TMP_DIR` 三开关齐设）。
+- CHANGELOG 四条实核在且与改动相符（一个数 / 退出契约 / 今日额度 / 三扣分项）。
+
+## R7-§3 7 类测试技术覆盖
+
+① 等价类：七种 outcome 各至少一例（21 条契约测试复跑 + 五毒荷载）✓ ② 边界值：空 verdict / verdict=unknown 的 submitted / 坏 JSON 账本行 / 空账本 / 600 字截断 ✓ ③ 决策表：verdict confirm×deny 2×2（R6 已全格，本轮否定式 9 样张补边）✓ ④ 状态迁移：违规注入→preflight FAIL→--apply 修复→幂等归零 的完整回路 ✓ ⑤ 用例测试：真漏斗 CLI 端到端（毒荷载 5 + 正路 1）+ dashboard 实跑 ✓ ⑥ pairwise：N/A（参数空间已被决策表与逐码表穷尽）⑦ 风险驱动：5 维定密度 + 3 突变 + V8 反向追查（挖出 P2）✓。
+
+## R7-§4 5 轮回归循环记录
+
+①写测试：9 段自造样张 + 5 毒荷载 + 3 突变（先看红）②跑全套：基线与收尾各一次 325/325 + 单套件独立复跑 21/21、4/4 ③红了辨析：突变红全为预期咬合；V8 marker 绿但 `void feedback` 引出追查 → 定为真 P2（测试绕过型，非测错）④修后重跑：本轮零修（P2 列必做归包 3）⑤转 bug：无。
+
+## R7-§5 结论明细
+
+- ✅ 通过：V5 三读点同数 182（真实库副本）/ 七码表逐码 + 旧词五毒荷载全拒 / 失败页 attempt=1（复跑+突变）/ 唯一写账人（全库 grep 仅 `record_apply_outcome.mjs:114`）/ rebuild 默认 dry-run 字节不动 + --apply 幂等 + 坏行响亮 / preflight 绕过硬检查造违规实拦（exit 1）/ 账本 600 目录 700 / V8 jobs 表零命中 / 三扣分全真修 / dashboard 顺手修该修且修对 / 老坑全绿。
+- ❌ 真 bug：**1**（P2，R7-C：answers 随 outcome JSON 进 644 jobs.db 的 feedback 表，知情未申报——恢复投递前必修）。
+- 🟡 P3 × 1：`analyze_patterns.mjs:55/132` 谓词集合第三种拼法（今天等价，日后漂移面）。
+- 未覆盖（如实）：V9 整页像素高度与 cdp 真实截图路（无活 Chrome，与 R6 同因）；V1 全等（158/183↔182）与 V10 属包 3 backfill，本包只验「账本只为见过的行说话」成立；chmod 失败分支（属主造不出）。
+
+## R7-§6 Quinn 主动重构记录
+
+零重构。P2 修法虽一行，但动 `record_apply_outcome.mjs` 属账本写路径核心语义（哪些字段进 DB），超 Quinn 边界且应连测试一起改（V8 测试的 `void feedback` 要改成反向断言），转包 3 施工。
+
+## R7-§7 质量 3 指标
+
+- 覆盖率：builder 自报新模块 100%/95.7%/80.0% 如实；本轮以 3 处突变验测试真实性而非复算数字。
+- `verify_self_miss_rate: 0%`（本轮 2 条发现项——P2 answers 入 feedback、P3 谓词第三拼法——均由包 2 新增或包 2 才进验收范围，非第 6 轮该发现而漏；如实报 0）。
+- 真 bug 数：1（P2）。
+
+## R7-§8 老坑清单核查
+
+`.claude/arnold/roles/verify.md` 不存在——项目未定义验收岗位补充说明。PROJECT_MEMORY 教训兑现：「测试全绿≠测了什么」→ 3 突变逐一验咬合，并抓到一例「测试查了数据又刻意不断言」（V8 的 `void feedback`）；「双命名/多正典」病识别 → 谓词第三拼法记 P3。
+
+## R7-§9 13 维深查（--strict，本包动核心数据流主动升级）
+
+0 最高原则：P2 即「兜底遮盖」的反面教材已揪出，其余无 ✓ 1 并发时序：账本 appendFileSync 单进程追加、批次串行，无新竞态面 ✓ 2 数据一致性：账本↔DB 全回路实测（违规注入→拦→修→幂等）；ts 同源逐字节验过 ✓ 3 错误路径：坏行 throw 带行号、契约违规 exit 1 行不动、evidence 失败不翻投递（读码）✓ 4 边界值：见 §3 ✓ 5 数据隔离：登记表未填，跳过（单用户产品）6 浏览器：弯/直引号双容实测 ✓ 7 网络层：无新外呼 ✓ 8 性能：rebuild 逐行 SELECT，183 条量级无虞（包 3 backfill 后 preflight 每次全扫，若变慢属可见取舍）✓ 9 安全：账本 600/700 实测；**P2 即本维扣分项** 10 用户体验：preflight 拦下时带修复命令原文 ✓ 11 未来扩展：谓词唯一出口 + 第三拼法 P3 已记 ✓ 12 文档同步：CHANGELOG 4 条实核在；BUILD §93-100 齐；**缺 = P2 那条偏离未申报**（已计入扣分）✓。
+
+## R7-§10 覆盖度评估 + 质量分
+
+**质量分 4/5 — 放行（可推），带 1 条必做**。派遣单五个重点全部独立实测通过且证据过硬：V5 三读点真实库副本同出 182、退出契约五毒荷载全拒 + 短路突变咬合、账本四纪律全验 + 绕过实拦、三扣分真修、dashboard 顺手修该修且修对。扣 1 分：R7-C 的 P2——answers 借 feedback.detail 落进 644 库，方向踩 B3-a 设计根据，且 builder 知情未申报（`void feedback` 注释）。**必做（包 3，恢复投递前）**：feedback/manual-review 的 detail 剥掉 answers + V8 测试补反向断言；连带请拍板人定 jobs.db 是否进 `PII_TARGETS`。
+
+**边界自证**：零 push、零 git 写（突变复原全走 scratchpad 备份 cp，工作区收尾 `git status` 代码零脏）、TASK 未动、真实家目录 841 条 stat diff=0、jobs.db 只读（mtime/size 前后同值）、未开浏览器、未真投递、共享目录未删任何文件。
+
+## 试过的错误方向（第 7 轮，Iterations=2）
+
+**❌ 差点把「binary grep 0 命中」当 V8 干净证据**：对沙箱 jobs.db 整文件 grep 答案文本 0 命中，差点据此写「答案没进库」。不放心改用 SQL 逐表逐列查——feedback.detail 里躺着完整答案 JSON（grep 对 sqlite 页结构的字节切分不可靠，工具失灵不等于事实干净）。这一步就是 P2 的来源；若信了 grep，本轮结论会是假绿。
+**❌ 想用 `npm test` 单绿证明 attempt=1 短路**：测试在仓库里是 builder 写的，绿≠咬合。改为突变实证（终局条件改假 → 当场红）才收证。
+
