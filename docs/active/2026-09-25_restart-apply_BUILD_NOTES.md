@@ -445,12 +445,12 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 2. 迁入：`node shared/submission_ledger.mjs backfill-legacy --apply` —— 预期 `verify: {ok:true, submitted_in_db:182, legacy_unverified_in_ledger:182, fingerprints_match:true}`，`appended: 215`。
 3. 核数：`wc -l ~/.mrweirdo-jobs/log/submissions.jsonl`（= 215）；`node shared/retire_jobs_db.mjs`（试跑，`count_check.ok: true`、182/182，列出 `to: …/archive/jobs-legacy-<日期>.db`）。
 4. 归档：`node shared/retire_jobs_db.mjs --apply` —— 之后 `ls ~/.mrweirdo-jobs/jobs.db` 应不存在，`ls -l ~/.mrweirdo-jobs/archive/` 有 `jobs-legacy-<日期>.db`（600，大小 1728512）。
-5. 拍板人手投过的岗登记（lead 整理成 `[{url,company,title,at}]` 的 JSON，company 用招聘板 slug）：`node shared/submission_ledger.mjs record-manual --file <list.json>`（试跑核对）→ 同命令加 `--apply`。
+5. 拍板人手投过的岗登记（lead 整理成 `[{url,title,at}]` 的 JSON；公司由链接里的招聘板 slug 自动推，写了 company 且对不上会被拒；`at` 只写 `YYYY-MM-DD`）：`node shared/submission_ledger.mjs record-manual --file <list.json>`（试跑核对）→ 同命令加 `--apply`。
 6. 名单：`node shared/install_watchlist.mjs`（试跑，would add 21）→ 拍板人说要 → `node shared/install_watchlist.mjs --apply`。
-7. Chrome：`bash shared/chrome-cdp-launcher.sh`；体检 `node shared/supervisor_preflight.mjs`（`cdp` 与 `work_authorization_answered` 须 OK）。
+7. Chrome：`bash shared/chrome-cdp-launcher.sh`；体检用一次性探针库（否则会在家目录重建一个空 jobs.db）：`MRWEIRDO_DB_PATH="$(mktemp -d)/probe.db" node shared/supervisor_preflight.mjs` —— 只看 `cdp` 与 `work_authorization_answered` 须 OK；`queue_nonempty` FAIL 是正常的（没有队列）。跑完 `ls ~/.mrweirdo-jobs/jobs.db` 仍应不存在。
 8. 不提交试跑：`node shared/stream_run.mjs start --target 2 --no-submit` → 循环 `next --run <id>` / 打分 / `submit-scores --run <id> --batch <k> --scored <file>` → `finish --run <id>`，核对 3 行。
 9. 试投 2 条（拍板人在场；名单公司合格的会被 held，所以实际只投非名单公司，符合 D5 首批只投圈 3）：`node shared/stream_run.mjs start --target 2` → 同上循环 → `finish`。
-10. 立刻真环境复验：`node shared/stream_run.mjs start --target 2 --no-submit` → 循环 → `finish`，核对第 2 次打分列表与第 1 次无交集、那 2 家不在候选里；`npm run status` 看「今日已尝试 2/10」。
+10. 立刻真环境复验：`node shared/stream_run.mjs start --target 2 --no-submit` → 循环 → `finish`，核对第 2 次打分列表与第 1 次无交集、那 2 家不在候选里；`node scripts/dashboard.mjs --once` 看「今日已尝试 2/10」（`npm run status` 是常驻刷新，不会自己退出）。
 
 ## 性能硬指标自查（S5）
 
@@ -487,3 +487,5 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 2. **PID 复用判法第一版用子串 `apply_batch`**：测试进程自己的命令行里有 `apply_batch_stream.test.mjs`，被当成活派单进程；真实场景里任何路径带这个词的进程都会误判。改为匹配 `apply_batch.mjs`。
 3. **D10 第一版想在 apply_batch 里按「是否名单公司」拦**：apply_batch 手里只有工作库行，不知道这一行是不是名单扫描来的（工作库没有这一列，加列要改表结构）。改为 stream_run 在入库后、派单前把这些行的资格关掉，信息在批次文件里现成就有。
 4. **沙箱走查第一次在 zsh 里用 `time N=$(…)` 包 next**：输出被吞，看起来像 next 什么都没做；单独重跑才看到正常出批。只是走查脚本的问题，不是代码问题。
+
+> **回炉第 1 轮（S5，verify 第 6 轮 3/5）**：3 个提交 `b669201` `df92547` `dc135e7`，未推。① R9（P2）：D10 held 改按公司认——公司键 ∈ `search_intent.target_companies` 的 slug 归一即 held，与岗位从名单还是轮转进来无关；红测试（名单扫描 pika 500、轮转扫到 pika 合格岗 → 旧码驱动被派）转绿；既有「名单优先」与 D10 用例补上 target_companies（真实环境名单岗必来自 target_companies，行为不变）。② R6（P3）：新 `job_identity.boardSlug`，record-manual 公司键从链接的招聘板 slug 推，`--company` 只核对、不符响亮拒绝（无堆栈）；gh_jid 自有域名链接必须给 `--company`。③ STALE2（P3）：检查—清残留—建锁整段放进 `locks/stream_run.claim`（O_EXCL 认领段），中途死掉留下的认领文件 >30 秒只报路径不自动清；15 轮残留锁并发红测试（旧码第 8 轮双开）转绿。④ 真跑前清单第 5 / 7 / 10 步已改（第 7 步用探针库，沙箱实测跑完不重建 jobs.db；第 10 步改 `--once`）。测试 477→481，CI 四步 exit 0。**新观察（未修，列出）**：机器负载 36 时 `投前失败上限` e2e 偶发 1 次失败——记账子进程已打印 `{"ok":true,"action":"skipped"}` 但 apply_batch 拿到非 0 状态（疑似被信号杀，`spawnSync` status 为 null），按 `record_failed` 停批（保守方向，不会重投）；负载降到 10 后全量 481 全绿，未能再现，交 lead 定是否追。残留理论窗口：`finish` 的放锁不走认领段，与同时开跑的 start 有极窄的读后删竞态（verify 第 6 轮 FIN-START ×10 未触发），未修。真实家目录零写入。
