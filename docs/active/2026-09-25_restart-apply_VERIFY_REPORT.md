@@ -13,8 +13,8 @@ Reads:
   - （第 2 轮）DESIGN 第 2 轮 §3 / §4.7 / §5 未明点 7·12·13 / ADR-S3·S6·S8·S9 / §10；PRODUCT_SPEC 第 2 轮 R1-R7、V1-V13；BUILD_NOTES「第 2 次召唤」
   - （第 4 轮）DESIGN 第 2 轮数据结构、失败路 1-6、崩溃与并发决策；PRODUCT_SPEC 第 2 轮去重规则与验收标准 V1-V13；定稿 docs/specs/restart-apply.md；BUILD_NOTES「第 3 次召唤」13 条偏离；stream_run / seen_log / inflight_recovery / apply_guard / apply_batch / store_scored_jobs / watchlist_source / greenhouse 驱动改动
   - （第 6 轮）BUILD_NOTES「第 4 次召唤」12 条偏离与真跑前清单；stream_run / lock_holder / submission_ledger record-manual / supervisor_preflight / retire_jobs_db / install_watchlist / dashboard / watchlist_source 改动；onboard·jobskill·两份 -auto 说明书 diff
-Updated: 2026-09-25
-Iterations: 8
+Updated: 2026-09-26
+Iterations: 9
 ---
 
 # VERIFY_REPORT — restart-apply 小修包（072f203 / 7cd693c / d326b17 / 29e6147 + 文档 150d1df）
@@ -1200,3 +1200,170 @@ S3（看过记录 seen_log、规则 6、一次性工作库 initRunDb、store 写
 
 - **一开始只拿 builder 的「exit(2) 短命脚本」当证据**：它只能证明 `process.exit` 会崩。补做「自然退出」和「未捕获异常」两格对照以后，才看出包 `process.exit` 盖不全，而在启动时先读完证书两种都能盖住。
 - **覆盖检查起初只 grep `installSafeExit`**：直接 grep 会漏掉「通过 import driver_contract 间接装上」的文件（比如 cdp、驱动）。改成沿静态 import 链判可达，才得到准确的 7 个 SAFE / 36 个 bare。
+
+---
+
+# 第 9 轮 — 启动预加载系统证书 + RACE 只清已退出进程的目录（f4a5fce / f3aef0f / 4d34c78 / 437441c）
+
+> 上一位 verify 做第 9 轮时中途卡住（600 秒无进展，无结论），本节是重派后的完整结果。长命令都放后台、带 timeout，循环 ≤400 次。环境：macOS，Node v24.7.0（Homebrew），`NODE_USE_SYSTEM_CA=1`，测试期间负载 3.6-4.9。
+
+## 验收范围
+
+4 个提交，都在 origin/main `6fde653` 之上，没有推。
+- `f4a5fce`：新文件 `shared/preload_system_ca.mjs`，进程启动时把系统证书读完。`safe_exit.mjs` 被引入时，会把 `--import=<preload>` 追加进 `NODE_OPTIONS`，所以子进程和孙进程都会预加载它。入口从 4 个扩到 12 个。`f3aef0f` 是它的记录，只改了文档（diff 核过，只有 BUILD_NOTES 两行）。
+- `4d34c78`：`cleanOldRuns` 只清「建目录的 start 进程已经不在」的运行目录。`437441c` 是记录，同样只改了文档。
+
+本轮要回答 5 件事：
+1. 第 8 轮 P3 的两个场景是否归零；
+2. NODE_OPTIONS 注入的 4 个副作用；
+3. RACE 修法遇到 PID 复用和 kill -9 残留时是否正确；
+4. 真跑前清单第 9 步能否放行；
+5. 逐提交 CI。
+
+硬边界：
+- 没有真投；
+- 真实 `~/.mrweirdo-jobs/` 没写过：开工和收工各拍一次 stat 快照（7205 个条目），diff 为 0；
+- 没有 push，没有提交代码。
+
+## 5 维高危区评估
+
+- **① 核心业务逻辑（高）**：SIGSEGV 会让「成功」丢掉退出码，变成「失败」。结果是 cover letter 生成失败，岗位被搁置；或者记账人被判失败，然后停批、补记「可能已提交」，这个岗就被永久封掉。RACE 修法如果误删了活运行的目录，在途记录会丢。这是本轮测得最密的一维。
+- **② 安全边界（中）**：`cleanOldRuns` 如果该删的不删，运行目录会一直留着。目录里有表单答案，权限是 700。
+- **③ 性能（低）**：每个 node 子进程启动多花约 50ms，只在 CA 开着时。
+- **④ 集成点（中）**：NODE_OPTIONS 会被所有子进程继承，包括 Chrome、bash、PATH 上的 `node`。
+- **⑤ 主流程（高）**：主流程冒烟按 ci_smoke.main_chain 跑，在沙箱拷贝上一直跑到打分和收工，投递那一步禁止真投。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 4 | 退出方式：成功 exit(0) / 未捕获异常 / 孙进程 / 真实 CLI；CA 开关：=1 / =0 / 未设 / 经 NODE_OPTIONS 开 |
+| 边界值 | 6 | 仓库路径含空格+中文、单引号、双引号、`%20`、`#`、反斜杠；目录名 pid 为 0、非数字、pid 1 |
+| 决策表 | 1 | cleanOldRuns 的 4 种情况：pid 活 / 死 / EPERM / 格式不对 |
+| 状态迁移 | 2 | start 在随机时刻被 kill -9，下次 start 的迁移；活运行 → 第二个 start 拒绝 → finish |
+| 用例测试 | 1 | 沙箱拷贝上走真跑前清单 1-4、6、8（CA=1） |
+| pairwise | 1 | 父进程装不装 safe_exit × CA 开关 × 子进程种类 |
+| 风险驱动 | 3 | 两处变异回退测试、RACE 5 路并发 ×100 |
+
+## 5 轮回归循环记录（第 9 轮）
+
+- 第 1 轮：逐提交 CI。结果全绿，见结论明细 ⑤。
+- 第 2 轮：P3 对照实验，每格 400 次，8 路并发。结果全过。
+- 第 3 轮：NODE_OPTIONS 副作用。发现 1 个 P4，其余过。
+- 第 4 轮：RACE 边界。kill -9 随机 80 次，另测 PID 复用、EPERM、活运行、格式不对的目录名，再加 5 路并发 ×100。结果全过。
+- 第 5 轮：变异验证 + 清单走查 + 真实家目录 diff。结果全过。
+
+没有出现需要转 bug 成员的红。
+
+## 结论明细（第 9 轮）
+
+### ✅ 通过
+
+**① 第 8 轮 P3 两个场景已归零**[实测]
+
+父进程或引入 tip 的 `safe_exit`，或什么都不引（对照）。并发 8 路，`NODE_USE_SYSTEM_CA=1`，子进程不引任何本仓模块：
+
+| 子进程 | 不引 safe_exit（对照） | 引 safe_exit |
+|---|---|---|
+| 成功 `exit(0)`（cover letter 同款） | SIGSEGV 12/400 | **0/400** |
+| 未捕获异常 | SIGSEGV 9/400（另一批 13/200） | **0/400**，全部退出码 1 |
+| 孙进程 `exit(0)`（子进程不引任何模块、再起孙进程） | 孙进程崩 7/400 | **0/400** |
+| 真实 `materialize_cover_letter`（row_not_found → exit 1；它自身已引 safe_exit） | 200/200 退出码 1 | 200/200 退出码 1 |
+
+- CA=0 时引入 safe_exit：exit0 和 throw 各 200 次，全部正常，`NODE_OPTIONS` 保持 null。
+- 变异验证：把 `safe_exit` 里追加 NODE_OPTIONS 那一行改成空操作后，`exit_segv_children.test` 连跑 2 次都是 2/2 红。恢复后绿。
+- 注入链[读码]：apply_batch 的 `env` 在模块体第 80 行才取 `{...process.env}`，这时 `import './safe_exit.mjs'` 已经执行完，所以 cover letter / 驱动 / 记账子进程都会继承。stream_run `childEnv`、inflight_recovery、supervisor_preflight、apply_supervisor `run` 都展开 `process.env`。驱动调 cdp 用 `spawnSync` 默认 env，也会继承。
+
+**② NODE_OPTIONS 注入的 4 个问题**[实测]
+
+- **用户原有的 NODE_OPTIONS 会保留**：`--max-old-space-size=4096 --no-warnings` 注入后变成原值加一个 `--import=file://…`。嵌套起子进程时不会重复追加。
+- **不波及 Chrome 和非 node 子进程**：
+  - `chrome-cdp-launcher.sh` 用 `open -na` 起 Chrome，走 LaunchServices，本来就不继承环境变量。
+  - 直接用注入后的 NODE_OPTIONS 跑 Chrome 二进制 `--version`、`bash`、`python3`，都正常。
+  - 驱动用 PATH 上的 `node`，本机只有 `/opt/homebrew/bin/node` v24.7.0 这一个，和 execPath 相同。
+  - `doctor.mjs` 起 claude/codex 的那条路径不在任何注入进程树下。
+- **路径含特殊字符安全**：file URL 会把空格编码成 `%20`、中文按 UTF-8 编码，所以 NODE_OPTIONS 里不会出现裸空格。含「空格+中文」、单引号、双引号、`%20`、`#` 的仓库路径下，子进程都能加载 preload（在拷贝里加标记实测）。反斜杠路径下，Node 本身就 import 不了 ESM（`ERR_INVALID_MODULE_SPECIFIER`），和本提交无关。
+- **NODE_USE_SYSTEM_CA 没设或为 0 时无副作用**：NODE_OPTIONS 不动，preload 不执行。
+
+**③ RACE 修法：残留目录能清掉，活运行不会被误删**[实测，沙箱 rig]
+
+- **kill -9 残留**：在 0-150ms 的随机时刻 SIGKILL 一个 start，共 80 次，其中 55 次是在中途被杀。每次紧接着一个正常 start：
+  - 胜方开跑时，其余的 `stream-*` 目录已经清空（「胜方开跑后仍有残留」出现 0 次）；
+  - 没有留下需要手删的认领文件；
+  - 被杀在持锁之后的，按提示 `--abandon` 放掉；
+  - 最后 run-tmp 里 0 个目录。
+- **PID 复用**：残留目录名里的 pid 被一个活着的无关进程（`sleep`）占着时，目录保留；那个进程一退出，下一次 start 就把目录清掉。所以不会永久堆积，最多多留几次。
+- **活运行保护**：A 开跑、start 进程已退出（运行由锁表示）时，B 的 start 会响亮拒绝（「still active」），A 的目录还在。A finish 后 0 个目录。败方不会调用 cleanOldRuns[读码]，所以不会误删。
+- **格式不对的目录名**（`stream-junk`、pid 非数字、pid 为 0）按残留清掉。
+- **5 路并发 ×20 = 100 次** `stream_run_lock.test`（CA=1）：100/100 通过（lead 串行跑的是 40 次）。
+- 变异验证：把 tip 的测试文件放到修复前的代码 `f4a5fce` 上跑，「清旧运行目录」用例红；在 tip 上绿。
+
+**④ 真跑前清单走查**[实测，拷贝真实家目录到沙箱，排除 chrome-profile，CA=1，代码是 tip worktree]
+
+- 第 1-2 步：would append 182 + 33 → appended 215，`verify.ok`，182/182，指纹一致。
+- 第 3 步：账本 215 行；试跑 `count_check.ok`。
+- 第 4 步：归档 600 权限、1728512 字节，jobs.db 不存在。
+- 第 6 步：名单 21 家装入。
+- 第 8 步：`start --target 2 --no-submit` → 名单 + 轮转扫描 → 打分 5+15（沙箱里全部判不合适）→ 到看的上限 20 停 → `finish` 输出 3 行，`run_dir_kept:false`。历史拦下 7 个，同批重复 60 个。
+
+全程所有 CLI 都没有 segfault。第 5、7、9、10 步需要真链接、Chrome 或真投，本轮没走；它们涉及的代码本轮没改动（第 8 轮已走过第 5、7、10 步）。
+
+**⑤ 逐提交 CI**[实测，干净 worktree]
+
+| 提交 | npm test | role_guard_smoke | public_alpha_gate | node --check |
+|---|---|---|---|---|
+| `f4a5fce` | 488/488 | 0 | 0 | 0 |
+| `f3aef0f` | 只改文档，代码同 `f4a5fce` | — | — | — |
+| `4d34c78` | 代码同 `437441c` | — | — | — |
+| `437441c`（tip） | 489/489（和其他负载并跑，CA=1） | 0 | 0 | 0 |
+
+### ❌ 真问题
+
+无。
+
+### ⚠️ 风险 / 挂账（P4，不挡推送和试投）
+
+- **CA-VIA-OPTIONS（P4，命中 ①）**：
+  - 问题：如果系统证书是用 `NODE_OPTIONS=--use-system-ca` 开的（没设 `NODE_USE_SYSTEM_CA`），`systemCaOn()` 只查环境变量和 `execArgv`，看不到 NODE_OPTIONS 里的这个开关，修法就完全不生效。
+  - 实测：引了 safe_exit 仍然 throw 崩 8/400、exit0 崩 4/400。
+  - 本机不受影响：本机用的是环境变量。
+  - 改法：`systemCaOn` 加一条判断——NODE_OPTIONS 里含 `--use-system-ca`，一行。建议下次顺手带上。
+- **EPERM-KEEP（P4，命中 ②）**：目录名里的 pid 如果被别的用户（比如 root）的长寿进程复用，`kill(pid,0)` 返回 EPERM，会被当作活着，于是目录一直留到那个进程退出。实测 pid 1 的目录被保留。概率很低，目录权限 700，不算泄露。
+- 沿用：`exit_segv*` 和 `emit_outcome_flush` 都是靠概率抓崩溃的测试，而且只在 macOS 上会红；FIN-START 残留窗口仍在（第 8 轮已挂账）。
+
+## 6. Quinn 重构记录（第 9 轮）
+
+零。CA-VIA-OPTIONS 虽然只要一行，但改的是运行判定逻辑，不属于错字或命名这类小修，留给 builder。
+
+## 7. 质量 3 指标（第 9 轮）
+
+- 覆盖率：项目没有覆盖率工具，无数字。
+- `verify_self_miss_rate: 50%`（1/2）。上轮漏检的是 RACE ENOENT：它由第 6 轮「先建目录再建锁」的修法引入，第 7、8 轮 verify 都没抓到，是 lead 复验时抓到的。本轮问题共 2 个：那 1 个漏检 + 本轮新发现的 CA-VIA-OPTIONS。
+- 真 bug 数：0。另有 P4 2 条。
+
+## 8. 老坑清单核查（第 9 轮）
+
+- 老坑清单：项目没定义 verify.md。
+- ci_smoke.main_chain：主流程冒烟在沙箱真实数据拷贝上走到打分和收工，投递那一步按纪律禁止真投。
+- schema_upgrade_path、isolation_field：这两格没填，对应铁律不启用。
+
+## 覆盖度评估
+
+**质量分 4/5 —— 可推。真跑前清单第 9 步可以无条件放行**（第 8 轮给的条件是「修 SAFE-GAP 或 unset CA」，本轮已经修了并实测）。拍板人在场、只投 2 条，这是 D5 本来就有的安排，不是本轮加的条件。
+
+- P3 三个场景（成功退出、未捕获异常、孙进程）对照组都会崩（4-13/400），修后都是 0/400。
+- NODE_OPTIONS 的 4 项副作用都没有问题。
+- RACE 在 kill -9、PID 复用、活运行三种情况下都正确。
+- 两处变异回退后，测试都会红。
+- 逐提交 CI 全绿。
+- 真实家目录没被写。
+- 扣 1 分：CA-VIA-OPTIONS 这个开法没盖住（本机不走这条路），另外守卫测试仍然靠概率。
+
+未覆盖：
+- 清单第 9 步本身：禁止真投。
+- Linux：没有这个竞态，CI 天然是绿的。
+
+## 试过的错误方向（第 9 轮）
+
+- **kill -9 实验的第一版把 250ms 当作随机上限，还在 kill 之后才挂 close 监听**：start 很快就退出了，close 事件已经错过，脚本一直挂起直到 timeout。另外 3 次试跑全都是「杀之前已经跑完」，等于没测到中途被杀。改成先挂监听、把上限调到 150ms，并统计「杀前已完成」的次数（25/80），才确认 55 次是真的在中途被杀。
+- **P3 对照一开始每格只跑 200 次**：成功 exit(0) 的对照组 0/200 没崩，差点得出「这个场景不需要修」。在更高负载下改成 400 次，对照组才稳定出现 12/400。所以概率性问题的对照组必须先跑出崩溃，再去判断修法有没有效。
