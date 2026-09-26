@@ -100,6 +100,54 @@ function refuseWithoutHistory() {
   }
 }
 
+// ---- 运行级互斥（VERIFY 第 4 轮 BUG-1：两个窗口同时跑）------------------------
+// A run spans several short CLI calls with no process alive in between, so a
+// pid lock alone cannot tell "active" from "abandoned". locks/stream_run.lock
+// names the run that owns this home until `finish`; a second start refuses
+// loudly unless told which run to abandon. A live apply_batch (driver may be
+// mid-form) blocks every start, --abandon included: its in-flight attempt must
+// never be recorded as a crash by someone else.
+const streamLockPath = () => join(home, 'locks', 'stream_run.lock');
+const batchLockPath = () => join(home, 'locks', 'apply_batch.lock');
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM'; // exists under another user
+  }
+}
+
+function claimHome(runId) {
+  if (existsSync(batchLockPath())) {
+    const { pid } = readJson(batchLockPath());
+    if (Number.isInteger(pid) && pidAlive(pid)) {
+      die(`an apply batch is running (pid ${pid}) — refusing to start while a driver may be mid-form; wait for it to finish`);
+    }
+  }
+  const abandon = argValue('--abandon');
+  if (existsSync(streamLockPath())) {
+    const held = readJson(streamLockPath());
+    if (!existsSync(runDirOf(held.run_id))) {
+      log(`⚠️ stale stream lock for ${held.run_id} (its run directory is gone) — clearing it`);
+    } else if (abandon === held.run_id) {
+      log(`⚠️ abandoning ${held.run_id} (started ${held.started_at}) as asked — its unscored batch and work DB are dropped`);
+    } else {
+      die(`stream run ${held.run_id} is still active (started ${held.started_at}) — finish it with \`finish --run ${held.run_id}\`; if that window is gone for good, start again with \`--abandon ${held.run_id}\``);
+    }
+    rmSync(streamLockPath());
+  } else if (abandon) {
+    die(`--abandon ${abandon}: no active stream run to abandon`);
+  }
+  mkdirSync(dirname(streamLockPath()), { recursive: true, mode: 0o700 });
+  writeFileSync(streamLockPath(), `${JSON.stringify({ run_id: runId, started_at: new Date().toISOString(), pid: process.pid })}\n`, { mode: 0o600, flag: 'wx' });
+}
+
+function releaseHome(runId) {
+  if (existsSync(streamLockPath()) && readJson(streamLockPath()).run_id === runId) rmSync(streamLockPath());
+}
+
 function cleanOldRuns() {
   const dir = onboardTmpDir();
   if (!existsSync(dir)) return;
@@ -120,6 +168,9 @@ async function start() {
   const target = Number(argValue('--target'));
   if (!Number.isInteger(target) || target <= 0) die('--target N (a positive integer: how many to apply to) is required');
   refuseWithoutHistory();
+  const now = new Date();
+  const runId = `${RUN_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
+  claimHome(runId);
   // An unrecorded attempt from a dead run is recorded before anything else,
   // and only then may old run directories (its work DB) be removed (ADR-S8).
   try {
@@ -128,7 +179,6 @@ async function start() {
     die(e.message);
   }
   cleanOldRuns();
-  const now = new Date();
   const seenCompact = compact(home, now);
   let tier;
   try {
@@ -139,7 +189,6 @@ async function start() {
   const entries = readAll(home);
   const budget = budgetLine(attemptIndex(entries, now), target, tier, now);
 
-  const runId = `${RUN_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
   const runDir = runDirOf(runId);
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
   lockDir(runDir);
@@ -439,6 +488,7 @@ function finish() {
   const keep = Boolean(marker && marker.work_db.startsWith(st.run_dir));
   if (keep) log(`⚠️ ${st.run_dir} kept: locks/inflight.json still points into it; the next start records that attempt first`);
   else rmSync(st.run_dir, { recursive: true, force: true });
+  releaseHome(st.run_id);
 
   console.log(JSON.stringify({
     ok: true,

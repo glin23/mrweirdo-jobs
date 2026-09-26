@@ -280,3 +280,60 @@ test('没打完就收工：finish 时还有没打分的新岗 → 第 3 行如�
     await rig.close();
   }
 });
+
+test('并发 L（VERIFY 第 4 轮 BUG-1）：窗口 A 的运行没收工，窗口 B 开跑 → 响亮拒绝，A 的运行目录和批次原样保留、能照常收尾', async () => {
+  const rig = await makeStreamRig('mrw-stream-conc-l-');
+  try {
+    rig.board({ rotation: board30() });
+    const a = await rig.step(['start', '--target', '10', '--max-windows', '1']);
+    const aNext = await rig.step(['next', '--run', a.json.run_id]);
+    assert.equal(aNext.json.action, 'score');
+    const b = await rig.step(['start', '--target', '10', '--max-windows', '1']);
+    assert.equal(b.status, 1);
+    assert.match(b.stderr, new RegExp(`stream run ${a.json.run_id} is still active`));
+    assert.match(b.stderr, /--abandon/);
+    assert.ok(existsSync(aNext.json.batch_file), 'A keeps its batch');
+    const aFin = await rig.step(['finish', '--run', a.json.run_id]);
+    assert.equal(aFin.status, 0, aFin.stderr);
+    const b2 = await rig.step(['start', '--target', '10', '--max-windows', '1']);
+    assert.equal(b2.status, 0, b2.stderr);
+    await rig.step(['finish', '--run', b2.json.run_id]);
+  } finally {
+    await rig.close();
+  }
+});
+
+test('并发 X：另一个进程正持有派单锁（驱动在跑、在途标记在）→ 开跑拒绝，不补记、不动在途标记（--abandon 也不行）', async () => {
+  const rig = await makeStreamRig('mrw-stream-conc-x-');
+  try {
+    mkdirSync(join(rig.home, 'locks'), { recursive: true });
+    writeFileSync(join(rig.home, 'locks', 'apply_batch.lock'), JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }));
+    writeInflight(rig.home, { run_id: 'stream-other', work_db: join(rig.home, 'run-tmp', 'stream-other', 'work.db'), row_id: 100001, apply_url: ghUrl('busy', 1), result_file: join(rig.home, 'x.jsonl'), started_at: new Date().toISOString() });
+    for (const args of [['start', '--target', '5'], ['start', '--target', '5', '--abandon', 'stream-other']]) {
+      const r = await rig.step(args);
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, new RegExp(`apply batch is running \\(pid ${process.pid}\\)`));
+    }
+    assert.ok(existsSync(join(rig.home, 'locks', 'inflight.json')), 'the live attempt is not recorded as a crash');
+    assert.deepEqual(readAll(rig.home), []);
+  } finally {
+    await rig.close();
+  }
+});
+
+test('放弃一个没收尾的运行：start --abandon <旧运行> → 旧运行目录删掉，新运行照常开', async () => {
+  const rig = await makeStreamRig('mrw-stream-abandon-');
+  try {
+    rig.board({ rotation: board30() });
+    const a = await rig.step(['start', '--target', '10', '--max-windows', '1']);
+    await rig.step(['next', '--run', a.json.run_id]);
+    const wrong = await rig.step(['start', '--target', '10', '--abandon', 'stream-not-that-one']);
+    assert.equal(wrong.status, 1, 'abandon must name the active run');
+    const b = await rig.step(['start', '--target', '10', '--max-windows', '1', '--abandon', a.json.run_id]);
+    assert.equal(b.status, 0, b.stderr);
+    assert.equal(existsSync(join(rig.home, 'run-tmp', a.json.run_id)), false);
+    await rig.step(['finish', '--run', b.json.run_id]);
+  } finally {
+    await rig.close();
+  }
+});
