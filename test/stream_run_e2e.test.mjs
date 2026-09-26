@@ -339,3 +339,23 @@ test('放弃一个没收尾的运行：start --abandon <旧运行> → 旧运行
     await rig.close();
   }
 });
+
+test('验收口径（lead 裁决 B）：合格但没轮到投的岗下次会重打分；零重复投递 + 已判不合适的零重复打分', async () => {
+  const rig = await makeStreamRig('mrw-stream-y1-');
+  rig.env.MRWEIRDO_DAILY_TIER = '25';
+  try {
+    const jobs = Array.from({ length: 20 }, (_, i) => job(`Y${i}`, i + 1, { fit: i < 8 }));
+    rig.board({ rotation: jobs });
+    const first = await rig.run(3);
+    const second = await rig.run(3);
+    const unfit = jobs.slice(8).map((j) => j.apply_url);
+    assert.ok(second.scored.every((u) => !unfit.includes(u)), 'nothing judged not-a-fit is scored again');
+    assert.equal(second.scored.length, 5, 'the 5 fit-but-not-reached jobs are scored again (no fit queue is kept — lead ruling B)');
+    const calls = rig.driverCalls();
+    assert.equal(calls.length, 6);
+    assert.equal(new Set(calls).size, 6, 'zero repeated dispatch');
+    assert.equal(first.scored.length, 20);
+  } finally {
+    await rig.close();
+  }
+});
