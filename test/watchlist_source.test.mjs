@@ -87,4 +87,7 @@ test('预置 AI 视频名单：21 家，只含可自动投的 Ashby / Greenhouse
   assert.equal(preset.target_companies.length, 21);
   assert.ok(preset.target_companies.every((t) => ['ashby', 'greenhouse'].includes(t.ats) && t.slug && t.label));
   assert.equal(new Set(preset.target_companies.map((t) => t.slug)).size, 21);
+  // 「runway」板是一家财务规划软件公司；AI 视频的 Runway 官网招聘页链到 runway-ml（VERIFY 第 4 轮 BUG-2）。
+  assert.equal(preset.target_companies.find((t) => t.label === 'Runway').slug, 'runway-ml');
+  assert.ok(preset._meta.not_found_slugs_tried.Runway.some((s) => s.startsWith('runway ')), 'the wrong board is recorded, not silently dropped');
 });

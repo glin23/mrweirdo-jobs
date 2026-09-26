@@ -2,7 +2,7 @@
   "_meta": {
     "purpose": "AI 视频目标公司名单（restart-apply PRODUCT_SPEC §4.2 / ARCH_AUDIT）。预置数据，不会被自动使用：由引导步骤写进用户 search_intent.target_companies 后才生效。",
     "verified_at": "2026-09-25",
-    "method": "公开接口只读 GET：Ashby https://api.ashbyhq.com/posting-api/job-board/<slug>、Greenhouse https://boards-api.greenhouse.io/v1/boards/<slug>/jobs；200 且有 jobs 数组才收录。slug 以实测为准，不猜。",
+    "method": "公开接口只读 GET：Ashby https://api.ashbyhq.com/posting-api/job-board/<slug>、Greenhouse https://boards-api.greenhouse.io/v1/boards/<slug>/jobs；200 且有 jobs 数组才收录。slug 以实测为准，不猜。2026-09-25 复核：21 家逐家对照岗位描述里的公司自述确认是同一家公司；Runway 以官网 runwayml.com/careers 页面链接的 ashbyhq.com/runway-ml 为准。",
     "not_found_slugs_tried": {
       "Higgsfield": [
         "higgsfield (404)"
@@ -19,7 +19,10 @@
         "opus-clip (404)"
       ],
       "Runway": [
-        "runwayml (404)"
+        "runway (200 but WRONG COMPANY: 'Runway is a collaborative business planning platform' — not the AI video Runway; VERIFY 第 4 轮 BUG-2)",
+        "runwayml (404)",
+        "runwayai (404)",
+        "runway-ai (404)"
       ],
       "Pika": [
         "pikalabs (404)"
@@ -29,7 +32,7 @@
   "target_companies": [
     {
       "ats": "ashby",
-      "slug": "runway",
+      "slug": "runway-ml",
       "label": "Runway"
     },
     {
