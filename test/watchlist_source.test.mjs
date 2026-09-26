@@ -64,6 +64,23 @@ test('dispatcher：watchlist 已注册；单家错误带 slug 汇进 errors（�
   }
 });
 
+test('名单公司的板 404（换了招聘系统 / slug 失效）→ 记进 errors 列名，不当成「这家没岗」（VERIFY 第 4 轮 BUG-3）', async () => {
+  const realFetch = globalThis.fetch;
+  const { fakeFetch } = await import(FAKE_FETCH);
+  globalThis.fetch = fakeFetch;
+  try {
+    const r = await discoverAll({ sources: ['watchlist'], intent: { target_companies: [
+      { ats: 'ashby', slug: 'goneco', label: 'Gone Co' },
+      { ats: 'greenhouse', slug: 'moved', label: 'Moved Co' },
+    ] } });
+    assert.deepEqual(r.jobs, []);
+    assert.deepEqual(r.errors.map((e) => [e.slug, e.label]), [['goneco', 'Gone Co'], ['moved', 'Moved Co']]);
+    assert.ok(r.errors.every((e) => /board_not_found/.test(e.error)));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('discover_candidates --sources watchlist：读 search_intent 名单、过硬过滤、不动轮转游标', () => {
   const home = mkdtempSync(join(tmpdir(), 'mrw-watchlist-cli-'));
   writeFileSync(join(home, 'search_intent.json'), JSON.stringify({

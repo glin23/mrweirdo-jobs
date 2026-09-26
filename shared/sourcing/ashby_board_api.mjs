@@ -104,6 +104,8 @@ function normalizeJob(raw, slug) {
  * fetchJobs(slug, opts) — returns array of normalized jobs.
  *   opts.companyName: override `company` field on returned jobs.
  *   opts.timeoutMs: per-request timeout (default FETCH_TIMEOUT_MS; test seam).
+ *   opts.notFound: 'empty' (default) | 'throw'. A hand-picked watchlist board
+ *     that 404s is a broken list entry and must be named, not read as "no jobs".
  * Board 404 → [] (no board = no postings). A 200 whose body is not
  * { jobs: [...] } THROWS: "the API answered something we cannot read" is our
  * blindness, and must never be reported as "this company has no postings" —
@@ -114,7 +116,10 @@ export async function fetchJobs(slug, opts = {}) {
     throw new Error('fetchJobs: slug required');
   }
   const data = await fetchRaw(slug, opts.timeoutMs);
-  if (data === null) return [];
+  if (data === null) {
+    if (opts.notFound === 'throw') throw new Error(`board_not_found: Ashby board "${slug}" does not exist (404)`);
+    return [];
+  }
   if (!data || typeof data !== 'object' || !Array.isArray(data.jobs)) {
     throw new Error(`ashby_unexpected_shape: Ashby ${slug} answered 200 without a jobs array (${JSON.stringify(data).slice(0, 120)})`);
   }

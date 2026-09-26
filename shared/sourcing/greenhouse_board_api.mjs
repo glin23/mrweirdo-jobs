@@ -135,6 +135,8 @@ export async function fetchJobs(slug, opts = {}) {
   }
 
   if (res.status === 404) {
+    // Watchlist boards are hand-picked: a 404 there is a broken entry to name.
+    if (opts.notFound === 'throw') throw new Error(`board_not_found: Greenhouse board "${slug}" does not exist (404)`);
     // Board does not exist for this slug — common when company_list.json has
     // a guess. Treat as "no jobs", let caller move on.
     console.warn(`[greenhouse] 404 for slug "${slug}" — no job board found`);

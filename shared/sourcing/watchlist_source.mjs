@@ -18,9 +18,11 @@ import { fetchJobs as fetchGreenhouse } from './greenhouse_board_api.mjs';
 export const WATCHLIST_ATS = Object.freeze(['ashby', 'greenhouse', 'lever']);
 const PAUSED_ATS = new Set(['lever']); // Lever 暂停中（拍板 D6，Lever 继续暂停）
 
+// notFound: 'throw' — a list board that 404s (company moved ATS, slug changed)
+// is reported by name, never read as "this company has no jobs".
 const DEFAULT_FETCHERS = {
-  ashby: (slug) => fetchAshby(slug),
-  greenhouse: (slug) => fetchGreenhouse(slug),
+  ashby: (slug) => fetchAshby(slug, { notFound: 'throw' }),
+  greenhouse: (slug) => fetchGreenhouse(slug, { notFound: 'throw' }),
 };
 
 export async function fetchWatchlist(targets, { fetchers = DEFAULT_FETCHERS, reportError }) {
