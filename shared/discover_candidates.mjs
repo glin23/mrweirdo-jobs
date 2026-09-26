@@ -165,10 +165,6 @@ function writeJson(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-function escapeRegex(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function collectStrings(value, out = []) {
   if (typeof value === 'string') {
     out.push(value);

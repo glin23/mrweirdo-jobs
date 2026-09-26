@@ -95,6 +95,8 @@ test('年限：真正的 preferred 仍不算要求；「1-3 years」「2 or 3 ye
   assert.equal(requiredYears('Preferred: 3+ years in growth'), null);
   assert.equal(requiredYears('What you need\n- 1+ years in marketing\nNice to have\n- 3+ years in AI video\n'), 1);
   assert.equal(requiredYears('Preferred Qualifications\n- 4+ years at a startup\n'), null);
+  // 上一条 bullet 末尾的「(NY or CA preferred)」不是这一条年限的 preferred（真实拷贝复跑发现）
+  assert.equal(requiredYears(' - J.D. and one U.S. State Bar (NY or CA preferred)\n\n - 8+ years of relevant post-qualification legal experience'), 8);
   assert.equal(requiredYears('Requirements\n- 4+ years at a startup\nNice to have\n- Figma\n'), 4);
 });
 test('带人的经理算资深：Engineering / Design / Research / Solutions Engineering Manager；Marketing Manager 不算', () => {

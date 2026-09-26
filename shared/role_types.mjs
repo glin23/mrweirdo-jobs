@@ -101,7 +101,8 @@ const YEARS_RES = [
 // NOT "5+ years in X, ideally in Y" — there "ideally" qualifies the field
 // (verify 第 13 轮 P1: that reading let 4 senior jobs through).
 const PREFERRED_RE = /^\s*(?:of\s+[\w\s/&-]{0,25}?)?(?:experience\s*)?[\s(,-]*(?:is\s+|are\s+)?(?:preferred|a plus|nice to have|bonus)\b/i;
-const PREFERRED_BEFORE_RE = /\b(preferred|nice to have|bonus|ideally|plus)\b[\s:()-]*$/i;
+// Same line only: "(NY or CA preferred)" ending the bullet above says nothing about these years.
+const PREFERRED_BEFORE_RE = /\b(preferred|nice to have|bonus|ideally|plus)\b[ \t:(-]*$/i;
 // A heading line (not a bullet, short) opening a nice-to-have section: its
 // bullets are not requirements until the next heading.
 const HEADING_RE = /^(?![-•*·●▪◦]|\d+[.)])[^\n]{1,60}$/;
