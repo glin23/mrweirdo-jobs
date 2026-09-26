@@ -2,8 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 
+// Every node -e child preloads the system-CA read, like our entries (no exit-time SIGSEGV with NODE_USE_SYSTEM_CA=1).
+const PRELOAD = `--import=${new URL('../shared/preload_system_ca.mjs', import.meta.url).href}`;
+
 test('progress helper writes to stderr, never stdout', () => {
   const result = spawnSync(process.execPath, [
+    PRELOAD,
     '--input-type=module',
     '-e',
     "import { progress } from './shared/progress.mjs'; progress('test', 'hello');",
@@ -19,6 +23,7 @@ test('progress helper writes to stderr, never stdout', () => {
 
 test('MRWEIRDO_QUIET suppresses progress output', () => {
   const result = spawnSync(process.execPath, [
+    PRELOAD,
     '--input-type=module',
     '-e',
     "import { progress } from './shared/progress.mjs'; progress('test', 'hello');",

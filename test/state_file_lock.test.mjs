@@ -207,7 +207,7 @@ test('write-side: cover letter HTML and PDF land at 600 the moment they are writ
 // be followed by a lockFile call in the same handler. Weaker than a behavioural
 // test and said so; the behavioural half lives in the captureEvidence tests.
 test('write-side: cdp.mjs screenshot handler locks what it writes (source pin)', () => {
-  const src = spawnSync(process.execPath, ['-e', `
+  const src = spawnSync(process.execPath, [`--import=${new URL('../shared/preload_system_ca.mjs', import.meta.url).href}`, '-e', `
     const s = require('node:fs').readFileSync('shared/cdp.mjs', 'utf8');
     const fn = s.slice(s.indexOf('async function cmdScreenshot'), s.indexOf('async function cmdTypetext'));
     if (!/writeFileSync[\\s\\S]*lockFile\\(/.test(fn)) { console.error('cmdScreenshot writes without locking'); process.exit(1); }

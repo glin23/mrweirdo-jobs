@@ -20,6 +20,7 @@
 // root must re-export both vars itself (`${VAR:-default}` form) before `cd`-ing —
 // exporting once at the top of the file does NOT carry over to the next block.
 
+import './safe_exit.mjs'; // first: its concierge refusal ends the process (exit 3); no exit-time SIGSEGV with system CAs on
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';

@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +27,11 @@ function mjsUnder(dir) {
 }
 
 // An entry = a file meant to be run as `node <file>`: a shebang, or a main guard.
-const isEntry = (src) => src.startsWith('#!') || /process\.argv\[1\]|import\.meta\.main/.test(src);
+// Also any module that ends the process itself (process.exit): it may be the
+// last code a process runs even when the entry is not ours — `node -e
+// "import('./shared/paths.mjs')…"` in a test or a shell one-liner (lead 复验
+// b89cec2: concierge refusal in paths.mjs, 8/400 SIGSEGV with system CAs on).
+const isEntry = (src) => src.startsWith('#!') || /process\.argv\[1\]|import\.meta\.main|process\.exit\(/.test(src);
 
 // The npx launcher is published alone (package.json files: bin/, setup.sh), so
 // it reads the store inline instead of importing shared/.
@@ -46,7 +50,7 @@ function entriesMissingPreload() {
   return { entries, missing: entries.filter((f) => !importsSafeExit(f, readFileSync(f, 'utf8'))).map((f) => relative(ROOT, f)) };
 }
 
-test('守卫：shared / scripts / bin 下每个可直接 node 执行的入口都直接引 shared/safe_exit.mjs', () => {
+test('守卫：shared / scripts / bin 下每个可直接 node 执行的入口、以及自己调 process.exit 的库模块，都直接引 shared/safe_exit.mjs', () => {
   const { entries, missing } = entriesMissingPreload();
   assert.ok(entries.length >= 60, `entry scan found only ${entries.length} files — the scan itself is broken`);
   assert.deepEqual(missing, [], `entries without the system-CA preload (add \`import '<rel>/safe_exit.mjs';\` as the first import): ${missing.join(', ')}`);
@@ -79,4 +83,45 @@ test('NODE_USE_SYSTEM_CA=1：submission_evidence CLI 缺参 ×200（8 路并发�
   };
   await Promise.all(Array.from({ length: 8 }, worker));
   assert.deepEqual(codes, { 2: 200 });
+});
+
+test('NODE_USE_SYSTEM_CA=1：node -e 引 paths.mjs 走 concierge 拒绝路径（exit 3）×400（8 路并发）无 SIGSEGV', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'mrw-paths-exit-'));
+  const home = join(root, '.mrweirdo-jobs');
+  mkdirSync(home);
+  writeFileSync(join(home, '.concierge_run_active'), '/tmp/concierge-abc\n');
+  const env = { ...process.env, MRWEIRDO_HOME: home, HOME: root, NODE_USE_SYSTEM_CA: '1' };
+  delete env.NODE_OPTIONS;
+  const expr = "import('./shared/paths.mjs').then((p) => console.log(p.atsHome()))";
+  const codes = {};
+  let next = 0;
+  const worker = async () => {
+    while (next < 400) {
+      next += 1;
+      const r = await new Promise((res) => {
+        const c = spawn(process.execPath, ['-e', expr], { cwd: ROOT, env, stdio: 'ignore' });
+        c.on('close', (code, signal) => res(signal || code));
+      });
+      codes[r] = (codes[r] || 0) + 1;
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  assert.deepEqual(codes, { 3: 400 });
+});
+
+// Test helpers that start `node -e` / `--eval` children whose exit code a test
+// reads must preload the same read (lead 复验 b89cec2). `-e '0'` children that
+// only lend a dead pid are exempt.
+test('守卫：测试里起 node -e 子进程且读退出码的，都带 --import 预加载', () => {
+  const offenders = [];
+  for (const f of readdirSync(join(ROOT, 'test')).filter((n) => n.endsWith('.mjs'))) {
+    const src = readFileSync(join(ROOT, 'test', f), 'utf8');
+    for (const m of src.matchAll(/spawnSync\(process\.execPath,\s*\[([^\]]*?)'-e'/g)) {
+      const before = m[1];
+      const call = src.slice(m.index, m.index + 200);
+      if (/'-e',\s*'0'\]/.test(call)) continue;
+      if (!/preload_system_ca|PRELOAD/.test(before)) offenders.push(f);
+    }
+  }
+  assert.deepEqual(offenders, []);
 });

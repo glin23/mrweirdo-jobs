@@ -32,7 +32,8 @@ const SANDBOX_NAME = '.concierge_sandbox';
 const REFUSAL_EXIT = 3;
 
 function nodeEval(expression, env) {
-  return spawnSync(process.execPath, ['-e', expression], { cwd: ROOT, env: { ...process.env, ...env }, encoding: 'utf8' });
+  // Preload the system-CA read like every entry does (no exit-time SIGSEGV with NODE_USE_SYSTEM_CA=1).
+  return spawnSync(process.execPath, [`--import=${new URL('../shared/preload_system_ca.mjs', import.meta.url).href}`, '-e', expression], { cwd: ROOT, env: { ...process.env, ...env }, encoding: 'utf8' });
 }
 
 function print(fn, env) {
