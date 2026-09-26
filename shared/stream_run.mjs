@@ -9,6 +9,7 @@
 //
 //   start --target N [--no-submit] [--confirm-tier-over-30] [--max-windows K]
 //         [--release <apply_url>]… [--abandon <run_id>]
+//   (search_intent.sourcing_mode = "watchlist_only" → list companies only, no rotation)
 //   next --run ID                    → {action:'score', batch_file, scored_file} | {action:'done', reason}
 //   submit-scores --run ID --batch k --scored FILE → {…, gap_report}
 //   finish --run ID                  → { lines: [3], held, … }
@@ -245,6 +246,25 @@ function releaseUrls() {
   return urls;
 }
 
+// 关卡 3（拍板人 2026-09-26「只投递 AI 视频创业公司相关岗位」）: where a run
+// looks is a standing choice in search_intent.sourcing_mode —
+//   "watchlist_first" (or absent): list companies first, then the rotation pool;
+//   "watchlist_only": list companies only; the rotation pool is never called,
+//   and if the list has too few new jobs the run applies to fewer.
+const SOURCING_MODES = ['watchlist_first', 'watchlist_only'];
+function sourcingMode() {
+  const p = join(home, 'search_intent.json');
+  const intent = existsSync(p) ? readJson(p).search_intent ?? {} : {};
+  const mode = intent.sourcing_mode ?? 'watchlist_first';
+  if (!SOURCING_MODES.includes(mode)) die(`search_intent.sourcing_mode "${mode}" is not one of ${SOURCING_MODES.join(' | ')}`);
+  const listCount = (intent.target_companies ?? []).length;
+  if (mode === 'watchlist_only') {
+    if (listCount === 0) die('search_intent.sourcing_mode is watchlist_only but search_intent.target_companies is empty — install the company list (install_watchlist.mjs) or turn the mode off');
+    if (argValue('--max-windows') != null && Number(argValue('--max-windows')) !== 0) die('--max-windows asks for rotation windows, but search_intent.sourcing_mode is watchlist_only (list companies only) — drop the flag or turn the mode off');
+  }
+  return { mode, listCount };
+}
+
 async function start() {
   const target = Number(argValue('--target'));
   if (!Number.isInteger(target) || target <= 0) die('--target N (a positive integer: how many to apply to) is required');
@@ -258,6 +278,7 @@ async function start() {
   const windowSize = Number(process.env.MRWEIRDO_SOURCE_WINDOW_SIZE ?? 1000);
   if (!Number.isInteger(windowSize) || windowSize < 0) die(`MRWEIRDO_SOURCE_WINDOW_SIZE=${process.env.MRWEIRDO_SOURCE_WINDOW_SIZE} is not a window size`);
   const release = releaseUrls();
+  const sourcing = sourcingMode();
 
   const now = new Date();
   const runId = `${RUN_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
@@ -290,9 +311,10 @@ async function start() {
     initRunDb({ path: workDb, seqFloor: Math.max(maxJobId(entries), SEQ_FLOOR_MIN) });
     // Released jobs are list jobs held for review: they are found by the list
     // scan, so a release-only run needs no rotation window.
-    const maxWindows = argValue('--max-windows') != null ? Number(argValue('--max-windows'))
-      : release.length ? 0 : await fullRotationWindows(windowSize);
-    st = newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, recovered, release });
+    const maxWindows = sourcing.mode === 'watchlist_only' ? 0
+      : argValue('--max-windows') != null ? Number(argValue('--max-windows'))
+        : release.length ? 0 : await fullRotationWindows(windowSize);
+    st = newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, recovered, release, sourcing });
   } catch (e) {
     releaseHome(runId);
     rmSync(runDir, { recursive: true, force: true });
@@ -300,10 +322,10 @@ async function start() {
   }
   saveState(st);
   savePool(st, []);
-  console.log(JSON.stringify({ ok: true, run_id: runId, line: st.budget.line, budget: st.budget, seen_compact: seenCompact }));
+  console.log(JSON.stringify({ ok: true, run_id: runId, line: st.budget.line, budget: st.budget, sourcing_mode: st.sourcing_mode, seen_compact: seenCompact }));
 }
 
-function newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, recovered, release }) {
+function newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, recovered, release, sourcing }) {
   const cursorFile = join(home, 'source_cursor.json');
   return {
     run_id: runId,
@@ -311,6 +333,8 @@ function newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, 
     work_db: workDb,
     started_at: now.toISOString(),
     budget,
+    sourcing_mode: sourcing.mode,
+    list_count: sourcing.listCount,
     no_submit: hasArg('--no-submit'),
     confirm_over_30: hasArg('--confirm-tier-over-30'),
     attempted_this_run: 0,
@@ -463,7 +487,7 @@ function next() {
 function runRows(st) {
   const db = new DatabaseSync(st.work_db, { readOnly: true });
   try {
-    return db.prepare('SELECT id, company, title, apply_url, liveness_status FROM jobs').all();
+    return db.prepare('SELECT id, company, title, apply_url, liveness_status, COALESCE(auto_apply_eligible, 0) AS eligible FROM jobs').all();
   } finally {
     db.close();
   }
@@ -584,6 +608,31 @@ const STOP_TEXT = {
   pre_submit_fail_cap: '好几家表单都没打开，像是机器问题，已停，请看截图',
 };
 
+// Why a released job (the user named it: 「投」+ link) did not go out — every
+// one must be accounted for in the report, never dropped silently. A released
+// job with a ledger line this run is reported with the others (lines 1-2).
+function releaseWhy(st, rows, lines) {
+  const why = new Map();
+  for (const u of st.release) {
+    const fp = jobFingerprint(u).fp;
+    const gateOutcome = st.release_outcome[fp];
+    if (gateOutcome === undefined) {
+      // Not met by the list scan: gone from the board — unless the run
+      // stopped before scanning at all (e.g. today's tier already used up).
+      why.set(u, st.watchlist_done ? 'not_found' : (st.stop_reason ?? 'not_scanned'));
+      continue;
+    }
+    if (gateOutcome !== 'pooled') {
+      why.set(u, gateOutcome);
+      continue;
+    }
+    const row = rows.find((r) => jobFingerprint(r.apply_url)?.fp === fp);
+    if (row && lines.some((e) => e.job_id === row.id)) continue;
+    why.set(u, !row ? 'not_scored' : row.eligible ? `not_dispatched${st.stop_reason ? `:${st.stop_reason}` : ''}` : 'scored_not_eligible');
+  }
+  return why;
+}
+
 function report(st, rows, lines, unscored) {
   const rowById = new Map(rows.map((r) => [r.id, r]));
   const name = (e) => `${rowById.get(e.job_id).company}·${rowById.get(e.job_id).title}`;
@@ -595,7 +644,7 @@ function report(st, rows, lines, unscored) {
 
   const line1 = st.no_submit
     ? `试跑不提交：看了 ${st.scored_this_run} 个新岗，合适的 ${st.eligible_this_run} 个`
-    : `投出 ${submitted.length} 个${submitted.length ? `：${submitted.join('、')}` : ''}${st.held.length ? `；名单公司 ${st.held.length} 个合格、等你过目（你手投，或说「投」+链接我来投）：${st.held.map((h) => `${h.company}·${h.title}·${h.apply_url}`).join('、')}` : ''}`;
+    : `投出 ${submitted.length} 个${submitted.length ? `：${submitted.join('、')}` : ''}${st.held.length ? `；名单公司 ${st.held.length} 个合格、等你过目（你手投，或说「投」+链接我来投）：${st.held.map((h) => `${h.company}·${h.title} ${h.apply_url} `).join('、')}` : ''}`;
   const parts = [];
   if (uncertain.length) parts.push(`${uncertain.length} 个判不确定（截图：${uncertain.map((e) => e.evidence?.path || '无截图').join('、')}，请你看一眼）`);
   if (needsInfo.length) parts.push(`${needsInfo.length} 个卡在缺信息`);
@@ -605,10 +654,11 @@ function report(st, rows, lines, unscored) {
   if (rec) extras.push(`上次中断的运行有 1 家可能已提交：${rec.name}（${rec.screenshot || rec.apply_url}，永不自动重投，请你核对邮箱或页面）`);
   if (STOP_TEXT[st.stop_reason]) extras.push(STOP_TEXT[st.stop_reason]);
   if (failedBoards.length) extras.push(`名单里 ${failedBoards.length} 家没扫到：${failedBoards.join('、')}`);
-  const releaseMissing = st.release.filter((u) => !st.release_outcome[jobFingerprint(u).fp]);
-  const releaseBlocked = st.release.filter((u) => !['pooled', undefined].includes(st.release_outcome[jobFingerprint(u).fp]));
+  const why = releaseWhy(st, rows, lines);
+  const releaseMissing = st.release.filter((u) => why.get(u) === 'not_found');
+  const releaseBlocked = st.release.filter((u) => why.get(u) && why.get(u) !== 'not_found');
   if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个没找到（可能已下架）：${releaseMissing.join('、')}`);
-  if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => `${u}（${st.release_outcome[jobFingerprint(u).fp]}）`).join('、')}`);
+  if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => `${u}（${why.get(u)}）`).join('、')}`);
   const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length;
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 
@@ -626,6 +676,7 @@ function report(st, rows, lines, unscored) {
   }
   if (st.stop_reason === 'score_budget_reached') line3 += `（到了看的上限 ${st.budget.max_scored}）`;
   if (st.scored_this_run > 0 && unscored > 0) line3 += `；还有 ${unscored} 个新岗没打分就收工了`;
+  if (st.sourcing_mode === 'watchlist_only') line3 += `（只扫了名单公司 ${st.list_count} 家，别的公司没扫）`;
   return { lines: [line1, line2, line3], submitted, held: st.held };
 }
 
@@ -662,6 +713,7 @@ function finish() {
     submitted,
     held,
     stop_reason: st.stop_reason,
+    sourcing_mode: st.sourcing_mode,
     scored: st.scored_this_run,
     eligible: st.eligible_this_run,
     attempted: st.attempted_this_run,

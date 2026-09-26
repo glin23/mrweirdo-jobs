@@ -156,6 +156,18 @@ function jsonPart(file) {
   return stableJson(JSON.parse(readFileSync(file, 'utf8')));
 }
 
+// search_intent.sourcing_mode says WHERE to look (list only or list + rotation),
+// not how a job is judged: flipping it must not void every「不合适」.
+function intentPart(file) {
+  if (!existsSync(file)) return 'absent';
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  if (doc?.search_intent && typeof doc.search_intent === 'object') {
+    const { sourcing_mode: _where, ...rest } = doc.search_intent;
+    return stableJson({ ...doc, search_intent: rest });
+  }
+  return stableJson(doc);
+}
+
 function bytesPart(file) {
   return existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex') : 'absent';
 }
@@ -175,7 +187,7 @@ function resumeFile(home) {
 export function scoringBasisVersion(home) {
   return version([
     bytesPart(resumeFile(home)),
-    jsonPart(join(home, 'search_intent.json')),
+    intentPart(join(home, 'search_intent.json')),
     bytesPart(join(REPO_SHARED, 'scoring', 'score_prompt.md')),
   ]);
 }
