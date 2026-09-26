@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atsHome } from './paths.mjs';
 import { lockFile } from './state_file_lock.mjs';
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 const PRESET_PATH = join(dirname(fileURLToPath(import.meta.url)), 'sourcing', 'data', 'watchlist_ai_video.json');
 

@@ -25,6 +25,7 @@ import { randomBytes } from 'node:crypto';
 import { lockDir, lockFile } from './state_file_lock.mjs';
 import { SUBMITTED_STATUSES, boardSlug, jobFingerprint, normalizeCompany, normalizeTitle } from './job_identity.mjs';
 import { isAttempted } from './apply_guard.mjs'; // 「投过」唯一口径 (circular import, used at call time only)
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 export const LEDGER_RELPATH = 'log/submissions.jsonl';
 export const LEDGER_ERAS = Object.freeze(['v2', 'legacy']);

@@ -36,6 +36,7 @@ import { atsHome } from './paths.mjs';
 import { answerWritePaths } from './missing_field_questions.mjs';
 import { PROVENANCE_SOURCES, backfillLegacy, isProvenanceSource, recordEntries } from './answer_provenance.mjs';
 import { validateProfileBundle } from './validate_user_profile.mjs';
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 const EXIT_OK = 0;
 const EXIT_ARGS = 2;

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { atsHome } from './paths.mjs';
 import { roleTypesFromSearchIntent } from './role_types.mjs';
 import { FORM_ANSWER_POLICIES } from './work_auth_identity.mjs';
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 const FORM_ANSWER_POLICY_VALUES = Object.values(FORM_ANSWER_POLICIES);
 

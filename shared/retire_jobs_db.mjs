@@ -21,6 +21,7 @@ import { atsHome } from './paths.mjs';
 import { legacyCountCheck } from './submission_ledger.mjs';
 import { localDay } from './apply_guard.mjs';
 import { lockDir } from './state_file_lock.mjs';
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 const SIDE_FILES = ['-wal', '-shm', '-journal'];
 

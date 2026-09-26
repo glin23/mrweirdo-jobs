@@ -34,6 +34,7 @@ import {
 import { recoverInflight } from './inflight_recovery.mjs';
 import { batchLockHolder, liveBatchHint } from './lock_holder.mjs';
 import { fillBasisVersion, readSeen, scoringBasisVersion, seenIndex } from './seen_log.mjs';
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const home = atsHome();

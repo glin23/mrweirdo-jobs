@@ -9,6 +9,7 @@ import {
   readJsonOptional,
   writeCoverLetterArtifact,
 } from './cover_letter_materials.mjs';
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 function argValue(name, fallback = null) {
   const idx = process.argv.indexOf(name);

@@ -10,6 +10,7 @@ import { blockingProfileGaps } from './personal_fact_gate.mjs';
 import { workAuthSources } from './answer_provenance.mjs';
 import { formatMaxRows, resolveMaxRows } from './batch_limit.mjs';
 import { sweep } from './state_file_lock.mjs';
+import './safe_exit.mjs'; // no exit-time SIGSEGV here or in our node children (see preload_system_ca.mjs)
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const home = atsHome();
