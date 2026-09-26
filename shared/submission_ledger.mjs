@@ -362,10 +362,7 @@ function manualTs(at) {
 }
 
 export function recordManual(home, items, { apply = false } = {}) {
-  for (const name of ['stream_run.lock', 'apply_batch.lock']) {
-    const p = join(home, 'locks', name);
-    if (apply && existsSync(p)) throw new Error(`record-manual: ${p} exists — a run is going on; finish it (or abandon it) first`);
-  }
+  if (apply) refuseWhileRunning(home, 'record-manual');
   // The company is the board slug in the link — the same key the scans and the
   // pre-dispatch gate use (verify 第 6 轮 R6: "Runway" ≠ runway-ml would slip
   // past the 60-day company count). --company only double-checks it.
@@ -428,6 +425,37 @@ export function recordManual(home, items, { apply = false } = {}) {
   };
 }
 
+// 更正一行（拍板人 2026-09-26：Creatify 5 月迁入行判当时没投成）. The only way a
+// correction line is ever written: an explicit command with evidence, pointing
+// at an existing attempt line; the original stays. may_have_submitted follows
+// the corrected verdict (「投过」口径 ADR-S6: only not_submitted is "never reached
+// the company"), so every gate that reads effective lines — dedupe, the
+// pre-dispatch gate, the 60-day company count — sees the corrected fact.
+export const CORRECTABLE_VERDICTS = Object.freeze({ not_submitted: false, unknown: true, submitted: true });
+
+function refuseWhileRunning(home, what) {
+  for (const name of ['stream_run.lock', 'apply_batch.lock']) {
+    const p = join(home, 'locks', name);
+    if (existsSync(p)) throw new Error(`${what}: ${p} exists — a run is going on; finish it (or abandon it) first`);
+  }
+}
+
+export function correctEntry(home, { of, verdict, evidence }, { apply = false } = {}) {
+  if (!of) throw new Error('correct: --of <ledger line id> is required');
+  if (!Object.hasOwn(CORRECTABLE_VERDICTS, verdict)) throw new Error(`correct: --verdict must be one of ${Object.keys(CORRECTABLE_VERDICTS).join(' | ')}, got ${JSON.stringify(verdict)}`);
+  if (!evidence || !String(evidence).trim()) throw new Error('correct: --evidence "<why>" is required — a correction must say why');
+  if (apply) refuseWhileRunning(home, 'correct');
+  const target = readAll(home).find((e) => e.id === of);
+  if (!target) throw new Error(`correct: no ledger entry with id ${of}`);
+  if (target.correction_of) throw new Error(`correct: ${of} is itself a correction (of ${target.correction_of}) — correct the original line ${target.correction_of}`);
+  const patch = { verdict, may_have_submitted: CORRECTABLE_VERDICTS[verdict], reason: 'corrected_by_user' };
+  const before = { verdict: target.verdict, may_have_submitted: target.may_have_submitted, outcome: target.outcome, reason: target.reason };
+  const correction = apply ? appendCorrection(home, of, patch, String(evidence))
+    : { ...target, ...patch, id: '(assigned on --apply)', ts: '(now)', correction_of: of, evidence: String(evidence) };
+  const { answers: _answers, ...shown } = correction; // form answers stay in the 600 file, not on the terminal
+  return { applied: Boolean(apply), before, correction: shown };
+}
+
 function cliArg(name) {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : null;
@@ -436,15 +464,31 @@ function cliArg(name) {
 // CLI: `node shared/submission_ledger.mjs rebuild [--apply]`
 //      `node shared/submission_ledger.mjs backfill-legacy [--apply]`
 //      `node shared/submission_ledger.mjs record-manual (--url U --company C --title T [--at D] | --file F) [--apply]`
+//      `node shared/submission_ledger.mjs correct --of ID --verdict V --evidence "…" [--apply]`
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (invokedDirectly) {
   const cmd = process.argv[2];
-  if (!['rebuild', 'backfill-legacy', 'record-manual'].includes(cmd)) {
+  if (!['rebuild', 'backfill-legacy', 'record-manual', 'correct'].includes(cmd)) {
     console.error('usage: node shared/submission_ledger.mjs rebuild [--apply]');
     console.error('       node shared/submission_ledger.mjs backfill-legacy [--apply]   (default: dry-run plan)');
     console.error('       node shared/submission_ledger.mjs record-manual --url <link> --title <title> [--company <board slug, to double-check>] [--at YYYY-MM-DD] [--apply]');
     console.error('       node shared/submission_ledger.mjs record-manual --file <[{url,company,title,at}] json> [--apply]');
+    console.error('       node shared/submission_ledger.mjs correct --of <line id> --verdict not_submitted|unknown|submitted --evidence "<why>" [--apply]');
     process.exit(2);
+  }
+  if (cmd === 'correct') {
+    const { atsHome } = await import('./paths.mjs');
+    const apply = process.argv.includes('--apply');
+    let report;
+    try {
+      report = correctEntry(atsHome(), { of: cliArg('--of'), verdict: cliArg('--verdict'), evidence: cliArg('--evidence') }, { apply });
+    } catch (e) {
+      console.error(`[submission_ledger] ${e.message}`); // a refusal; nothing was written
+      process.exit(1);
+    }
+    console.log(JSON.stringify(report, null, 2));
+    if (!apply) console.error('[submission_ledger] dry-run: would append the correction line above; re-run with --apply');
+    process.exit(0);
   }
   const { atsHome } = await import('./paths.mjs');
   const { DatabaseSync } = await import('node:sqlite');
