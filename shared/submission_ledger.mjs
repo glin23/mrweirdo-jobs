@@ -8,7 +8,10 @@
 //   * Only appends. A wrong line is never edited in place — a correction line
 //     referencing the original is appended instead (career-ops status-log.tsv
 //     体例：账本永不原地改，改错补更正行).
-//   * One writer: shared/record_apply_outcome.mjs（唯一写账人，包 3 源码守卫）.
+//   * One writer per kind of fact: shared/record_apply_outcome.mjs for every
+//     driver attempt（唯一写账人，包 3 源码守卫）; this module's own CLI only for
+//     history migrated from jobs.db (backfill-legacy) and applications the user
+//     made by hand (record-manual).
 //   * jobs.db 的 status / submitted_at / auto_submitted_at 三列降级为派生缓存，
 //     `node shared/submission_ledger.mjs rebuild` 随时从账本重算（默认 dry-run
 //     只打印差异，--apply 才写库——与「默认试跑、显式开投」同一条纪律）。
@@ -21,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { lockDir, lockFile } from './state_file_lock.mjs';
 import { SUBMITTED_STATUSES, jobFingerprint, normalizeCompany, normalizeTitle } from './job_identity.mjs';
+import { isAttempted } from './apply_guard.mjs'; // 「投过」唯一口径 (circular import, used at call time only)
 
 export const LEDGER_RELPATH = 'log/submissions.jsonl';
 export const LEDGER_ERAS = Object.freeze(['v2', 'legacy']);
@@ -326,20 +330,106 @@ export function backfillLegacy(home, db, { apply = false } = {}) {
   return report;
 }
 
+// 拍板人手投登记（restart-apply S5 派遣第 4 项）. The user applied to these by
+// hand; the ledger must know, or the agent applies to them again and the
+// per-company 60-day count misses them. One line each: a real submission as far
+// as the user says (verdict submitted), marked as told-not-seen by its outcome
+// (manual_submitted) and reason (reported_by_user) — no page verdict exists.
+// Refused while a run is going on: its work DB numbers rows from the ledger's
+// highest job_id, and a line appended meanwhile would collide with them.
+export const MANUAL_OUTCOME = 'manual_submitted';
+const V2_ID_FLOOR = 100000; // same floor as stream_run's work DB
+
+// A bare date means that day on this machine (noon, so no zone shifts it).
+function manualTs(at) {
+  if (at == null || at === '') return new Date().toISOString();
+  const text = String(at);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T12:00:00`) : new Date(text);
+  if (Number.isNaN(d.getTime())) throw new Error(`record-manual: "${text}" is not a date (YYYY-MM-DD)`);
+  return d.toISOString();
+}
+
+export function recordManual(home, items, { apply = false } = {}) {
+  for (const name of ['stream_run.lock', 'apply_batch.lock']) {
+    const p = join(home, 'locks', name);
+    if (apply && existsSync(p)) throw new Error(`record-manual: ${p} exists — a run is going on; finish it (or abandon it) first`);
+  }
+  const bad = [];
+  for (const it of items) {
+    if (!it?.url || !jobFingerprint(it.url)) bad.push(`${it?.url} (no job fingerprint — Greenhouse/Ashby/Lever job links only)`);
+    else if (!it.company || !it.title) bad.push(`${it.url} (company and title are both required)`);
+  }
+  if (bad.length) throw new Error(`record-manual: nothing written — ${bad.join('; ')}`);
+  const entries = readAll(home);
+  const recorded = new Set(effectiveEntries(entries).filter(isAttempted).map((e) => jobFingerprint(e.apply_url).fp));
+  let nextId = Math.max(maxJobId(entries), V2_ID_FLOOR);
+  const plan = [];
+  const already = [];
+  for (const it of items) {
+    const fp = jobFingerprint(it.url);
+    if (recorded.has(fp.fp)) {
+      already.push({ url: it.url });
+      continue;
+    }
+    recorded.add(fp.fp);
+    nextId += 1;
+    plan.push({
+      era: 'v2',
+      job_id: nextId,
+      ts: manualTs(it.at),
+      apply_url: it.url,
+      company_key: normalizeCompany(it.company),
+      title_key: normalizeTitle(it.title),
+      ats: fp.ats,
+      outcome: MANUAL_OUTCOME,
+      verdict: 'submitted',
+      may_have_submitted: true,
+      reason: 'reported_by_user',
+      evidence: null,
+      answers: [],
+      work_auth_provenance: null,
+    });
+  }
+  if (apply) for (const e of plan) append(home, e);
+  return {
+    applied: Boolean(apply),
+    to_append: plan.map((e) => ({ job_id: e.job_id, ts: e.ts, apply_url: e.apply_url, company_key: e.company_key, title_key: e.title_key })),
+    already_recorded: already,
+  };
+}
+
+function cliArg(name) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : null;
+}
+
 // CLI: `node shared/submission_ledger.mjs rebuild [--apply]`
 //      `node shared/submission_ledger.mjs backfill-legacy [--apply]`
+//      `node shared/submission_ledger.mjs record-manual (--url U --company C --title T [--at D] | --file F) [--apply]`
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (invokedDirectly) {
   const cmd = process.argv[2];
-  if (cmd !== 'rebuild' && cmd !== 'backfill-legacy') {
+  if (!['rebuild', 'backfill-legacy', 'record-manual'].includes(cmd)) {
     console.error('usage: node shared/submission_ledger.mjs rebuild [--apply]');
     console.error('       node shared/submission_ledger.mjs backfill-legacy [--apply]   (default: dry-run plan)');
+    console.error('       node shared/submission_ledger.mjs record-manual --url <link> --company <slug> --title <title> [--at YYYY-MM-DD] [--apply]');
+    console.error('       node shared/submission_ledger.mjs record-manual --file <[{url,company,title,at}] json> [--apply]');
     process.exit(2);
   }
   const { atsHome } = await import('./paths.mjs');
   const { DatabaseSync } = await import('node:sqlite');
   const { dbPath, initDb } = await import('./local_db.mjs');
   const apply = process.argv.includes('--apply');
+  if (cmd === 'record-manual') {
+    const file = cliArg('--file');
+    const items = file ? JSON.parse(readFileSync(file, 'utf8'))
+      : [{ url: cliArg('--url'), company: cliArg('--company'), title: cliArg('--title'), at: cliArg('--at') }];
+    if (!Array.isArray(items)) throw new Error('record-manual: --file must hold a JSON array of {url, company, title, at}');
+    const report = recordManual(atsHome(), items, { apply });
+    console.log(JSON.stringify(report, null, 2));
+    if (!apply) console.error(`[submission_ledger] dry-run: would record ${report.to_append.length} hand-made application(s) (${report.already_recorded.length} already in the ledger); re-run with --apply`);
+    process.exit(0);
+  }
   if (cmd === 'backfill-legacy') {
     // The legacy DB is only ever READ here — no initDb (it would migrate/create).
     if (!existsSync(dbPath())) throw new Error(`backfill-legacy: legacy DB not found at ${dbPath()}`);
