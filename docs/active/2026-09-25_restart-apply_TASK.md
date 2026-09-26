@@ -59,3 +59,9 @@ Spawned_subtasks: none
 - Round 9 (arnold-verify 回报): **回炉 3/5**。P1（本批引入）：偏离 1 使缺信息岗算投过，实跑「补信息再投」回路断、10 家卡缺信息吃光当日额度；历史 182 条已投中 41 条（22.5%）是补信息再投成功的。改法：`deriveMayHaveSubmitted` 按页面错误清单证据判 false（约 10 行）。P2（既存）：job_report 把答案原文写进 644 的 reports/jobs/*.md。其余（偏离 2/3、账本字段、迁入 182=182 幂等、最坏意图场景、16/16 突变）全过。
 - Round 9: lead 让 builder 回炉第 1 轮（P1 + P2），其余不动。
 - Round 8 (arnold-builder 回炉第 1 轮): `5284ff5` 页面列出必填项错误的 needs_user/rate_limited 判未投过（补信息回路、额度两条红测试转绿）；`180a640` job_report 剥掉表单答案、reports/jobs 锁 600。测试 404→409，CI 四步 exit 0，未推。S3 规则 6 落地前不得真跑 apply_batch 放量（BUILD_NOTES 已写明）。
+- Round 10 (arnold-ops 推送): 文档提交 `8af3fbe` 推上 origin/main（`0b51484`→`8af3fbe`，共 14 个提交，fast-forward，无 force）。`git status -sb` 无 ahead/behind。本行未提交。
+- Round 11 (arnold-builder 第 3 次召唤 S3+S4): 10 个代码提交 `10d78de`..`e0b763a` + 文档提交，未推。测试 409→448，CI 四步 exit 0。V1 端到端离线测试通过：同一批岗连跑两次，第 2 次打分 0、派单 0、账本不增。规则 6（缺信息且档案没变就拦）已落地并有 e2e。名单 slug 公开接口实测 21/22 家可用（Kapwing 是 Lever 跳过；另 6 家两平台都 404）。偏离 13 条已申报，要紧的：下架/缺信息的看过记录由 stream_run 写（JD 指纹只在批次文件里）；流式模式跳过会把分数留在家目录的三样报告。沙箱真实数据试跑：未迁历史拒绝开跑 → 迁入 182=182 → 21 块板 19 秒扫完 → 1 个被历史拦下。放量仍需 lead 跑 backfill-legacy --apply + S5 编排改写。本行未提交（TASK 里有 lead 未提交的改动）。
+- Round 12 (arnold-builder S3+S4 回炉第 1 轮): `5af0d81` Runway slug 改为 runway-ml（其余 20 家核对无误）/ `e80046e` 名单板 404 列名 / `033f48f` 运行级互斥（有没收尾的运行或活着的派单锁就拒绝开跑，`--abandon` 显式放弃）/ `8865f00` 补记的可能已提交进报告；按 lead 裁决 B 固定验收口径。测试 448→453，CI 四步 exit 0，未推，本行未提交。
+- Round 12 (arnold-verify 第 4 轮): **回炉 3/5**。零重复投递 15 场景全过；真 bug：P2 并发两窗口互删运行、P2 watchlist `runway` 认错公司（财务软件）、P3 名单 404 静默、P3 开跑补记的可能已提交不进报告。「合格未投下次重打分」与定稿「零重复打分」字面冲突。
+- Round 12 lead 裁决：选 B——不加「合格未投」记录（等于重建拍板人否掉的岗位队列），定稿措辞改为「零重复投递 + 已判不合适零重复打分」（拍板人原话只针对重复投递）；已改 docs/specs/restart-apply.md。builder 回炉修 4 处。
+- Round 12 旁注：拍板人要求先看 22 家岗位，lead 只读拉取公开接口 562 岗、粗筛后给了链接清单供其手投（未含 Runway，故认错公司未波及）。拍板人手投的岗位待其告知后记入账本。
