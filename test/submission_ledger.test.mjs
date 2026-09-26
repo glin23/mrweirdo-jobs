@@ -211,6 +211,10 @@ test('验收 V8：answers 只进账本，不进 jobs 表任何列', () => {
   assert.ok(!JSON.stringify(feedback).includes(marker), 'answers must not land in the feedback table');
 });
 
+// verify 第 7 轮：这条曾在 lead 的全量里偶发失败、没能复现。断言信息带上子进程的
+// 退出码 / 信号 / 起进程错误，下次再出现能自己说清原因（不改语义）。
+const diag = (r) => `status=${r.status} signal=${r.signal} error=${r.error?.message ?? null}\n${r.stderr}`;
+
 test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库路径都不带 answers', () => {
   const marker = 'P2_MARKER_answers_belong_to_the_ledger_only';
   const answers = [{ label: 'Are you authorized to work?', value: marker, source: 'profile', widget: 'combobox' }];
@@ -218,7 +222,7 @@ test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库
   // ① 没投成（markSkipped 默认 detail）+ 进人工清单的 reason。
   const a = makeFunnelHome('mrw-ledger-p2-skip-');
   const ra = record(a.env, a.rowId, a.home, { outcome: 'needs_user', reason: 'cover_letter_file_required', answers });
-  assert.equal(ra.status, 0, ra.stderr);
+  assert.equal(ra.status, 0, diag(ra));
   const manual = readFileSync(join(a.home, 'run-tmp', 'manual_or_unsupported.json'), 'utf8');
   assert.ok(!manual.includes(marker), 'answers must not land in the manual-review file');
 
@@ -226,7 +230,7 @@ test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库
   const b = makeFunnelHome('mrw-ledger-p2-dup-');
   append(b.home, baseEntry(424242, 'submitted', { company_key: 'acme', title_key: 'ops intern' }));
   const rb = record(b.env, b.rowId, b.home, { outcome: 'submitted', verdict: 'submitted', answers });
-  assert.equal(rb.status, 1, 'a re-application is an invariant violation — loud');
+  assert.equal(rb.status, 1, `a re-application is an invariant violation — loud; ${diag(rb)}`);
   let db;
 
   // ③ 行状态在投递期间被改 → row_status_changed 路径同样包 driver_outcome。
@@ -235,7 +239,7 @@ test('P2：没投成 / 重复 / 状态已变 / 进人工清单——每条出库
   db.prepare("UPDATE jobs SET status = '⚠️ 跳过未投' WHERE id = ?").run(c.rowId);
   db.close();
   const rc = record(c.env, c.rowId, c.home, { outcome: 'submitted', verdict: 'submitted', answers });
-  assert.equal(rc.status, 0, rc.stderr);
+  assert.equal(rc.status, 0, diag(rc));
 
   for (const h of [a, b, c]) {
     assert.equal(readAll(h.home).at(-1).answers[0].value, marker, 'the ledger still holds the full answers');

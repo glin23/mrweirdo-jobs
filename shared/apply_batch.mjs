@@ -90,8 +90,12 @@ function runNode(args, opts = {}) {
     encoding: 'utf8',
     ...spawnOpts,
   });
-  return { code: r.status ?? 1, stdout: r.stdout || '', stderr: r.stderr || '' };
+  return { code: r.status ?? 1, signal: r.signal ?? null, spawnError: r.error?.message ?? null, stdout: r.stdout || '', stderr: r.stderr || '' };
 }
+
+// Why a child counted as failed: a null status means a signal or a spawn error,
+// which the exit code alone hides (verify 第 7 轮 diagnostic ask).
+const exitWhy = (r) => `exit=${r.code}${r.signal ? ` signal=${r.signal}` : ''}${r.spawnError ? ` spawn_error=${r.spawnError}` : ''}`;
 
 function fail(label, result) {
   if (result?.stdout) process.stdout.write(result.stdout);
@@ -446,7 +450,7 @@ for (let i = 0; i < rows.length; i += 1) {
     if (record.stdout) process.stdout.write(record.stdout);
     if (record.stderr) process.stderr.write(record.stderr);
     if (record.code !== 0) {
-      progress('apply', `record failed for row ${row.id}; skipping this row, continuing batch`);
+      progress('apply', `record failed for row ${row.id} (${exitWhy(record)}); skipping this row, continuing batch`);
       summaries.push({ row_id: row.id, result_file: resultFile, action: 'record_failed', reason: 'record_apply_outcome_nonzero' });
       continue;
     }
@@ -499,7 +503,7 @@ for (let i = 0; i < rows.length; i += 1) {
   if (record.code !== 0) {
     // The attempt may be unrecorded: dispatching more would step over it. Keep
     // the in-flight marker (next run records it first) and stop, loudly.
-    console.error(`[apply-batch] ⚠️ record failed for row ${row.id} after its driver ran — stopping the batch; locks/inflight.json kept for recovery`);
+    console.error(`[apply-batch] ⚠️ record failed for row ${row.id} after its driver ran (${exitWhy(record)}) — stopping the batch; locks/inflight.json kept for recovery`);
     summaries.push({ row_id: row.id, company: row.company, title: row.title, result_file: resultFile, action: 'record_failed', reason: 'record_apply_outcome_nonzero' });
     stoppedBy = 'record_failed';
     break;
