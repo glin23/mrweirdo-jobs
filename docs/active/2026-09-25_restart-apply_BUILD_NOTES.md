@@ -12,8 +12,8 @@ Reads:
   - （第 3 次召唤）DESIGN 第 2 轮 §3/§4/§7/§10、VERIFY_REPORT 第 2-3 轮挂账（规则 6、P3 slug/锁、P4 跨午夜）
   - （第 4 次召唤 S5）DESIGN §10 S5 行 / §3 / §4 / §7、定稿 docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮、VERIFY_REPORT 第 5 轮（RACE / PID 复用）
 Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
-Updated: 2026-09-25
-Iterations: 5
+Updated: 2026-09-26
+Iterations: 6
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -499,3 +499,77 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 > **回炉第 3 轮（verify 第 8 轮 P3：safe_exit 盖不全）**：`f4a5fce`，未推（在 ops 的 `6fde653` 之上）。改为**启动时**读完系统证书：新 `shared/preload_system_ca.mjs`（仅 `NODE_USE_SYSTEM_CA` 开着时同步 `tls.getCACertificates('system')`，约 50ms，无其他 import）；`safe_exit.mjs` 引入即执行它，并把 `--import=<preload 的 file URL>` 追加进 `process.env.NODE_OPTIONS`——仓里所有起子进程处都用 `{...process.env}`，所以子进程、孙进程全部继承。`installSafeExit()` 保留为空函数（原调用点不动），不再包 `process.exit`。入口：原 driver_contract / record_apply_outcome / stream_run / apply_supervisor，新增 apply_batch、supervisor_preflight、materialize_cover_letter、submission_ledger、retire_jobs_db、install_watchlist、validate_user_profile、record_profile_answers。红测试先行 `test/exit_segv_children.test.mjs`：引 safe_exit 的父进程 ×8 并发起 200 个不引任何模块的替身子进程——成功 `exit(0)`（cover letter 同款）旧码 **19/200 SIGSEGV → 0/200**；未捕获异常旧码红 → 200/200 退出码 1。真实 CLI `validate_user_profile` ×200（CA=1）0 崩。全量 `npm test` 连跑 3 次 488/488，CI 另三步 exit 0，真实家目录零写入。**全库清单**：直接起 node 子进程的点 13 处（apply_batch ×2、stream_run、apply_supervisor、inflight_recovery、supervisor_preflight、supervisor_status、apply_capacity_plan、submission_evidence、三个驱动、sourcing/_executors/ashby_plan_executor；另 scripts/public_alpha_gate、role_guard_smoke 两个 CI 脚本）——流水线上的都由上游入口注入的 NODE_OPTIONS 覆盖；直接调用 `process.exit` 的文件 44 个，其中不在任何已注入进程树下、且由人直接跑的只剩 scripts/*（dashboard、demo_check、CI 脚本）和零散工具 CLI，崩了只是终端报 segfault、不改数据，未逐个加。代价：每个 node 子进程启动多约 50ms（仅 CA 开着时），全量测试变慢，未影响结果。
 
 > **回炉第 4 轮（lead 复验 f3aef0f：RACE 偶发败方崩 ENOENT）**：`4d34c78`，未推。**复现**：RACE 用例循环 100 次（5 路并发）8 次失败，全部是败方在 `lockDir` 扫描/stat 自己刚建的运行目录时 ENOENT。**根因**：胜方拿锁后 `cleanOldRuns` 删掉除自己以外所有 `stream-*` 目录，其中包括败方刚建、还没上锁也还没抢锁的目录（第 5 轮 RACE 修法「先建目录再建锁」引入的窗口）。**修法**：运行目录名末尾就是建它的 start 进程 pid，`cleanOldRuns` 只清该进程已不在的目录（活着的要么正在抢锁、要么输了会自己删）。确定性红测试「活 pid 目录被清」先行转绿；RACE 循环 100 次修后 **0/100**（共 1000 轮同时开跑，每轮恰好一个开跑、败方都是干净拒绝，胜方照常收工）。全量 `npm test` 连跑 3 次 489/489，CI 另三步 exit 0，真实家目录零写入。残留代价：pid 被复用时一个死运行的目录会多留一次，下次再清，不影响正确性。
+
+---
+
+# 第 5 次召唤：关卡 3「只投 AI 视频创业公司」— 只扫名单开关 + 名单岗「列出 → 点名 → release 投」（2026-09-26）
+
+> 派遣范围中途更正（lead 转拍板人原话「投之前给我看一眼那个公司的岗位是什么，然后链接给我」）：原 B 项「填好表单停在提交前」的带闸单岗流程整段取消。本轮**未改动** `mrweirdo-ashby` / `mrweirdo-greenhouse` 任何文件，无需回退。
+
+## 实现摘要
+
+提交 `8594c12`（stream_run 只扫名单 + release 去向）、`e0dd06d`（install_watchlist --mode）、`b4ef9dd`（说明书 + CHANGELOG），未推。净增约 +210 行代码/测试、+68 行文档。
+- **开关**：`search_intent.sourcing_mode`，取值 `watchlist_first`（缺省，行为不变）/ `watchlist_only`。开时 `start` 把轮转窗口数钉 0、不加载轮转公司表，`next` 只扫名单；名单为空、值拼错、同时给 `--max-windows K>0` 都响亮拒绝。写开关用 `node shared/install_watchlist.mjs --mode watchlist_only`（默认试跑，`--apply` 才写，600 权限）；`--mode watchlist_first` 关。已登记进 `intent_schema.json`。
+- **报告**：开关开时第 3 行末尾加「（只扫了名单公司 K 家，别的公司没扫）」；新岗不够照原文「新岗不够：…没凑到 N 个」如实说。held 第 1 行格式由「公司·岗位·链接」改为「公司·岗位 链接 」（链接两侧空格，终端/Markdown 能点开；中文顿号紧贴链接会被并进链接）。held 列表本就不截断，新增测试锁住 7 条全列。
+- **release 核查**：只扫名单下 `--release` 正常投——扫名单 → 放行解 held → 重新打分 → apply_supervisor → 投前权威闸 checkDispatch（重投 / 60 天同公司 2 次 / 日档位）→ 驱动 → 唯一写账人 record_apply_outcome 写 submissions.jsonl（apply_url、may_have_submitted、company_key；指纹由 apply_url 推导、写入时校验）。**修两处去向不明**：① 今日额度已满时放行链接被报成「没找到（可能已下架）」→ 改报 `daily_cap_reached`；② 放行岗重新打分不合格时报告一字不提 → 报 `scored_not_eligible`；另兜齐 `not_scored`、`not_dispatched:<停因>`。
+- **依据版本**：`sourcing_mode` 不计入打分依据版本（只管扫哪里，不管怎么判），切换开关不作废「不合适」记录。
+
+## TDD 落地证据
+
+- 红测试先行 `test/stream_run_watchlist_only.test.mjs` 9 条：改前 7 红 2 绿（「开关关行为不变」「60 天同公司拦下」两条本就该绿，作回归护栏）→ 改后 9/9 绿。关键断言：`discoverCalls` 只有 `watchlist`、`driverCalls` 为空、held 7 条每条匹配 `公司·岗位 <链接>(\s|$)`、第 3 行「新岗不够…没凑到 5 个」+「只扫了名单公司 3 家」；release 后账本行 `may_have_submitted=true` 且 `attemptIndex.byFp` 按指纹命中；同链接再放行报 `already_attempted_fp`、驱动不再调。
+- `test/install_watchlist.test.mjs` +2 条：`--mode` 试跑不写、`--apply` 写开关+名单、关掉、拼错拒绝、不带 --mode 不碰已有开关。改前 1 红 → 绿。
+- 既有 D10 用例一处断言随格式改动同步（`·链接` → ` 链接 `）。
+- 全量 `npm test` 串行连跑 3 次：489 → **500/500**（见交付自查清单填的实数）。覆盖率：本项目无覆盖率工具配置（沿用前几次召唤口径），以 e2e 断言覆盖新增分支：开关三值、拒绝三种、release 去向五种中的四种（`not_scored` / `not_dispatched` 未单独造场景，见遗留）。
+
+## 自审记录
+
+- `sourcingMode()`：输入 search_intent.json，输出 {mode, listCount}；未知值 die，不静默当缺省。`--max-windows 0` 与只扫名单不冲突，放行。
+- `releaseWhy()`：每条放行链接必有去向——有账本行的在第 1/2 行照常出现；其余一律进第 2 行带原因，无 else 静默分支。
+- 无 try/except 压异常、无 mock 进生产代码；held 逻辑、闸、写账人未改一行。
+
+## 偏离 DESIGN
+
+1. **开关放 search_intent 而非 stream_run 参数**：派遣单二选一，选前者——拍板人这是长期决定，放参数每次都要记得带，漏带就会扫轮转池投非名单公司。不回改 DESIGN 结构，只需 architect 在 DESIGN 数据流「名单优先 → 轮转」处补一句开关。
+2. **held 第 1 行格式**：定稿写「公司·岗位·链接」，实现改为「公司·岗位 链接」（纯标点、为可点击），请 lead 决定是否同步 docs/specs/restart-apply.md 措辞（我未改定稿）。
+3. **打分依据版本剔除 sourcing_mode**：DESIGN §3 依据版本原是 search_intent 整份，现剔一个字段，理由见实现摘要。
+
+## 发现的旧 bug
+
+- （已修，本轮引入范围内）额度满时放行链接被报「可能已下架」：根因 = finish 只看 gate 有没有见过该链接，没区分「扫了没见到」和「根本没扫」。修法见摘要，测试「--release 遇今日额度已满」。
+- （已修）放行岗重新打分不合格静默：根因 = gate 记 `pooled` 后 finish 当作已处理。测试「--release 的岗重新打分不合格」。
+- （未修，列出）名单某家扫描失败时放行该家的链接会同时报「名单里 N 家没扫到」和「放行的没找到（可能已下架）」——两条并列，后一条措辞不够准；影响仅措辞。
+
+## 遗留事项
+
+1. **看的上限仍是 N×10**：只扫名单模式下名单公司合格岗全部 held、不占投递数，「跑 N 个」最多打分 N×10 个名单新岗，超出的第 3 行报「还有 X 个新岗没打分就收工了」，下次再看。拍板人若要一次看全 21 家，需决定：跑大 N，或给只扫名单模式放宽看的上限（待 lead/拍板人定）。
+2. held 7 天内不重报：拍板人一周没点名，第 8 天会再列；点名后已投的永不再列。
+3. `not_scored` / `not_dispatched` 两种放行去向没单独造 e2e 场景（代码路径短、与已测两种同构）。
+4. 真跑前仍要：ops 的清单 1-4 步完成 → 第 0 步重新引导（新简历）→ 拍板人同意后 `install_watchlist.mjs --mode watchlist_only --apply`。本轮未碰真实 `~/.mrweirdo-jobs/`。
+
+## 性能硬指标自查
+
+无新端点。只扫名单模式少一次轮转公司表加载和所有轮转扫描，运行更快；新增 `releaseWhy` 为 放行数×本次行数 的线性扫，规模个位×百级，可忽略。
+
+## API 接口 8 契约自查
+
+不涉 HTTP 端点，CLI 契约：`start` 输出新增 `sourcing_mode`，`finish` 输出新增 `sourcing_mode`，均为追加字段，旧调用方不受影响。
+
+## 本项目铁律对照
+
+- 串行跑全量、CI 四步本地全跑：是（见下）。
+- 主流程冒烟（找岗 → 打分 → 投 → 报告）：stream_run e2e 全绿，含只扫名单全链路与 release 投递记账。
+
+## 交付自查清单
+
+- [x] TDD：红测试先行（7 红 → 绿；install 1 红 → 绿）
+- [x] 全量 npm test 串行连跑 3 次全绿（500/500 ×3）+ CI 另三步 exit 0（数字见 TASK 本轮行）
+- [x] 无 except-pass、无 mock 入生产
+- [x] 带闸技能 mrweirdo-ashby / mrweirdo-greenhouse 零改动（范围更正后确认）
+- [x] 说明书 onboard / run-and-database / jobskill 用精准替换同步；CHANGELOG 顶部加条目
+- [x] 未真投、未写真实家目录、未 push
+
+## 试过的错误方向
+
+1. **只在 held 行把分隔符「、」换成「，」**：否决——任何全角标点紧贴 URL 都可能被终端/Markdown 并进链接，要空格隔开才稳。
+2. **只扫名单时对 `--max-windows` 静默忽略**：否决——显式给了轮转窗口却被吞，违背 Fail Fast，改为响亮拒绝。
+3. **切开关后沿用整份 search_intent 当依据版本**：否决——拍板人来回切一次开关会把 60 天内所有「不合适」作废、全部重打分，花钱不带来任何判断变化。
