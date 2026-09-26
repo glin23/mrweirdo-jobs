@@ -161,12 +161,17 @@ export function sqliteTs(iso) {
 // only with { apply: true }. Rows the ledger has never seen (pre-ledger
 // history, until 包 3 backfill) are NOT touched — the ledger only speaks for
 // what it witnessed. A correction that flips a submission away revokes the row.
-export function rebuild(home, db, { apply = false } = {}) {
+// onlyRowsInDb: check just the ledger lines whose job row is in THIS database —
+// for a stream run's one-off work DB that is exactly this run (row ids are
+// globally unique); history and earlier runs are simply not in it.
+export function rebuild(home, db, { apply = false, onlyRowsInDb = false } = {}) {
   const effective = effectiveByJob(readAll(home));
   const changes = [];
-  const report = { checked: effective.size, applied: Boolean(apply), changes };
+  const report = { checked: 0, applied: Boolean(apply), changes };
   for (const [jobId, e] of effective) {
     const row = db.prepare('SELECT id, status, submitted_at FROM jobs WHERE id = ?').get(jobId);
+    if (!row && onlyRowsInDb) continue;
+    report.checked += 1;
     if (!row) {
       changes.push({ job_id: jobId, action: 'ledger_row_without_db_row', ledger_id: e.id });
       continue;

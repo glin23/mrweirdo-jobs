@@ -177,7 +177,8 @@ const lockSweep = sweep(home, { apply: process.env.MRWEIRDO_LOCK_SWEEP !== 'repo
 
 // 账本↔DB 一致性（阶段 1 设计 §14.2 / ADR-13）：rebuild dry-run 有差异 = 有人
 // 绕过唯一写账人 record_apply_outcome 改了派生缓存——响，不放行。账本或库还不
-// 存在时无从不一致，如实放行。
+// 存在时无从不一致，如实放行。只核库里有的行（restart-apply S5）：即找即投时
+// 库是本次运行的一次性工作库，历史与以前运行的账本行本来就不在里面。
 async function checkLedgerConsistency() {
   try {
     const { ledgerPath, rebuild } = await import('./submission_ledger.mjs');
@@ -187,7 +188,7 @@ async function checkLedgerConsistency() {
     }
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(dbPath(), { readOnly: true });
-    const report = rebuild(home, db, { apply: false });
+    const report = rebuild(home, db, { apply: false, onlyRowsInDb: true });
     return {
       ok: report.changes.length === 0,
       checked: report.checked,
