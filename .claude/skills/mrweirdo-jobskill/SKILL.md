@@ -1,6 +1,6 @@
 ---
 name: mrweirdo-jobskill
-description: Demo-friendly main entry for Mr. Weirdo Jobs. Trigger when the user types /mrweirdo-jobskill, /Mr-Weirdo-JobSkill, asks to run the Mr. Weirdo job skill, wants the main menu, or wants the live end-to-end resume onboarding, realtime job research, scoring, guarded queue gate, and auto-apply flow. This is an alias/wrapper over mrweirdo-onboard; do not use for single URL applications.
+description: Demo-friendly main entry for Mr. Weirdo Jobs. Trigger when the user types /mrweirdo-jobskill, /Mr-Weirdo-JobSkill, asks to run the Mr. Weirdo job skill, wants the main menu, or wants the live end-to-end resume onboarding and the 「跑 N 个」 find-score-apply run (no job list; 3-line report). This is an alias/wrapper over mrweirdo-onboard; do not use for single URL applications.
 ---
 
 # Mr. Weirdo JobSkill
@@ -14,7 +14,7 @@ with exactly five choices. Do not show slash commands or ATS platform commands
 in the menu.
 
 ```text
-开始找实习 / Onboard（推荐）：进入完整 onboard 流程，简历 intake -> discovery -> queue gate -> 自动投递
+开始找实习 / Onboard（推荐）：进入完整 onboard 流程，简历 intake -> 说「跑 N 个」-> 现找现投 -> 3 行报告
 进度跟踪 / Tracker：记录 OA、面试、拒信、offer 等进展
 扩充写作画像 / Expand：从 documents/ 扩充写作画像
 技能提升 / Upskill：汇总技能缺口并生成学习建议
@@ -34,15 +34,16 @@ defaults:
   one or two sentences of self-introduction are optional.
 - Ask the three hard-boundary questions in one UI call, then use the parse soft
   window rather than a separate parse hard gate.
-- By default, process every currently eligible queued row. Use
-  `MRWEIRDO_MAX_AUTO_APPLY=N` only when the user explicitly wants a cap.
+- A run is started by the user saying "跑 N 个": N is how many to apply to,
+  capped by today's tier. There is no queue to process and no list to approve.
 - Stable unattended batch platforms are Greenhouse and Ashby. Lever remains a
   manual/single-URL helper until its batch upload path is proven reliable.
 - If the user is doing a public/live demo, run `npm run demo:check` first and
   fix FAIL rows before continuing. WARN rows are allowed only when they are
   normal first-run onboarding warnings, such as missing profile/search files.
-- Proceed through realtime discovery, scoring, queue preview, guarded
-  auto-apply, missing-info retry, report, and pruning. Do not stop at a plan.
+- Proceed through the run (start → find/score/apply batches → finish), show
+  the 3-line report, then the missing-info questions if any. Do not stop at a
+  plan, and do not show a job list before applying.
 
 Do not route single URLs here. Send one-off applications to the dedicated ATS
 skill internally. Do not add career-ops-style keyword routing that guesses

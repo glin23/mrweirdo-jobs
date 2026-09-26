@@ -5,13 +5,13 @@ description: v2 auto-submit version of mrweirdo-ashby. Fills an Ashby ATS applic
 
 # Ashby auto-submit (v2 internal helper)
 
-> ⚠️ This skill **auto-clicks Submit**. Per the v2 PRD §"Red lines: retracted vs preserved", the v1 red line "Submit 永远人工" has been retracted for v2's onboard flow. This skill exists to fulfill that contract. It is invoked **by `/mrweirdo-onboard`'s Step 10 dispatch loop**, NOT directly by the user.
+> ⚠️ This skill **auto-clicks Submit**. Per the v2 PRD §"Red lines: retracted vs preserved", the v1 red line "Submit 永远人工" has been retracted for v2's onboard flow. This skill exists to fulfill that contract. It is invoked **by a stream run's dispatch** (`shared/stream_run.mjs submit-scores` → `apply_supervisor` → `apply_batch.mjs`, one driver per job), NOT directly by the user.
 >
 > If a user invokes this skill directly thinking it's the v1 half-auto Ashby helper, **stop and route them to `/mrweirdo-ashby`** (which preserves the per-app Submit gate).
 
 ## When to trigger
 
-- **ONLY** when the main agent session is executing `/mrweirdo-onboard` Step 10 dispatch and routes a row whose `ats_platform == 'ashby'` to this skill.
+- **ONLY** when a stream run (`shared/stream_run.mjs`, onboard Step 5) dispatches a row whose `ats_platform == 'ashby'` to this skill, after the pre-dispatch guard re-read the ledger for that row.
 
 ## When NOT to trigger
 
@@ -24,7 +24,7 @@ description: v2 auto-submit version of mrweirdo-ashby. Fills an Ashby ATS applic
 - `~/.mrweirdo-jobs/profile.json` exists with personal/education/work_authorization populated
 - Resume PDF exists at `profile.resume_path`
 - `ats_platform == 'ashby'` for the row being processed
-- Caller provided a concrete `ROW_ID` from `/mrweirdo-onboard`'s queue
+- Caller provided a concrete `ROW_ID` from the run's one-off work DB (`MRWEIRDO_DB_PATH`)
 - The DB row still has `auto_apply_eligible=1`, `status='🤖 AI sourced'`,
   `role_type_match IN ('intern','part_time','new_grad_FT')` according to the
   user's selected `role_type_targets`, `apply_quota_limit IS NULL`, and
@@ -175,7 +175,7 @@ Parse `$VERDICT`. Outcome words follow the unified driver contract (`shared/driv
 - `submitted` — the page confirmed it:
   - Emit a structured final line like `{"outcome":"submitted","verdict":"submitted","job_id":ROW_ID,"post_url":"<current URL>"}` — the recorder refuses `outcome:"submitted"` without a `verdict` backing it.
   - Let onboard call `shared/record_apply_outcome.mjs` to mark the DB row. Do not update `jobs.db` directly inside this helper.
-  - Append `daily_count.jsonl` only from the onboard caller after the recorder says `action:"submitted"`.
+  - Nothing else counts submissions: the recorder's ledger line (`log/submissions.jsonl`) is the only count (看板的「今日已尝试 / 已投」都数它); the old separate daily counter file is retired.
   - Append `feedback.jsonl`: `{outcome:'submitted', auto_submitted:true, ats:'ashby', screenshot_pre, screenshot_post}`
 
 - `not_submitted` — the page states failure (e.g. "We couldn't submit your application", duplicate-application refusal):
@@ -199,7 +199,9 @@ node shared/job_report.mjs --row-id "$ROW_ID" --append-submission
 ```
 
 `record_apply_outcome.mjs` remains the single DB status writer; this report hook
-only reads execution artifacts and updates the row's `report_path`.
+only reads execution artifacts and updates the row's `report_path`. Stream runs
+skip this hook: its report keeps scores in the home overnight, which the
+find-and-apply mode does not allow.
 
 ---
 

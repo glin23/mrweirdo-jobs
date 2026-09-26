@@ -6,163 +6,109 @@ Use this reference during `/mrweirdo-onboard` Steps 4-7.
 
 - This is a local skill. State belongs only to the person running it.
 - Default state path is `$MRWEIRDO_HOME`, usually `~/.mrweirdo-jobs`.
-- The main database is `$MRWEIRDO_HOME/jobs.db`.
-- The source window cursor is `$MRWEIRDO_HOME/source_cursor.json`.
-- Temporary run artifacts live in `$MRWEIRDO_HOME/run-tmp` (inside the home, so
-  one switch moves the whole run — they hold what forms were filled with).
+- There is no job pool. What stays on disk between runs is only:
+  - the submission ledger `log/submissions.jsonl` (600) — who was applied to
+    (or maybe applied to), the only source of every count and of "never twice";
+  - the seen log `log/seen.jsonl` (600) — jobs looked at and not applied to
+    (not a fit, visa-blocked, taken down, stuck on missing info, held for
+    review), minimal fields only, so they are not paid for again;
+  - the rotation cursor `source_cursor.json` — where the next run's scan starts.
+- Each run works in a one-off directory `$MRWEIRDO_HOME/run-tmp/stream-<…>/`
+  (work DB, batches, scores, driver results, gap report). `finish` deletes it.
+- `jobs.db` is retired history. Before the first stream run its 已投 rows are
+  migrated into the ledger (`backfill-legacy`); then it is moved, not deleted,
+  to `archive/` (`retire_jobs_db.mjs`). No run reads or writes it.
 - There is no shared company cache, no remote backend, and no bundled demo corpus.
 - Checked-in public board slug lists are source enumerators only, not per-user
   job results and not shared company caches.
-- Every onboard run is a refresh cycle:
-  - bulk discovery crawls the next local source window, not the same first slice;
-  - newly found postings are inserted;
-  - re-seen postings update `last_seen_at`, `seen_count`, and `discovery_run_id`;
-  - submitted and confirmed rows remain as application history;
-  - low-fit, skipped, unsupported, repeatedly failed, and stale discovered rows can be pruned after the report.
 
-## Run Commands
-
-Initialize or migrate the local database:
+## Run Commands (one stream run)
 
 ```bash
 cd "$MRWEIRDO_REPO_ROOT"
-node shared/init_db_cli.mjs
+node shared/stream_run.mjs start --target <N> [--no-submit] [--release <link>]… [--abandon <run_id>]
+node shared/stream_run.mjs next --run <run_id>
+node shared/stream_run.mjs submit-scores --run <run_id> --batch <k> --scored <scored_file>
+node shared/stream_run.mjs finish --run <run_id>
 ```
 
-Discovery:
+Each command prints one JSON object on stdout (child output goes to stderr).
 
-```bash
-cd "$MRWEIRDO_REPO_ROOT"
-node shared/discover_candidates.mjs --plan
-node shared/discover_candidates.mjs \
-  --run \
-  --source-window-size "${MRWEIRDO_SOURCE_WINDOW_SIZE:-1000}"
-```
-
-If `--source-window-offset` is omitted, the skill reads
-`$MRWEIRDO_HOME/source_cursor.json` and advances it only after a discovery run
-finishes. This makes run 2 inspect the next source slice, run 3 the slice after
-that, and so on. Use `--source-window-size 0` only for a full source-list crawl.
+- `start`: refuses while another run is active or an apply batch is alive (the
+  message says how to finish, abandon or stop it); records a crashed attempt
+  from a dead run first (as maybe submitted, never re-applied); computes the
+  budget: at most min(N, today's tier left) applications and N×10 new jobs
+  looked at. Its `line` is the only start message.
+- `next`: scans the company list first, then the next rotation window; drops
+  what the ledger or the seen log already covers BEFORE scoring; hands out up
+  to 50 new jobs in `batch_file`, or `done` with a reason (`target_reached`,
+  `score_budget_reached`, `supply_exhausted`, `breaker_open`,
+  `pre_submit_fail_cap`, `daily_cap_reached`).
+- `submit-scores`: stores the batch, writes not-a-fit / visa-blocked to the
+  seen log, holds eligible list-company jobs (held_for_review), and applies to
+  the rest for real (`apply_supervisor --real` → liveness → pre-dispatch guard
+  per row → driver → recorder). Returns `gap_report` when the batch left
+  missing-info questions — read it before `finish`.
+- `finish`: returns the 3 report lines, `held`, `skipped_before_scoring`, and
+  deletes the run directory. Always finish a started run.
 
 Scoring is done by the main agent using `shared/scoring/score_prompt.md` over
-`$MRWEIRDO_HOME/run-tmp/to_score.json`, writing
-`$MRWEIRDO_HOME/run-tmp/scored.json`. `to_score.json` is limited to currently
-auto-supported Greenhouse/Ashby job rows. Manual-only and unsupported URLs
-are kept in `$MRWEIRDO_HOME/run-tmp/manual_or_unsupported.json` for review, but
-they do not consume the batch auto-apply scoring budget.
-Discovery also writes `$MRWEIRDO_HOME/run-tmp/discovery_funnel.json`, which
-shows the run's raw discovery count, hard-filter drops, auto-supported rows,
-manual rows, and score-cap drops.
-
-The user can watch the live dashboard with:
-
-```bash
-cd "$MRWEIRDO_REPO_ROOT"
-npm run status
-```
-
-Before storing, make sure every usable row in `to_score.json` has one complete
-score object in `scored.json`: `apply_url`, numeric `fit_score`, boolean
+`batch_file`, writing the JSON array to `scored_file`. Every job in the batch
+needs one complete score object: `apply_url`, numeric `fit_score`, boolean
 `recommended`, `role_type_match`, `dim_scores`, `legitimacy`, and
-`legitimacy_signals`. If scoring was interrupted, finish the missing rows
-first. The store script intentionally fails on partial scoring unless
-`--allow-partial-scores` is passed for an explicit debug run. Old scorer output
-without `legitimacy` is accepted as `high`.
+`legitimacy_signals`. The store step fails on partial scoring; the batch then
+stays pending — finish scoring and submit again.
 
-Required scored row fields are `apply_url`, numeric `fit_score`, boolean
-`recommended`, `role_type_match`, `dim_scores`, `legitimacy`, and
-`legitimacy_signals`.
+Liveness: only `liveness_status='expired'` blocks; `uncertain` and
+`bot_challenge` remain eligible because the ATS driver still does the
+page-level verification.
 
-Store scored job rows and recompute eligibility:
+`submit-scores` submits real applications. Do not add it (or
+`apply_supervisor --real`) to `.claude/settings.json` allow lists; the
+permission prompt stays a second spending gate.
 
-```bash
-cd "$MRWEIRDO_REPO_ROOT"
-node shared/store_scored_jobs.mjs \
-  --to-score "$MRWEIRDO_HOME/run-tmp/to_score.json" \
-  --scored "$MRWEIRDO_HOME/run-tmp/scored.json" \
-  > "$MRWEIRDO_HOME/run-tmp/db_result.json"
-```
+## Held list jobs and hand-made applications
 
-Run the guarded batch apply supervisor:
-
-```bash
-cd "$MRWEIRDO_REPO_ROOT"
-if [ -n "${MRWEIRDO_MAX_AUTO_APPLY:-}" ]; then
-  node shared/apply_supervisor.mjs \
-    --real \
-    --max "$MRWEIRDO_MAX_AUTO_APPLY"
-else
-  node shared/apply_supervisor.mjs --real
-fi
-```
-
-The real supervisor runs `shared/liveness_gate.mjs --batch` before queueing.
-Only `liveness_status='expired'` blocks; `uncertain` and `bot_challenge` remain
-eligible because the ATS driver still does the page-level verification. Use
-`--skip-liveness` only for an explicit recovery run if the liveness checker is
-misbehaving.
-
-The permission prompt for `--real` is intentional and acts as the second
-spending gate. Do not add it to `.claude/settings.json`.
-
-The real batch writes a JSON summary and generates:
-
-```text
-$MRWEIRDO_HOME/run-tmp/apply-gap-report.json
-$MRWEIRDO_HOME/run-tmp/apply-gap-report.md
-```
-
-If that report contains `user_questions`, pause before pruning. Ask the user
-the grouped factual questions, update this user's local `profile.json` or
-`essay_profile.json`, validate the profile, then requeue only the rows from the
-gap report and run a retry batch:
+- Held: eligible jobs at list companies are not applied to automatically. They
+  are listed in line 1 of the report with their links. The user applies by
+  hand, or releases them: `start --target <number of links> --release <link>…`
+  (list scan only, re-scored, applied like any other job).
+- Hand-made: whatever the user applied to by hand goes into the ledger, so no
+  run applies to it again and it counts toward the company's 2-in-60-days:
 
 ```bash
 cd "$MRWEIRDO_REPO_ROOT"
-node shared/validate_user_profile.mjs
-node shared/retry_gap_rows.mjs \
-  --apply \
-  --gap-report "$MRWEIRDO_HOME/run-tmp/apply-gap-report.json"
-if [ -n "${MRWEIRDO_MAX_AUTO_APPLY:-}" ]; then
-  node shared/apply_supervisor.mjs \
-    --real \
-    --max "$MRWEIRDO_MAX_AUTO_APPLY"
-else
-  node shared/apply_supervisor.mjs --real
-fi
+node shared/submission_ledger.mjs record-manual --url <link> --company <board slug> --title "<title>" [--at YYYY-MM-DD]           # dry-run
+node shared/submission_ledger.mjs record-manual --url <link> --company <board slug> --title "<title>" [--at YYYY-MM-DD] --apply
+node shared/submission_ledger.mjs record-manual --file <list.json> --apply   # [{"url","company","title","at"}]
 ```
+
+## One-time history migration (before the first stream run)
+
+`start` refuses while `jobs.db` exists and the ledger has no history lines.
+With the user's agreement, in this order:
+
+```bash
+cd "$MRWEIRDO_REPO_ROOT"
+node shared/submission_ledger.mjs backfill-legacy            # dry-run: what would be migrated
+node shared/submission_ledger.mjs backfill-legacy --apply    # writes legacy lines + count check
+node shared/retire_jobs_db.mjs                               # dry-run: count check + archive path
+node shared/retire_jobs_db.mjs --apply                       # moves jobs.db to archive/, deletes nothing
+```
+
+## Missing Info
 
 Do not ask the user to write open-text answers such as inline essays,
 cover-letter style prompts, or other `agent_open_text` fields when the resume,
 optional self-introduction, local profile, `essay_profile.json`, and
 `answer_bank.json` contain enough grounded material. Those belong in the agent
-work bucket and should be answered or templated before the retry. For
+work bucket and should be answered or templated before asking. For
 `agent_attestation` and `agent_profile_backed`, fill only from the local profile
 or driver coverage, and follow `shared/references/truthfulness.md`.
 
-Generate report:
-
-```bash
-cd "$MRWEIRDO_REPO_ROOT"
-REPORT_PATH=$(node shared/apply_report.mjs --since "$(date -u +%Y-%m-%d)")
-echo "$REPORT_PATH"
-```
-
-Prune disposable discovered rows after the report:
-
-```bash
-cd "$MRWEIRDO_REPO_ROOT"
-node shared/prune_discovered_jobs.mjs \
-  --apply \
-  --delete-skipped --skipped-days "${MRWEIRDO_PRUNE_SKIPPED_DAYS:-0}" \
-  --delete-unusable-url \
-  --delete-low-fit --low-fit-days "${MRWEIRDO_PRUNE_LOW_FIT_DAYS:-0}" \
-  --delete-unsupported --unsupported-days "${MRWEIRDO_PRUNE_UNSUPPORTED_DAYS:-14}" \
-  --delete-stale --stale-days "${MRWEIRDO_PRUNE_STALE_DAYS:-30}" \
-  --retry-limit "${MRWEIRDO_PRUNE_RETRY_LIMIT:-3}" \
-  --clear-first-run \
-  --json > "$MRWEIRDO_HOME/run-tmp/prune-summary.json"
-```
+Jobs that got stuck on missing info are not requeued by hand: once the answer is
+recorded, the profile they were stuck on has changed and the next run brings
+them back as candidates.
 
 ## Recording User Answers
 
@@ -206,7 +152,7 @@ Exit codes:
 On success the command also updates `$MRWEIRDO_HOME/answer_provenance.json`
 (chmod 600), which records, per path, where the answer came from, when, and a
 fingerprint of the value — never the value itself. It is read-only context for
-the Step 5 identity block and audit; it never affects what gets filled onto a
+the Step 3 identity line and audit; it never affects what gets filled onto a
 form. A missing or corrupt provenance file cannot block an application.
 
 ## Eligibility
@@ -231,24 +177,9 @@ discovered/scored, but are not part of the stable batch auto-submit path unless
 a later skill version explicitly changes that. Lever remains available as a
 manual/single-URL helper.
 
-## Queue Visibility
-
-Before a real batch submits, surface the queued rows to the user: company,
-title, fit score, ATS, location when available, and any abnormal
-legitimacy/liveness signal. This is visibility for the batch, not
-per-application confirmation. Honor any rows the user asks to drop before the
-loop starts. Always state that manual/unsupported rows are not auto-submitted.
-
 ## Final Summary
 
-Report:
-
-- raw discovered count, filtered count, scored count;
-- submitted count by ATS;
-- skipped counts by reason;
-- missing-info questions asked and retry-batch result, if any;
-- recurring onboarding candidates from the gap report;
-- report path;
-- local DB path;
-- prune summary;
-- reminder that submitted/confirmed history is kept while disposable discovered rows are pruned.
+The run report is the 3 lines from `finish`, shown verbatim and nothing else:
+what was applied to (「公司·岗位」, plus held list jobs with links), what was
+not and why (screenshots for uncertain ones), and whether there were enough new
+jobs. Live counts (今日已尝试 / 已投) are in `npm run status`, read from the ledger.

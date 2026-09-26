@@ -1,6 +1,6 @@
 ---
 name: mrweirdo-onboard
-description: Main entry skill for Mr. Weirdo Jobs after install. Trigger for first-run setup, resume intake, optional self-introduction intake, student job/internship discovery, scoring, guarded queue preview, and explicit-gated auto-apply. Uses one intake prompt, one hard-boundary AskUserQuestion call, a soft parse correction window, and one queue gate before any real submissions. Do NOT trigger for a single URL/manual application; route those internally to the dedicated ATS skill.
+description: Main entry skill for Mr. Weirdo Jobs after install. Trigger for first-run setup, resume intake, optional self-introduction intake, and 「跑 N 个」 find-and-apply runs (find, score and apply on the spot, 3-line report; no job list, no queue gate). Uses one intake prompt, one hard-boundary AskUserQuestion call, a soft parse correction window; the user saying "跑 N 个" is the start of each run. Do NOT trigger for a single URL/manual application; route those internally to the dedicated ATS skill.
 ---
 
 # Mr. Weirdo Jobs Onboard
@@ -9,9 +9,12 @@ This is the main local skill after install. Every run belongs to the person
 running the skill; all state stays on this machine.
 
 State defaults and run artifacts are in `references/run-and-database.md`. The
-flow is: intake -> parse soft window -> discovery/scoring -> queue gate ->
-guarded apply -> missing-info retry -> report/prune. The only hard business
-confirmation before spending applications is the queue gate in Step 5.
+flow is: intake -> parse soft window -> 「跑 N 个」 start -> find, score and
+apply on the spot (one stream run) -> 3-line report -> missing-info questions.
+There is no job list and no queue gate: the user saying "跑 N 个" is the
+confirmation for that run (restart-apply D8「说跑即开始」). Nothing but the
+submission ledger, the seen log and the rotation cursor stays on disk between
+runs.
 
 ## Trigger
 
@@ -20,8 +23,8 @@ Use this skill when:
 - first-run sentinel `~/.mrweirdo-jobs/.first_run` exists and the user asks how
   to start, says "start", "next step", "找实习", "投实习", or similar;
 - user explicitly invokes `/mrweirdo-onboard` or `/mrweirdo-jobskill`;
-- user wants the end-to-end resume-driven discovery + scoring + guarded batch
-  apply loop.
+- user says "跑 N 个" / "run N" / wants the find-score-apply run.
+- user says "投" + a link from a run report's held list (release it, Step 7).
 
 When invoked with no concrete request yet, show a single AskUserQuestion main
 menu with exactly these five choices and no slash commands:
@@ -47,7 +50,15 @@ Do not use this skill for:
 ## Defaults And Safety
 
 - Auto-apply threshold: `fit_score >= 5`.
-- Stable batch auto-submit ATS: Greenhouse and Ashby.
+- Stable batch auto-submit ATS: Greenhouse and Ashby. Lever is paused.
+- Daily tier: `MRWEIRDO_DAILY_TIER` (10 / 25 / 50, default 10). Above 30 only
+  with the user's own explicit word (`--confirm-tier-over-30`). A run applies
+  to at most min(N, what is left of today's tier) and says so in its first line.
+- Never twice: a job applied to (or maybe applied to) is never applied to
+  again; one company at most 2 times in 60 days. The ledger decides, not you.
+- List (dream) companies (`search_intent.target_companies`) are scanned first
+  every run; an eligible job there is NOT applied to automatically — it is
+  listed for the user（restart-apply D10「梦想公司投前过目」）.
 - Per-company quota guard stays on for the user's local `company_list.user.json`.
 - LinkedIn, Indeed, Glassdoor, non-GH/Ashby platforms, and
   `legitimacy="suspicious"` rows go to manual review.
@@ -59,8 +70,8 @@ Do not use this skill for:
 
 ## Output Presentation Rules
 
-All user-facing progress, summaries, questions, queue previews, and final
-reports should use the same compact terminal style:
+All user-facing progress, summaries, questions, and final reports should use
+the same compact terminal style:
 
 ```text
 [Step X/7] <短标题> - <正在做什么> (~<大概多久>)
@@ -77,9 +88,13 @@ Presentation rules:
 - Use CN-leaning bilingual labels: short Chinese first, English when it helps
   scanning (for example `自动投 / auto`, `manual 清单 / manual`).
 - Prefer calm labels over paragraphs: `状态`, `你要做`, `结果`, `路径`, `下一步`.
-- Keep queue gate and final report clean. They are the main product moments.
-- Never change the meaning of the queue gate, identity block, counts, consent,
-  eligibility, thresholds, or apply flow while improving presentation.
+- During a run, stay silent between the start line and the 3-line report
+  (无事禁言). Speak up only when a command fails or the run stops on a
+  breaker.
+- Keep the start line and the 3-line report clean. They are the main product
+  moments.
+- Never change the meaning of the identity line, counts, consent, eligibility,
+  thresholds, or apply flow while improving presentation.
 
 ## References
 
@@ -87,8 +102,8 @@ Read these only when needed:
 
 - `references/intake-and-profile.md`: hard-boundary questions, profile/search
   JSON shape, adaptive follow-up rules, and parse soft-window rules.
-- `references/run-and-database.md`: local DB contract, discovery/scoring/store
-  commands, auto-apply supervisor, report, and pruning.
+- `references/run-and-database.md`: what stays on disk, the stream run
+  commands, the ledger, history migration, and recording user answers.
 - `../../../shared/scoring/score_prompt.md`: required scoring rubric.
 - `../../../shared/profile.template.json`: runtime `profile.json` shape.
 - `../../../shared/intelligence/intent_schema.json`: `search_intent.json` schema.
@@ -114,8 +129,8 @@ Mr. Weirdo Jobs 已准备开始。
 接下来我会：
 1. 读取简历并生成本地 profile。
 2. 只问不能安全推断的硬边界问题。
-3. 开始只读 discovery + scoring。
-4. 在真实提交前给你 queue gate；你回复"开始"才会投。
+3. 你说「跑 N 个」我才开跑：现找、现打分、合适的当场投，投满 N 个或新岗找完就停。
+4. 结束只给你 3 行：投成了哪几家、没投成的原因、新岗够不够。
 
 你要做：发我简历 PDF 的绝对路径。
 ```
@@ -203,7 +218,7 @@ If validation fails, correct the generated JSON before continuing.
 
 ## Step 3 - Parse Soft Window
 
-Show a concise parse summary before discovery:
+Show a concise parse summary before the first run:
 
 - name, email, phone;
 - school, major, graduation date;
@@ -211,201 +226,132 @@ Show a concise parse summary before discovery:
 - top role directions and industries;
 - geography and relocation policy;
 - writing themes and hard no-claims;
-- exclude keywords.
+- exclude keywords;
+- list (dream) companies, if `search_intent.target_companies` is set.
 
-Use this layout:
+Always include this identity line and fixed statement in the parse window — it
+replaces the old queue gate as the one place the user sees who the forms are
+filled as, before anything is submitted:
 
 ```text
 [Step 3/7] 解析检查 / Parse window - 先给你扫一眼 (~30 sec)
 
+将以以下身份提交：<name> / <email> / <phone> / <visa 状态>（来源 <source>）
+
 | 模块 | 读到的内容 | 备注 |
 |---|---|---|
-| 身份 | <name> / <email> / <phone> | queue gate 会再复核 |
 | 学校 | <school> / <major> / <graduation> | [推断，可改] where applicable |
 | 工作授权 | <visa> / sponsorship <yes/no> | 不从专业推断 |
 | 目标方向 | <functions / role categories> | 跟用户自报 + 简历走 |
-| 地点 | <geo / relocation policy> | 影响 discovery |
+| 地点 | <geo / relocation policy> | 影响找岗 |
+| 名单公司 | <N 家 / 未设> | 每次先扫；合格的不自动投，列给你过目 |
 | 写作素材 | <themes> | 只用有证据的内容 |
 | 不写/不投 | <hard no-claims / excluded keywords> | 安全边界 |
 
-你要做：如果身份或方向不对，直接纠正；否则我继续只读找岗。
-```
-
-Do not wait for a separate parse confirmation. Say:
-
-```text
-我会先开始只读 discovery；你现在或 discovery 期间都可以纠正。身份事实改完会在
-queue gate 再复核；方向类字段如果改动，我会重跑 discovery。
-```
-
-If the user corrects identity facts, update the JSON and continue. If they
-change target direction, update JSON and restart Step 4.
-
-## Step 4 - Refresh Discovery, Score, Store
-
-Read `references/run-and-database.md`.
-
-```bash
-export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
-cd "$MRWEIRDO_REPO_ROOT"
-node shared/init_db_cli.mjs
-node shared/discover_candidates.mjs --plan
-node shared/discover_candidates.mjs \
-  --run \
-  --source-window-size "${MRWEIRDO_SOURCE_WINDOW_SIZE:-1000}"
-```
-
-Before discovery, tell the user:
-
-```text
-[Step 4/7] 找岗 + 打分 / Discovery & scoring - 生成候选队列 (~5-15 min)
-
-状态：先只读抓岗位，不会提交申请。
-你可以去做别的；我会用漏斗数字汇报进度。
-```
-
-After discovery, summarize the funnel in Chinese with this compact shape: raw
-discovered, hard-filter dropped, auto-supported rows, manual rows, and rows to
-score. Tell the user they can watch the live dashboard with:
-
-```text
-[Step 4/7] Discovery 漏斗
-
-raw <R> -> hard-filter dropped <D> -> auto-supported <A> -> manual <M> -> to score <S>
-
-| 阶段 | 数量 | 含义 |
-|---|---:|---|
-| raw | <R> | 初始发现 |
-| hard-filter dropped | <D> | 明显不合适/不可用 |
-| auto-supported | <A> | 平台可自动投 |
-| manual | <M> | 需要人工处理 |
-| to score | <S> | 进入打分 |
-
-看板：`npm run status`
-```
-
-Score `$MRWEIRDO_HOME/run-tmp/to_score.json` in batches of 50 using
-`shared/scoring/score_prompt.md`. After each batch, output one line:
-
-```text
-[Step 4/7] 评分进度 / Scoring - 100/216 | fit≥5 暂计 N | 下一批 50
-```
-
-Do not continue until every usable row has the complete score object required in
-`references/run-and-database.md`.
-
-Store:
-
-```bash
-export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
-cd "$MRWEIRDO_REPO_ROOT"
-node shared/store_scored_jobs.mjs \
-  --to-score "$MRWEIRDO_HOME/run-tmp/to_score.json" \
-  --scored "$MRWEIRDO_HOME/run-tmp/scored.json" \
-  > "$MRWEIRDO_HOME/run-tmp/db_result.json"
-```
-
-Summarize stored count, eligible count, manual/unsupported count, quota-guarded
-count, suspicious count, and the DB path with this layout:
-
-```text
-[Step 4/7] 入库完成 / Stored
-
-| 指标 | 数量 |
-|---|---:|
-| stored | <N> |
-| auto-eligible | <N> |
-| manual/unsupported | <N> |
-| quota protected | <N> |
-| suspicious review | <N> |
-
-路径：DB `<path>`
-下一步：queue gate，给你看将要自动投的具体队列。
-```
-
-## Step 5 - Queue Gate
-
-Before a real batch, run a dry-run and diagnostics:
-
-```bash
-export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
-cd "$MRWEIRDO_REPO_ROOT"
-node shared/apply_supervisor.mjs --dry-run > "$MRWEIRDO_HOME/run-tmp/dry-run.json"
-node shared/queue_diagnostics.mjs --json > "$MRWEIRDO_HOME/run-tmp/queue-diagnostics.json"
-```
-
-Surface a compact queue preview. Include company, title, fit score, ATS,
-location when available, and mark abnormal liveness/legitimacy fields when
-present. If more than seven columns would be needed, keep the main table compact
-and list only abnormal rows below it.
-
-Always present the queue gate as the clean hero moment. Use this structure,
-while preserving the identity block, counts, manual/quota/suspicious meanings,
-cover-letter disclosure, and "开始" consent:
-
-Always include this identity block and fixed statement inside the queue gate:
-
-```text
-[Step 5/7] Queue gate - 最终确认后才真实提交 (~1 min review)
-
-身份 / Identity
-将以以下身份提交：<name> / <email> / <phone> / <visa 状态>（来源 <source>）
-
-本批次 / Batch counts
-自动投 <N> 行 | manual 清单 <M> 行（不会替你投）| quota 保护 <Q> 行 | suspicious 待复核 <S> 行
-
-自动投队列 / Auto queue
-| # | Company | Role | Fit | ATS | Location | Flags |
-|---:|---|---|---:|---|---|---|
-| 1 | <company> | <title> | <score> | <ats> | <location> | <ok/anomaly> |
-
-规则 / Rules
-若 dry-run 输出的 `profile_gate.ok` 为 false，先问那一个问题、按 `remediation_command` 记录答案再往下走（否则整批投不出去）。
-只有标记 auto 的行会被自动提交；manual 清单在 $MRWEIRDO_HOME/run-tmp/manual_or_unsupported.json，系统不会替你处理。
 对需要 cover letter 的岗位，我会基于你的简历/profile/essay_profile/answer_bank 与岗位匹配证据自动生成并附上 cover letter；不会编造个人或公司事实。
+只自动投 Greenhouse / Ashby；同一个岗位永不投第二次，同一家公司 60 天最多 2 次。
 
-你要做 / Action
-回复"开始"执行，或先指出需要修改的行/字段。
+你要做：身份或方向不对就直接纠正；都对就说「跑 N 个」（N = 这次投几个）。「跑 N 个」这句话本身就是开始，我不会再给你清单等你点头。
 ```
 
-Honor requested row drops before the batch starts. Continue only after the user
-explicitly says "开始" or an equally clear start command. Do not re-confirm each
-row after the batch begins.
+If the user corrects identity facts, update the JSON (identity facts through
+`shared/record_profile_answers.mjs`, see `references/run-and-database.md`) and
+show the identity line again. If they change target direction, update
+`search_intent.json`; the next run re-judges earlier「不合适」by itself.
 
-Run the real foreground batch:
+**名单公司 / Company list (first run, once).** If
+`search_intent.target_companies` is empty or missing, offer the preset AI-video
+company list once. Show what would be added (dry-run, writes nothing):
 
 ```bash
 export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
 cd "$MRWEIRDO_REPO_ROOT"
-if [ -n "${MRWEIRDO_MAX_AUTO_APPLY:-}" ]; then
-  node shared/apply_supervisor.mjs --real --max "$MRWEIRDO_MAX_AUTO_APPLY"
-else
-  node shared/apply_supervisor.mjs --real
-fi
+node shared/install_watchlist.mjs
 ```
 
-Follow `references/run-and-database.md` for the `--real` permission prompt,
-serial liveness gate, and `--skip-liveness` escape hatch.
+Ask one question: 「要把这 N 家设为名单公司吗？名单公司每次先扫；它们合格的岗不自动投，会列出来给你过目。」
+Run `node shared/install_watchlist.mjs --apply` only after the user says yes.
+If the user says no or names other companies, do not write the preset.
 
-## Step 6 - Missing Info Follow-Up And Retry
+## Step 4 - 「跑 N 个」开跑 / Start
 
-After every real batch, inspect:
+The user saying "跑 N 个" (or "跑 10 个", "run 5") is the start of the run.
+If they want a run but give no number, ask one question: 「这次跑几个？」
+(recommend today's tier, 10 by default). Do not show a job list first.
+
+Read `references/run-and-database.md`, then:
+
+```bash
+export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
+cd "$MRWEIRDO_REPO_ROOT"
+node shared/stream_run.mjs start --target <N>
+```
+
+Show the `line` field as the only start message:
 
 ```text
-$MRWEIRDO_HOME/run-tmp/apply-gap-report.json
-$MRWEIRDO_HOME/run-tmp/apply-gap-report.md
+[Step 4/7] 开跑 / Start - <line>
 ```
 
-Before asking the user anything, handle open-text answers as agent work per
-`references/run-and-database.md` and `shared/references/truthfulness.md`; do not
-invent facts.
+For example `开始，本次目标投 10；今日额度剩 10`, or `你要 50，今天档位 10，…，本次最多投 10`.
+Keep `run_id` for the next steps. If `start` refuses, say why in one line and
+stop:
 
-If `condensed_missing_questions` is non-empty, ask at most four grouped
-questions from that list in one AskUserQuestion call. Present them by impact,
-using `unblocks_n_jobs`, for example `补 <field> 可解锁 <N> 个岗位`. Ask only
-facts that cannot be safely inferred from the resume or existing profile, and
-do not use a fixed checklist. If a category appears as a singleton, keep it as
-its own clear question instead of forcing it into an unnatural group.
+- another run is still active → offer `finish --run <id>` for it, or, if that
+  window is gone for good, start again with `--abandon <id>`;
+- an apply batch is running → wait; the message spells out how to stop a stuck one;
+- the ledger does not hold the old history yet (`backfill-legacy`) → this is a
+  one-time migration; show the dry-run to the user and run `--apply` only
+  after they agree (see `references/run-and-database.md`).
+
+A verification run that must not submit anything uses
+`start --target <N> --no-submit` (finds, dedupes and scores, drives nothing).
+
+## Step 5 - 找岗 → 打分 → 当场投 / Find, score, apply
+
+Loop until `next` says `done`:
+
+```bash
+export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
+cd "$MRWEIRDO_REPO_ROOT"
+node shared/stream_run.mjs next --run "$RUN_ID"
+```
+
+- `action: "score"` → read `batch_file` (at most 50 new jobs; anything
+  applied to or already judged was dropped before you see it), score EVERY
+  job with `shared/scoring/score_prompt.md`, and write the JSON array of
+  complete score objects to `scored_file`. Then:
+
+  ```bash
+  node shared/stream_run.mjs submit-scores --run "$RUN_ID" --batch <batch> --scored "<scored_file>"
+  ```
+
+  This stores the batch in the run's one-off work DB, holds eligible
+  list-company jobs for the user, and applies to the rest right away
+  (liveness check, pre-dispatch guard re-reading the ledger for every job,
+  driver, recorder). If its output has a non-null `gap_report`, read that
+  file NOW (it is deleted with the run) and keep its
+  `condensed_missing_questions` for Step 6.
+- `action: "done"` → go to Step 7.
+
+[Step 5/7] runs silently: no per-batch chatter. Speak only if a command exits
+non-zero (show the one-line reason) or `stopped_by` is `breaker_open` /
+`record_failed` (the run stops; say so and go to Step 7). Do not run real
+batches in the background; the user should be able to interrupt.
+
+## Step 6 - Missing Info Follow-Up
+
+After the run (Step 7), if any batch's gap report had
+`condensed_missing_questions`, handle open-text answers as agent work per
+`references/run-and-database.md` and `shared/references/truthfulness.md`
+first; do not invent facts.
+
+Then ask at most four grouped questions in one AskUserQuestion call. Present
+them by impact, using `unblocks_n_jobs`, for example `补 <field> 可解锁 <N> 个岗位`.
+Ask only facts that cannot be safely inferred from the resume or existing
+profile, and do not use a fixed checklist. If a category appears as a
+singleton, keep it as its own clear question instead of forcing it into an
+unnatural group.
 
 Use this user-facing lead-in before the one AskUserQuestion call:
 
@@ -424,73 +370,47 @@ Use this user-facing lead-in before the one AskUserQuestion call:
 
 Never list each job's missing fields line by line for the user. The user should
 see the minimal cross-application question set, not a manual application audit.
-Leave lower-impact grouped questions for a later batch.
 
-After the user answers, record the answers with `shared/record_profile_answers.mjs`
-(never hand-write profile.json; see `references/run-and-database.md`), then requeue:
+Record the answers with `shared/record_profile_answers.mjs` (never hand-write
+profile.json; see `references/run-and-database.md`):
 
 ```bash
 export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
 cd "$MRWEIRDO_REPO_ROOT"
-node shared/record_profile_answers.mjs --json '<answers>' --source user_answer --category <category>
+node shared/record_profile_answers.mjs --json '<answers>' --source user_answer --category <category> --asked-by step6
 node shared/validate_user_profile.mjs
-node shared/retry_gap_rows.mjs \
-  --apply \
-  --gap-report "$MRWEIRDO_HOME/run-tmp/apply-gap-report.json"
-if [ -n "${MRWEIRDO_MAX_AUTO_APPLY:-}" ]; then
-  node shared/apply_supervisor.mjs --real --max "$MRWEIRDO_MAX_AUTO_APPLY"
-else
-  node shared/apply_supervisor.mjs --real
-fi
 ```
 
-Use the second batch as the conversion-rate check. If the gap report lists
-`onboarding_candidates`, summarize the recurring fields for the maintainer.
+Nothing is requeued by hand: the jobs that got stuck come back as candidates by
+themselves on the next "跑 N 个", because the profile they were stuck on changed.
 
-## Step 7 - Report, Prune, Next Steps
-
-Generate the report and prune without an extra pause:
+## Step 7 - 3 行报告 / Batch report
 
 ```bash
 export MRWEIRDO_HOME="${MRWEIRDO_HOME:-$HOME/.mrweirdo-jobs}"; export MRWEIRDO_REPO_ROOT="${MRWEIRDO_REPO_ROOT:-$MRWEIRDO_HOME/repo}"
 cd "$MRWEIRDO_REPO_ROOT"
-REPORT_PATH=$(node shared/apply_report.mjs --since "$(date -u +%Y-%m-%d)")
-echo "$REPORT_PATH"
-node shared/prune_discovered_jobs.mjs \
-  --apply \
-  --delete-skipped --skipped-days "${MRWEIRDO_PRUNE_SKIPPED_DAYS:-0}" \
-  --delete-unusable-url \
-  --delete-low-fit --low-fit-days "${MRWEIRDO_PRUNE_LOW_FIT_DAYS:-0}" \
-  --delete-unsupported --unsupported-days "${MRWEIRDO_PRUNE_UNSUPPORTED_DAYS:-14}" \
-  --delete-stale --stale-days "${MRWEIRDO_PRUNE_STALE_DAYS:-30}" \
-  --retry-limit "${MRWEIRDO_PRUNE_RETRY_LIMIT:-3}" \
-  --clear-first-run \
-  --json > "$MRWEIRDO_HOME/run-tmp/prune-summary.json"
+node shared/stream_run.mjs finish --run "$RUN_ID"
 ```
 
-End with a compact final report, not raw JSON:
+`finish` deletes the run's work DB and scratch files and returns `lines` — three
+lines. Show only these 3 lines (只给这 3 行), verbatim, nothing else:
 
 ```text
-[Step 7/7] 本轮完成 / Batch report - 结果与下一步 (~1 min)
-
-漏斗 / Funnel
-discovered <D> -> scored <S> -> queued <Q> -> submitted <A> -> gaps <G>
-
-| 结果 | 数量 | 说明 |
-|---|---:|---|
-| 已提交 | <N> | driver 验证成功 |
-| 缺信息 | <N> | 已归纳到 Step 6 |
-| manual | <N> | 不会自动处理 |
-| quota/suspicious | <N> | 保护/复核 |
-
-路径 / Files
-- 本轮报告：`<REPORT_PATH>`
-- DB：`<DB_PATH>`
-- manual 清单：`$MRWEIRDO_HOME/run-tmp/manual_or_unsupported.json`
-- prune：<one-line summary>
-
-下一步 / Next
-- 48h 后同步确认邮件：`/mrweirdo-confirm`
-- 有 OA/interview/rejection 后记录进度：`/mrweirdo-tracker`
-- manual 清单里的岗位单独处理
+[Step 7/7] 本轮完成 / Batch report
+<lines[0]>   投出 N 个：公司·岗位、…（名单公司合格的会在这里列「公司·岗位·链接」等你过目）
+<lines[1]>   没投成 N 个：原因（判不确定的附截图路径，请你看一眼）
+<lines[2]>   新岗够不够：这次看了 X 个新岗，合适的 Y 个
 ```
+
+Then, only if it applies, at most one short line each:
+
+- the finish output has `held` (list-company jobs waiting for review): the user
+  either applies by hand, or says 「投」+ the link(s) → start a run with
+  `node shared/stream_run.mjs start --target <number of links> --release <link> [--release <link2>]`
+  and go through Steps 5 and 7 again (it scans the list only, re-scores, applies);
+- the user says they applied to some jobs by hand → write them into the ledger
+  so no run applies to them again (dry-run first, then `--apply`):
+  `node shared/submission_ledger.mjs record-manual --url <link> --company <board slug> --title "<title>" [--at YYYY-MM-DD]`;
+- Step 6 questions were collected → go to Step 6.
+
+The live counts (今日已尝试 / 已投) are in `npm run status`.
