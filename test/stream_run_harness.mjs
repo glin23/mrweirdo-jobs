@@ -132,6 +132,8 @@ export async function makeStreamRig(prefix) {
     env,
     close: () => new Promise((r) => cdp.close(r)),
     board(b) { writeFileSync(env.MRW_TEST_BOARD, JSON.stringify(b)); },
+    // The user's company list (search_intent.target_companies); D10 holds by it.
+    targets(list) { writeFileSync(join(home, 'search_intent.json'), JSON.stringify({ search_intent: { ...INTENT.search_intent, target_companies: list } })); },
     script(map) { writeFileSync(env.MRW_TEST_DRIVER_SCRIPT, JSON.stringify(map)); },
     expire(urls) { writeFileSync(env.MRW_TEST_EXPIRED, JSON.stringify(urls)); },
     driverCalls: () => lines(env.MRW_TEST_DRIVER_LOG),

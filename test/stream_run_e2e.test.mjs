@@ -185,6 +185,7 @@ test('名单优先：名单公司的岗排在第一批最前；名单里挂掉�
   try {
     const target = job('pika', 1, { fit: true });
     const other = job('Other', 2, { fit: true });
+    rig.targets([{ ats: 'greenhouse', slug: 'pika' }, { ats: 'greenhouse', slug: 'brokenco', label: 'Broken Co' }]);
     rig.board({ watchlist: [target], rotation: [other], errors: { watchlist: [{ source: 'watchlist', slug: 'brokenco', label: 'Broken Co', error: 'HTTP 500' }] } });
     rig.expire([other.apply_url]);
     const r = await rig.run(5);
@@ -375,6 +376,7 @@ test('D10 名单公司合格不自动投：第 1 行列出「公司·岗位·链
     const dream = job('pika', 1, { fit: true });
     const dreamUnfit = job('pika', 2);
     const other = job('Other', 3, { fit: true });
+    rig.targets([{ ats: 'greenhouse', slug: 'pika' }]);
     rig.board({ watchlist: [dream, dreamUnfit], rotation: [other] });
 
     const first = await rig.run(5);
@@ -400,6 +402,24 @@ test('D10 名单公司合格不自动投：第 1 行列出「公司·岗位·链
     const missing = await rig.run(1, { startArgs: ['--release', gone] });
     assert.match(missing.finish.lines[1], new RegExp(`放行的 1 个没找到（可能已下架）：${gone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
     assert.equal(rig.driverCalls().length, 2);
+  } finally {
+    await rig.close();
+  }
+});
+
+// verify 第 6 轮 R9：held 按公司认，不按来源认。名单扫描这家挂了（限速 / 5xx），轮转
+// 扫描拿到同一家的合格岗，也不许自动投。
+test('D10 按公司认：名单扫描 pika 挂了、轮转扫到 pika 的合格岗 → 仍 held、驱动不碰它', async () => {
+  const rig = await makeStreamRig('mrw-stream-d10-company-');
+  try {
+    const dream = job('pika', 1, { fit: true });
+    const other = job('Other', 2, { fit: true });
+    rig.targets([{ ats: 'greenhouse', slug: 'pika', label: 'Pika' }]);
+    rig.board({ watchlist: [], rotation: [dream, other], errors: { watchlist: [{ source: 'watchlist', slug: 'pika', label: 'Pika', error: 'HTTP 500' }] } });
+    const r = await rig.run(5);
+    assert.deepEqual(rig.driverCalls(), [other.apply_url]);
+    assert.deepEqual(r.finish.held.map((h) => h.apply_url), [dream.apply_url]);
+    assert.match(r.finish.lines[0], /^投出 1 个：Other·Growth Intern 2；名单公司 1 个合格、等你过目/);
   } finally {
     await rig.close();
   }

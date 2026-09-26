@@ -19,7 +19,7 @@
 // scored, so a job already applied to or already judged costs nothing again.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
@@ -30,7 +30,7 @@ import { effectiveEntries, maxJobId, readAll } from './submission_ledger.mjs';
 import { attemptIndex, budgetLine, dailyTier, identityBlock, isAttempted, readInflight } from './apply_guard.mjs';
 import { compact, fillBasisVersion, jdHash, lookupSeen, readSeen, recordSeen, scoringBasisVersion, seenIndex, stillSeen } from './seen_log.mjs';
 import { recoverInflight } from './inflight_recovery.mjs';
-import { companyTitleKey, jobFingerprint } from './job_identity.mjs';
+import { companyTitleKey, jobFingerprint, normalizeCompany } from './job_identity.mjs';
 import { lockDir, lockFile } from './state_file_lock.mjs';
 import { batchLockHolder, liveBatchHint } from './lock_holder.mjs';
 
@@ -126,7 +126,42 @@ function readLock(path) {
 // writing its lock and creating its directory (VERIFY 第 5 轮 RACE). The lock
 // itself is created with O_EXCL, so of two simultaneous starts exactly one wins.
 // Throws the refusal; the caller removes its directory and says it.
+// Clearing a stale lock is read → remove → create, and two starts can both
+// judge the same lock stale; the later remove then deletes the lock the other
+// just created (verify 第 6 轮 STALE2). So the whole check-clear-create runs
+// inside a short O_EXCL claim that only one start at a time can hold. A claim
+// left by a start that died mid-claim is not cleared automatically (that would
+// reopen the same race); it is named, with its age, for the user to delete.
+const claimPath = () => join(home, 'locks', 'stream_run.claim');
+const STALE_CLAIM_MS = 30000;
+
 function claimHome(runId) {
+  mkdirSync(dirname(claimPath()), { recursive: true, mode: 0o700 });
+  let fd;
+  try {
+    fd = openSync(claimPath(), 'wx', 0o600);
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    let ageMs = null;
+    try {
+      ageMs = Date.now() - statSync(claimPath()).mtimeMs;
+    } catch {
+      // released between our open and this stat: someone else is starting
+    }
+    if (ageMs != null && ageMs > STALE_CLAIM_MS) {
+      throw new Error(`${claimPath()} is ${Math.round(ageMs / 1000)}s old — a start died while claiming this home; if no other start is running, delete it and start again`);
+    }
+    throw new Error('another stream run is starting at this same moment — finish or abandon that one before starting again');
+  }
+  try {
+    claimHomeLocked(runId);
+  } finally {
+    closeSync(fd);
+    rmSync(claimPath(), { force: true });
+  }
+}
+
+function claimHomeLocked(runId) {
   if (existsSync(batchLockPath())) {
     const { pid } = readLock(batchLockPath());
     const holder = batchLockHolder(pid);
@@ -446,8 +481,20 @@ function afterBatch(st, batch) {
 // own. It is taken out of this run's queue, remembered as held_for_review (so
 // it is not scored or reported again for 7 days) and listed in line 1 for the
 // user, who applies by hand or releases it with `start --release <link>`.
+//
+// Held by COMPANY, not by source (verify 第 6 轮 R9): a list company's job can
+// also arrive through the rotation scan — e.g. when the list scan of that board
+// failed — and must be held all the same.
+function listCompanyKeys() {
+  const p = join(home, 'search_intent.json');
+  if (!existsSync(p)) return new Set();
+  const targets = readJson(p).search_intent?.target_companies ?? [];
+  return new Set(targets.map((t) => normalizeCompany(t.slug)));
+}
+
 function holdListJobs(st, batch) {
-  const list = new Map(batch.filter((c) => c._watchlist && !c._released).map((c) => [c.apply_url, c]));
+  const keys = listCompanyKeys();
+  const list = new Map(batch.filter((c) => keys.has(normalizeCompany(c.company)) && !c._released).map((c) => [c.apply_url, c]));
   if (list.size === 0) return 0;
   const db = new DatabaseSync(st.work_db);
   let held = 0;

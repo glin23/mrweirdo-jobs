@@ -4,7 +4,7 @@
 //   PID  — 派单锁里的 pid 被一个无关进程复用，开跑永远被拒、提示里没有出路。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fakeLiveBatch, makeStreamRig } from './stream_run_harness.mjs';
 
@@ -56,6 +56,43 @@ test('真派单进程活着 → 仍拒绝，提示里写明出路（停掉那个
     assert.match(r.stderr, new RegExp(`kill ${live.pid}`), 'the way out is spelled out');
   } finally {
     live.kill();
+    await rig.close();
+  }
+});
+
+test('STALE2（verify 第 6 轮）：先有一把残留运行锁，再两个 start 同时开跑 15 轮 → 每轮只开一个', async () => {
+  const rig = await makeStreamRig('mrw-lock-stale2-');
+  try {
+    for (let round = 0; round < 15; round += 1) {
+      mkdirSync(join(rig.home, 'locks'), { recursive: true });
+      writeFileSync(join(rig.home, 'locks', 'stream_run.lock'), JSON.stringify({ run_id: `stream-dead-${round}`, started_at: '2026-09-25T00:00:00Z', pid: 1 }));
+      const [a, b] = await Promise.all([
+        rig.step(['start', '--target', '3', '--max-windows', '0']),
+        rig.step(['start', '--target', '3', '--max-windows', '0']),
+      ]);
+      const ok = [a, b].filter((r) => r.status === 0);
+      assert.equal(ok.length, 1, `round ${round}: exactly one start may win over a stale lock, got ${ok.length}\nA: ${a.stderr}\nB: ${b.stderr}`);
+      assert.doesNotMatch([a, b].find((r) => r.status !== 0).stderr, /\n\s+at /, `round ${round}: no stack trace`);
+      const fin = await rig.step(['finish', '--run', ok[0].json.run_id]);
+      assert.equal(fin.status, 0, fin.stderr);
+    }
+  } finally {
+    await rig.close();
+  }
+});
+
+test('开跑中途死掉留下的认领文件（>30 秒）→ 不自动清（会重开竞态），报出路径让人删', async () => {
+  const rig = await makeStreamRig('mrw-lock-claim-');
+  try {
+    const claim = join(rig.home, 'locks', 'stream_run.claim');
+    mkdirSync(join(rig.home, 'locks'), { recursive: true });
+    writeFileSync(claim, '');
+    const old = new Date(Date.now() - 120000);
+    utimesSync(claim, old, old);
+    const r = await rig.step(['start', '--target', '3', '--max-windows', '0']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /stream_run\.claim is \d+s old .*delete it/);
+  } finally {
     await rig.close();
   }
 });
