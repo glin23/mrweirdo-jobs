@@ -173,8 +173,13 @@ async function start() {
   claimHome(runId);
   // An unrecorded attempt from a dead run is recorded before anything else,
   // and only then may old run directories (its work DB) be removed (ADR-S8).
+  let recovered = null;
   try {
-    recoverInflight({ home, repoRoot, env: process.env, tmpDir: onboardTmpDir(), log });
+    const m = recoverInflight({ home, repoRoot, env: process.env, tmpDir: onboardTmpDir(), log });
+    // The user reads 3 lines, not stderr: a maybe-submitted attempt recovered
+    // here must reach the report (VERIFY 第 4 轮 BUG-4 / DESIGN 失败路 1).
+    const e = m && effectiveEntries(readAll(home)).filter((l) => l.job_id === m.row_id && l.apply_url === m.apply_url).at(-1);
+    if (e && isAttempted(e)) recovered = { apply_url: e.apply_url, name: `${e.company_key}·${e.title_key}`, screenshot: e.evidence?.path || null };
   } catch (e) {
     die(e.message);
   }
@@ -223,6 +228,7 @@ async function start() {
     pooled_keys: [],
     skipped_before_scoring: {},
     source_errors: [],
+    recovered_inflight: recovered,
     stop_reason: budget.max_attempts === 0 ? 'daily_cap_reached' : null,
   };
   saveState(st);
@@ -444,6 +450,8 @@ function report(st, rows, lines, unscored) {
   if (needsInfo.length) parts.push(`${needsInfo.length} 个卡在缺信息`);
   if (preSubmit.length) parts.push(`${preSubmit.length} 个表单没打开（没点提交，下次还能再试）`);
   const extras = [];
+  const rec = st.recovered_inflight;
+  if (rec) extras.push(`上次中断的运行有 1 家可能已提交：${rec.name}（${rec.screenshot || rec.apply_url}，永不自动重投，请你核对邮箱或页面）`);
   if (STOP_TEXT[st.stop_reason]) extras.push(STOP_TEXT[st.stop_reason]);
   if (failedBoards.length) extras.push(`名单里 ${failedBoards.length} 家没扫到：${failedBoards.join('、')}`);
   const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length;

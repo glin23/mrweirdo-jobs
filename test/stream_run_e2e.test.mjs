@@ -246,6 +246,8 @@ test('崩溃恢复（ADR-S8）：上次运行在途标记还在 → start 先补
     assert.equal(existsSync(oldDir), false, 'old run dir cleaned only after the attempt was recorded');
     assert.deepEqual(r.scored, []);
     assert.deepEqual(rig.driverCalls(), []);
+    // VERIFY 第 4 轮 BUG-4: the user only reads 3 lines — the recovered maybe-submitted one must be there.
+    assert.match(r.finish.lines[1], /上次中断的运行有 1 家可能已提交：crash·growth intern 1（.*boards\.greenhouse\.io\/crash\/jobs\/1.*请你核对邮箱或页面）/);
   } finally {
     await rig.close();
   }
