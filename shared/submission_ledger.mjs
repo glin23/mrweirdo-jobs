@@ -440,14 +440,23 @@ function refuseWhileRunning(home, what) {
   }
 }
 
-export function correctEntry(home, { of, verdict, evidence }, { apply = false } = {}) {
+// Evidence shorter than this is a placeholder, not a reason (verify 第 12 轮 P3).
+export const MIN_EVIDENCE_CHARS = 10;
+
+export function correctEntry(home, { of, url, verdict, evidence }, { apply = false } = {}) {
   if (!of) throw new Error('correct: --of <ledger line id> is required');
+  if (!url) throw new Error('correct: --url <the job link of that line> is required — it proves the id names the job you mean');
   if (!Object.hasOwn(CORRECTABLE_VERDICTS, verdict)) throw new Error(`correct: --verdict must be one of ${Object.keys(CORRECTABLE_VERDICTS).join(' | ')}, got ${JSON.stringify(verdict)}`);
   if (!evidence || !String(evidence).trim()) throw new Error('correct: --evidence "<why>" is required — a correction must say why');
+  if ([...String(evidence).trim()].length < MIN_EVIDENCE_CHARS) throw new Error(`correct: --evidence must be at least ${MIN_EVIDENCE_CHARS} characters — say what was checked (e.g. "Gmail 无确认邮件")`);
   if (apply) refuseWhileRunning(home, 'correct');
   const target = readAll(home).find((e) => e.id === of);
   if (!target) throw new Error(`correct: no ledger entry with id ${of}`);
   if (target.correction_of) throw new Error(`correct: ${of} is itself a correction (of ${target.correction_of}) — correct the original line ${target.correction_of}`);
+  // A wrong id would release a job that really went out: the link must name
+  // the same job as the line (by job fingerprint, so /application tails match).
+  const want = jobFingerprint(url);
+  if (!want || want.fp !== jobFingerprint(target.apply_url)?.fp) throw new Error(`correct: --url ${url} is not the job of ${of} (${target.apply_url}) — nothing written`);
   const patch = { verdict, may_have_submitted: CORRECTABLE_VERDICTS[verdict], reason: 'corrected_by_user' };
   const before = { verdict: target.verdict, may_have_submitted: target.may_have_submitted, outcome: target.outcome, reason: target.reason };
   const correction = apply ? appendCorrection(home, of, patch, String(evidence))
@@ -456,15 +465,23 @@ export function correctEntry(home, { of, verdict, evidence }, { apply = false } 
   return { applied: Boolean(apply), before, correction: shown };
 }
 
+// A flag's value may not itself look like a flag: `--evidence --apply` must not
+// take "--apply" as the evidence (verify 第 12 轮 P4).
 function cliArg(name) {
   const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : null;
+  if (i < 0) return null;
+  const v = process.argv[i + 1];
+  if (v === undefined || v.startsWith('--')) {
+    console.error(`[submission_ledger] ${name} needs a value${v ? ` (got the flag ${v})` : ''} — nothing written`);
+    process.exit(1);
+  }
+  return v;
 }
 
 // CLI: `node shared/submission_ledger.mjs rebuild [--apply]`
 //      `node shared/submission_ledger.mjs backfill-legacy [--apply]`
 //      `node shared/submission_ledger.mjs record-manual (--url U --company C --title T [--at D] | --file F) [--apply]`
-//      `node shared/submission_ledger.mjs correct --of ID --verdict V --evidence "…" [--apply]`
+//      `node shared/submission_ledger.mjs correct --of ID --url LINK --verdict V --evidence "…" [--apply]`
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 if (invokedDirectly) {
   const cmd = process.argv[2];
@@ -473,7 +490,7 @@ if (invokedDirectly) {
     console.error('       node shared/submission_ledger.mjs backfill-legacy [--apply]   (default: dry-run plan)');
     console.error('       node shared/submission_ledger.mjs record-manual --url <link> --title <title> [--company <board slug, to double-check>] [--at YYYY-MM-DD] [--apply]');
     console.error('       node shared/submission_ledger.mjs record-manual --file <[{url,company,title,at}] json> [--apply]');
-    console.error('       node shared/submission_ledger.mjs correct --of <line id> --verdict not_submitted|unknown|submitted --evidence "<why>" [--apply]');
+    console.error('       node shared/submission_ledger.mjs correct --of <line id> --url <that line\'s job link> --verdict not_submitted|unknown|submitted --evidence "<why, ≥10 chars>" [--apply]');
     process.exit(2);
   }
   if (cmd === 'correct') {
@@ -481,7 +498,7 @@ if (invokedDirectly) {
     const apply = process.argv.includes('--apply');
     let report;
     try {
-      report = correctEntry(atsHome(), { of: cliArg('--of'), verdict: cliArg('--verdict'), evidence: cliArg('--evidence') }, { apply });
+      report = correctEntry(atsHome(), { of: cliArg('--of'), url: cliArg('--url'), verdict: cliArg('--verdict'), evidence: cliArg('--evidence') }, { apply });
     } catch (e) {
       console.error(`[submission_ledger] ${e.message}`); // a refusal; nothing was written
       process.exit(1);
