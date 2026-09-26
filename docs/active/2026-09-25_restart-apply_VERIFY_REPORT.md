@@ -13,8 +13,10 @@ Reads:
   - （第 2 轮）DESIGN 第 2 轮 §3 / §4.7 / §5 未明点 7·12·13 / ADR-S3·S6·S8·S9 / §10；PRODUCT_SPEC 第 2 轮 R1-R7、V1-V13；BUILD_NOTES「第 2 次召唤」
   - （第 4 轮）DESIGN 第 2 轮数据结构、失败路 1-6、崩溃与并发决策；PRODUCT_SPEC 第 2 轮去重规则与验收标准 V1-V13；定稿 docs/specs/restart-apply.md；BUILD_NOTES「第 3 次召唤」13 条偏离；stream_run / seen_log / inflight_recovery / apply_guard / apply_batch / store_scored_jobs / watchlist_source / greenhouse 驱动改动
   - （第 6 轮）BUILD_NOTES「第 4 次召唤」12 条偏离与真跑前清单；stream_run / lock_holder / submission_ledger record-manual / supervisor_preflight / retire_jobs_db / install_watchlist / dashboard / watchlist_source 改动；onboard·jobskill·两份 -auto 说明书 diff
+  - （第 10 轮）TASK 关卡 3 及更正、Round 22；BUILD_NOTES「第 5 次召唤」；8594c12 / e0dd06d / b4ef9dd / a089260 全 diff；stream_run / seen_log / install_watchlist / watchlist_source / role_types / store_scored_jobs；真实家目录拷贝
+  - （第 11 轮）2171bee / 736f97b / 7de0026 全 diff；safe_exit / preload_system_ca / entry_preload_guard 测试；说明书与 .sh 里的 node 调用
 Updated: 2026-09-26
-Iterations: 9
+Iterations: 11
 ---
 
 # VERIFY_REPORT — restart-apply 小修包（072f203 / 7cd693c / d326b17 / 29e6147 + 文档 150d1df）
@@ -1367,3 +1369,191 @@ S3（看过记录 seen_log、规则 6、一次性工作库 initRunDb、store 写
 
 - **kill -9 实验的第一版把 250ms 当作随机上限，还在 kill 之后才挂 close 监听**：start 很快就退出了，close 事件已经错过，脚本一直挂起直到 timeout。另外 3 次试跑全都是「杀之前已经跑完」，等于没测到中途被杀。改成先挂监听、把上限调到 150ms，并统计「杀前已完成」的次数（25/80），才确认 55 次是真的在中途被杀。
 - **P3 对照一开始每格只跑 200 次**：成功 exit(0) 的对照组 0/200 没崩，差点得出「这个场景不需要修」。在更高负载下改成 400 次，对照组才稳定出现 12/400。所以概率性问题的对照组必须先跑出崩溃，再去判断修法有没有效。
+
+---
+
+# 第 10 轮 — 关卡 3 只扫名单开关 + 名单岗「列出 → 点名 → release 投」（8594c12 / e0dd06d / b4ef9dd / a089260）
+
+> 标注：[实测] 真跑过；[读码] 读代码推出。
+
+## 验收范围
+
+验收对象是 builder 第 5 次召唤的 4 个提交。它们叠在 origin/main f6fa187 之上，还没有推。要验 6 项：
+1. 开关语义；
+2. 在真实家目录的拷贝上走一遍 release 全程；
+3. 两处顺修；
+4. held 行的格式；
+5. 只扫名单时打分上限 N×10 的决策数据；
+6. 逐提交跑 CI。
+
+硬边界：
+- 没有真投。投递用驱动替身，打分用打分替身。
+- 名单扫描真实调用了 21 家的公开接口，全是只读 GET。
+- 真实 `~/.mrweirdo-jobs/`：开工和收工各做一次快照（不含 chrome-profile），621 个文件的 sha 排序后 diff 为 0，目录清单 diff 也是 0。
+- 没有 push，没有提交代码。
+- 拷贝放在 scratchpad/home，拷贝时排除了 chrome-profile，里面是 215 行账本，jobs.db 已归档。
+
+## 5 维高危区评估
+
+动手前先定测试密度：
+- ① 核心业务逻辑（高）：开关打开后，轮转来源必须一次都不调；名单岗必须全部 held，不能自己投出去；release 必须过投前权威闸，并且经唯一写账人记账。这里错了就是投错公司或者重复投，所以变异测试和真实数据走查都做了。
+- ② 安全边界（中）：打分依据版本里剔除了 sourcing_mode，要防止它顺带作废或者保留了不该动的判断。另外 search_intent 写入要保持 600 权限。
+- ③ 性能（低）：只扫名单比原来少扫东西。21 家实测约 20 秒。
+- ④ 集成点（中）：21 家的公开接口真实拉取，0 家报错。
+- ⑤ 用户体验主流程（高）：3 行报告会不会说谎、held 链接能不能点开。
+
+## 7 类测试
+
+- 等价类（4 次）：sourcing_mode 取缺省 / watchlist_first / watchlist_only / 拼错值；install --mode 取合法值 / 非法值 / 不带值 / 不给 --mode。
+- 边界值（3 次）：
+  - 名单为空；
+  - `--max-windows 0` 放行，`2` 和 `abc` 拒绝（`abc` 也被拒，是 Number(NaN)!==0 的结果）；
+  - 今日档位已用 10/10 时 release。
+- 决策表（1 张）：release 的去向。
+  - 闸拦下 → already_attempted_fp / company_cooldown_60d；
+  - 没扫到 → daily_cap_reached；
+  - 扫了但板上没有 → not_found；
+  - 重新打分不合格 → scored_not_eligible；
+  - 投出。
+  - 实测覆盖了其中 5 格，not_scored / not_dispatched 两格只读了码。
+- 状态迁移（1 条）：held →（7 天内再跑）被 seen_held_for_review 跳过 → release 解除 hold → 投出 → 再 release 被 already_attempted_fp 拦下。
+- 用例测试（1 条端到端）：在真实拷贝上走完「装名单 → 扫 21 家 → 打分 → held 2 条 → release 1 条 → 投递替身 → 账本 +1 → 同一条再 release 被拦」。
+- pairwise（2 对）：开关 × release、开关 × --max-windows。
+- 风险驱动（10 个变异）：见下一节。
+
+## 5 轮回归循环记录（第 10 轮）
+
+1. **变异测试**：把 10 处新增逻辑逐个回退（轮转不钉 0、额度满报 not_found、scored_not_eligible 删掉、依据版本含开关、三种拒绝各删掉一种、held 格式改回、第 3 行后缀删掉、install 不写开关），跑新增测试 + 既有 e2e，**10/10 全红**。另外抽 1 个确认是断言失败（fail 2），不是语法错。[实测]
+2. **逐提交 CI**（4 个 worktree）：
+   - 8594c12：npm test 498/498，另三步 0；
+   - e0dd06d：500/500，另三步 0；
+   - b4ef9dd：500/500，另三步 0；
+   - a089260：第 1 次 398 pass / **16 cancelled**（stream_run_e2e 跑到 43 秒时，runner 报「Promise resolution is still pending but the event loop has already resolved」，后面的文件全部取消）；原样重跑 500/500，另三步 0。
+   - a089260 只改文档，代码和 b4ef9dd 完全一样。当时同一台机器在并行跑 10 轮变异，负载较高。本机环境是 NODE_USE_SYSTEM_CA=1 + Node 24.7，这正是第 8、9 轮那一类问题出现的环境，但 runner 父进程不在 safe_exit 覆盖范围内。所以定为 **P4 偶发**，不算本批引入。[实测]
+3. **新增两个测试文件串行连跑 8 次**：0/8 失败。[实测]
+4. **真实拷贝走查**（详见结论明细）。
+5. 没有第 5 轮：没有需要回炉复测的修改。
+
+## 结论明细（第 10 轮）
+
+### ✅ 通过
+
+**1. 开关语义** [实测]
+- 在真实拷贝上 `start --target 3`：`windows_scanned=0`、`max_windows=0`，运行目录里只有 `disc-watchlist-0`，没有任何轮转扫描目录；source_cursor.json 前后一字节不差。
+- 第 3 行写「（只扫了名单公司 21 家，别的公司没扫）」。
+- 三种误用都响亮拒绝，退出码 1：`--max-windows 2` / `abc`；空名单和拼错值由单测覆盖。
+- install_watchlist：
+  - `--mode bogus` 和只写 `--mode` 不带值都退出码 1；
+  - 试跑不写文件（cmp 一致）；
+  - `--apply` 写入 21 家 + watchlist_only，权限 600。
+- watchlist_first 的回归护栏测试是绿的，变异 M1 能把它打红。
+
+**2. release 全流程（真实拷贝，215 行账本）** [实测]
+- 21 家真实拉到 **601 岗**，0 家报错。
+- 在当前 search_intent（6 月旧版，只要实习 / 兼职）下，硬筛后剩 6 个。其中 1 个（creatify·Product Manager Intern）被 **历史 already_attempted_fp** 拦在打分之前，说明和历史 182 条的去重是生效的。另外 5 个进入打分。
+- 打分替身判 2 个合格，**2 个都 held、驱动 0 次**。第 1 行实拍原文如下（274 字，链接两侧有空格）：
+  `投出 0 个；名单公司 2 个合格、等你过目（…）：opusclip·AI Product Management Intern https://jobs.ashbyhq.com/opusclip/501d…/application 、pika·Research Intern (BS/MS/PhD) https://jobs.ashbyhq.com/pika/e135…/application `
+- `--release <opusclip>`：
+  - 驱动只被调 1 次，第 1 行是「投出 1 个：opusclip·AI Product Management Intern」；
+  - 账本 215→216，新行 era v2、may_have_submitted=true、company_key opusclip、指纹可以命中；
+  - 其余岗被 seen_held_for_review / seen_not_fit 跳过，没有重复打分。
+- 同一链接再 release：驱动 0 次，第 2 行写「（already_attempted_fp）」，账本不变。
+- **60 天同公司 2 次**：
+  - 历史 215 行全部是 6 月 14 日及以前的，**已经超出 60 天窗口**，所以历史里任何公司都不会触发这条规则。这符合设计，不是 bug。
+  - 名单公司里只有 opusclip（1 条）、creatify（1 条）在历史里出现过。
+  - 为了验这条规则，在拷贝里补了 2 条 pika 今日记录，再 release pika：得到 company_cooldown_60d，驱动 0 次。
+- **今日档位**：再补 7 条凑满 10/10，release 得到 daily_cap_reached，驱动 0 次，名单也没有扫。
+- **not_found**：release 一个编造的 pika 链接和一个真链接，真链接投出，编造的那条报「没找到（可能已下架）」。
+
+**3. 两处顺修** [实测 + 读码]
+- 额度满时现在报 daily_cap_reached，不再报「可能已下架」（真实拷贝上复现通过，变异 M2 能打红）。
+- 重新打分不合格时报 scored_not_eligible（单测覆盖，M3 能打红）。
+- releaseWhy 读码确认每个分支都有去向，没有静默的 else。held、投前闸、写账人三处都没有改动。副作用：finish 输出多了 sourcing_mode 字段，是追加字段，旧调用方不受影响。
+
+**4. held 行** [实测]
+- 真实 2 条时 274 字。
+- 用 21 家去重后的真实岗位模拟：全部 592 条约 7.5 万字；粗分为增长类的 154 条约 1.9 万字。
+- 两种情况下 URL 分词都完整，没有被截断，没有标点粘进链接（Greenhouse 的 `?gh_jid=` 也完整）。
+- 实际每次运行 held 最多 N×10 条（打分上限），N=3 时约 30 条、约 4k 字。
+- 测试已锁定 7 条全部列出。
+
+### ❌ 真 bug
+
+- **P3（第 3 行说谎；旧问题，本批的新后缀让它更明显）｜维度 ⑤ 用户体验**
+  - 现象：今日额度已满时，stream_run 在扫描之前就停了，但 finish 第 3 行仍然写「没有新岗：这次找到的都是投过或看过的（只扫了名单公司 21 家，别的公司没扫）」。实际一家都没扫。第 2 行也没说额度满，因为 STOP_TEXT 里没有 daily_cap_reached。
+  - 复现：拷贝上补 10 条今日记录，然后 `start --target 1 --release <链接>` → next → finish。
+  - 缓解因素：start 的 line 已经写了「本次投 0；升档需要你明说」。
+  - 不属于 Quinn 能直接修的范围：要改报告分支逻辑，建议 builder 顺手修，约 3-5 行：第 3 行在 `!st.watchlist_done` 时说「今天额度已用完，这次没找岗」，并给 STOP_TEXT 补上 daily_cap_reached。
+- **P4（措辞）｜维度 ⑤**
+  - 第 2 行「放行的 N 个没投：<链接>（原因码）」和「没找到（可能已下架）：<链接>、<链接>」里，链接后面紧贴全角括号或顿号。这正是本批给第 1 行修过的那类可点击性问题，第 2 行漏了。另外原因码是英文（company_cooldown_60d 等），非技术用户看不懂。
+  - 同一类还有：release 一个非名单公司的链接时，会报「可能已下架」（其实是根本没扫那家）。这是旧问题，builder 已经列出过同类。
+
+### ⚠️ 风险 / 🟡 设计不一致
+
+- 🟡 定稿 docs/specs/restart-apply.md 仍然写「公司·岗位·链接」，实现已经改成「公司·岗位 链接」（builder 偏离 2）。需要 lead 定是否同步定稿措辞。
+- ⚠️ 观察（旧问题，不在本批范围）：ElevenLabs 3 个英国 Freelance 岗通过了「只要美国」的地点硬筛，进入打分，浪费打分额度；Viggle 的 Toronto 岗被正确筛掉。建议另开一个排障项。
+- ⚠️ main 工作区在本轮进行中（16:42 前后）出现了约 60 个 shared/*.mjs 未提交修改，内容是加 `import './safe_exit.mjs'`，还有新文件 test/entry_preload_guard.test.mjs。这不是 verify 改的，应该是并行的另一路施工。本轮所有验证都在 4 个提交各自的 worktree 上做，不受影响。lead 推送前需要确认这些改动的归属。
+
+### 第 5 项数据：只扫名单时 N×10 上限要不要放宽
+
+[实测，21 家真实拉取，2026-09-26]
+
+| 口径 | 数量 |
+|---|---|
+| 21 家原始岗位 | 601（0 家失败） |
+| 同板重复（同指纹或同公司 + 标题） | 8 |
+| 命中历史账本 | 1 |
+| **去重后新岗** | **592** |
+| 粗分：工程 / 研究 | 226 |
+| 粗分：增长·市场·社媒·运营·产品（含 CS / 产品营销 / 幕僚长） | 154 |
+| 粗分：其他（销售 102 / G&A 35 / 设计创意 22 / 本地化 Freelance 9 / SEO、Deployment Strategist、GM 等 44） | 212 |
+| 其中地点是美国或远程的 | 327（工程 139 / 增长类 91 / 其他 97） |
+| **当前 search_intent 硬筛后能进打分的** | **6（去掉历史 1 条 = 5 条新岗）** |
+
+粗分方法是按标题关键词正则，误差大约 ±10%。比如 Customer Success 被归进了增长类，SEO Manager 被归进了其他。
+
+**关键发现（影响怎么拍板）**：
+- 在现在的 search_intent（role_type_targets = intern / part_time）下，21 家一共只有 5 条新岗能进打分，**N×10 上限根本卡不到**：N=1 就是 10 > 5。
+- 真正卡住的是岗位类型：系统只认实习、兼职、应届（new_grad_FT）三类，`full_time` 会被归成 new_grad_FT，只匹配应届标题。592 条里绝大多数是有经验要求的全职岗，不管上限多大都进不来。
+- 所以 N×10 要不要放宽，取决于第 0 步重新引导后（用新 AI Video GTM 简历）目标岗位类型怎么定：
+  - 仍然只投实习 / 应届 → 不用放宽；
+  - 要投全职 GTM 岗 → 这超出了当前岗位类型模型，是一个新的范围问题，要找拍板人。不是调上限就能解决的。
+
+## 6. Quinn 重构记录（第 10 轮）
+
+无。发现的 P3、P4 都涉及报告分支逻辑，超出 1-3 行、不影响业务的界限，转给 builder。
+
+## 7. 质量 3 指标（第 10 轮）
+
+- 覆盖率：项目没有覆盖率工具。新增分支里，变异 10/10 被打红；release 去向决策表 7 格中实测 5 格。
+- `verify_self_miss_rate: 0%`（0/3）。第 9 轮判可推的范围到目前没有发现漏检。本轮问题共 3 个：P3、P4、P4 偶发。其中 P3 是第 4 / 6 轮时就存在的旧问题，当时没抓到，这里如实记一笔。
+- 真 bug 数：P3 1 条、P4 1 条（另有 P4 偶发 1 条、观察 2 条）。
+
+## 8. 老坑清单核查（第 10 轮）
+
+- 老坑清单：项目没定义 verify.md。
+- ci_smoke.main_chain：在真实数据拷贝上走完「找岗（名单）→ 打分 → held → release 投（替身）→ 报告 → 记账」。投递环节按纪律只用替身。
+- schema_upgrade_path、isolation_field：这两格没填，对应铁律不启用。
+
+## 覆盖度评估
+
+**质量分 4/5 —— 可推。**
+- 开关语义、release 全流程（历史去重、60 天同公司、今日档位、重复放行）、两处顺修，都在真实拷贝上实测通过。
+- 10 个变异全部被打红。
+- 逐提交 CI 全绿（a089260 有 1 次 runner 偶发取消，重跑 500/500）。
+- 真实家目录零写入。
+
+扣 1 分：
+- 第 3 行在额度满时仍然说谎（P3，旧问题，新后缀让它更明显）；
+- 第 2 行链接可点击性没有和第 1 行一起修。
+两者都不影响投递正确性。
+
+未覆盖：
+- not_scored / not_dispatched 两个去向只读了码；
+- 真实驱动：禁止真投；
+- 非美国地点的放宽：不在本批范围。
+
+## 试过的错误方向（第 10 轮）
+
+- **打分替身第一版把 role_type_match 写成 full_time**：5 个岗全部被 store_scored_jobs 判成 role_type_not_allowed，合格数 0，差点误判成「只扫名单不产生 held」。查到合格条件里有 roleOk 才定位。重置拷贝，改成 intern 后重跑，结果正常。
+- **想通过把拷贝的 role_type_targets 放宽到 full_time 来造出几十条 held、实测长 held 行**：放宽后硬筛仍然只剩 7 条，因为 normalizeRoleType 把 full_time 映射成 new_grad_FT，只认应届标题。于是改用去重后的真实岗位离线模拟 held 行长度。这个错误方向本身也挖出了第 5 项的关键发现：卡住的是岗位类型，不是 N×10。
