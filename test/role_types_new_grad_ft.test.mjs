@@ -20,6 +20,8 @@ test('没有雇佣类型字段（Greenhouse）且标题无临时/合同信号 �
   assert.equal(classifyRoleType({ title: 'Field Marketing Manager', description: '' }), 'new_grad_FT');
   assert.equal(classifyRoleType({ title: 'Paid Social Creative Strategist (Contract)' }), 'other');
   assert.equal(classifyRoleType({ title: 'Brand Designer', employment_type: 'Contract' }), 'other');
+  // 复跑发现：雇佣类型写 FullTime、标题写 (Freelance) 的也不是全职岗
+  assert.equal(classifyRoleType({ title: 'Audio Engineering (Freelance)', employment_type: 'FullTime' }), 'other');
 });
 
 test('资深标题 → 不算应届：Senior / Sr. / Staff / Principal / Lead / Director / Head / VP / Chief；原因 senior_title', () => {

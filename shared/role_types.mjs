@@ -8,6 +8,9 @@ const NEW_GRAD_RE = /\b(new\s?grad|new\s?graduate|university\s?grad|university\s
 const SENIOR_RE = /\b(senior|sr\.?|staff|principal|lead|director|head|vp|chief)\b/i;
 // A non-intern title with no employment field (Greenhouse gives none) counts as
 // full-time unless something says temporary (a "Summer … Fellowship Program" is not a job).
+// Even with a full-time employment field, a title saying (Freelance) / (Contract)
+// is not a full-time job (seen on ElevenLabs boards).
+const NOT_FULL_TIME_TITLE_RE = /\b(contract|contractor|freelance|temp|temporary|seasonal|fixed[\s-]?term)\b/i;
 const NOT_PERMANENT_RE = /\b(contract|contractor|temp|temporary|seasonal|summer|fellowship|fixed[\s-]?term|freelance|volunteer)\b/i;
 const FULL_TIME_RE = /\b(full[\s-]?time|fulltime|permanent|regular employee)\b/i;
 // Structured employment_type / schedule values that describe a *permanent*
@@ -56,7 +59,7 @@ export function classifyRoleType(job = {}) {
 
   if (PART_TIME_RE.test(combined)) return 'part_time';
   if (NEW_GRAD_RE.test(combined)) return 'new_grad_FT';
-  if (explicitFullTime && !explicitIntern) return fullTimeEntryBlock(job) ? 'other' : 'new_grad_FT';
+  if (explicitFullTime && !explicitIntern) return NOT_FULL_TIME_TITLE_RE.test(title) || fullTimeEntryBlock(job) ? 'other' : 'new_grad_FT';
   if (explicitIntern) return 'intern';
   if (!employment.trim() && !NOT_PERMANENT_RE.test(title)) return fullTimeEntryBlock(job) ? 'other' : 'new_grad_FT';
   return 'other';
