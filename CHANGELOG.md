@@ -60,6 +60,11 @@ since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
 ### Changed
+- **Released list jobs are always accounted for** (2026-09-26, restart-apply
+  关卡 3). A `--release` link that did not go out is named in line 2 with its
+  reason — today's tier used up (no longer misreported as "not found"),
+  re-scored not eligible (`scored_not_eligible`), guard block, not dispatched.
+  Held jobs in line 1 read 「公司·岗位 链接」 with the link set off by spaces.
 - **Onboard Steps 4-7 are one find-and-apply run** (2026-09-25, restart-apply
   S5). The user saying "跑 N 个" starts it — no job list, no queue gate, no
   prune; the report is the 3 lines from `finish`. The identity line and the
@@ -78,6 +83,13 @@ since shipped and now lives in `docs/archive/`; the current one is
   history line failed it as `ledger_row_without_db_row`.
 
 ### Added
+- **Scan only the list companies: `search_intent.sourcing_mode`** (2026-09-26,
+  restart-apply 关卡 3「只投递 AI 视频创业公司相关岗位」). `"watchlist_only"` =
+  a stream run scans `target_companies` only and never the rotation pool; too
+  few new jobs → it applies to fewer and line 3 says it only scanned the list.
+  Set with `install_watchlist.mjs --mode watchlist_only|watchlist_first`
+  (dry-run by default). Not part of the scoring basis, so switching it does not
+  void earlier「不合适」.
 - **`submission_ledger.mjs record-manual`** (2026-09-25). Hand-made
   applications go into the ledger (`manual_submitted` / `reported_by_user`) so
   no run applies to them again and they count toward the 60-day company cap.

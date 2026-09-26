@@ -36,6 +36,11 @@ defaults:
   window rather than a separate parse hard gate.
 - A run is started by the user saying "跑 N 个": N is how many to apply to,
   capped by today's tier. There is no queue to process and no list to approve.
+- List companies (`search_intent.target_companies`) are never auto-applied:
+  their eligible jobs are listed in line 1 as 「公司·岗位 链接」; the user looks,
+  names the ones to apply to, and only those go out via
+  `stream_run.mjs start --release <link>…` (see onboard Step 7). With
+  `search_intent.sourcing_mode: "watchlist_only"` a run scans the list only.
 - Stable unattended batch platforms are Greenhouse and Ashby. Lever remains a
   manual/single-URL helper until its batch upload path is proven reliable.
 - If the user is doing a public/live demo, run `npm run demo:check` first and

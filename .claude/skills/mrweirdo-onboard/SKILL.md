@@ -59,6 +59,10 @@ Do not use this skill for:
 - List (dream) companies (`search_intent.target_companies`) are scanned first
   every run; an eligible job there is NOT applied to automatically — it is
   listed for the user（restart-apply D10「梦想公司投前过目」）.
+- `search_intent.sourcing_mode: "watchlist_only"` = scan the list companies
+  ONLY; the rotation pool is never called. Too few new jobs there → the run
+  applies to fewer and line 3 says so (only scanned the K list companies).
+  Absent / `"watchlist_first"` = list first, then rotation.
 - Per-company quota guard stays on for the user's local `company_list.user.json`.
 - LinkedIn, Indeed, Glassdoor, non-GH/Ashby platforms, and
   `legitimacy="suspicious"` rows go to manual review.
@@ -244,7 +248,7 @@ filled as, before anything is submitted:
 | 工作授权 | <visa> / sponsorship <yes/no> | 不从专业推断 |
 | 目标方向 | <functions / role categories> | 跟用户自报 + 简历走 |
 | 地点 | <geo / relocation policy> | 影响找岗 |
-| 名单公司 | <N 家 / 未设> | 每次先扫；合格的不自动投，列给你过目 |
+| 名单公司 | <N 家 / 未设>；<只扫名单 / 名单优先再扫其他> | 合格的不自动投，列「公司·岗位 链接」给你过目，你点名的再投 |
 | 写作素材 | <themes> | 只用有证据的内容 |
 | 不写/不投 | <hard no-claims / excluded keywords> | 安全边界 |
 
@@ -272,6 +276,11 @@ node shared/install_watchlist.mjs
 Ask one question: 「要把这 N 家设为名单公司吗？名单公司每次先扫；它们合格的岗不自动投，会列出来给你过目。」
 Run `node shared/install_watchlist.mjs --apply` only after the user says yes.
 If the user says no or names other companies, do not write the preset.
+
+If the user says to apply ONLY to these companies (e.g. 「只投 AI 视频创业公司」),
+set the switch the same way — dry-run first, `--apply` after the user agrees:
+`node shared/install_watchlist.mjs --mode watchlist_only [--apply]`
+(`--mode watchlist_first` turns it back off). Never set it on your own guess.
 
 ## Step 4 - 「跑 N 个」开跑 / Start
 
@@ -397,17 +406,28 @@ lines. Show only these 3 lines (只给这 3 行), verbatim, nothing else:
 
 ```text
 [Step 7/7] 本轮完成 / Batch report
-<lines[0]>   投出 N 个：公司·岗位、…（名单公司合格的会在这里列「公司·岗位·链接」等你过目）
+<lines[0]>   投出 N 个：公司·岗位、…（名单公司合格的会在这里逐条列「公司·岗位 链接」等你过目、点名）
 <lines[1]>   没投成 N 个：原因（判不确定的附截图路径，请你看一眼）
 <lines[2]>   新岗够不够：这次看了 X 个新岗，合适的 Y 个
 ```
 
 Then, only if it applies, at most one short line each:
 
-- the finish output has `held` (list-company jobs waiting for review): the user
-  either applies by hand, or says 「投」+ the link(s) → start a run with
-  `node shared/stream_run.mjs start --target <number of links> --release <link> [--release <link2>]`
-  and go through Steps 5 and 7 again (it scans the list only, re-scores, applies);
+- the finish output has `held` (list-company jobs waiting for review): line 1
+  already lists every one as 「公司·岗位 链接」 (all of them, none dropped — do
+  not shorten or re-order line 1). Then:
+  1. the user looks at the postings (opens the links himself);
+  2. the user names the ones to apply to (「投」+ link(s) / 「投第 2、5 个」 →
+     map to the links in `held`), or applies by hand;
+  3. only those → `node shared/stream_run.mjs start --target <number of links> --release <link> [--release <link2>]`,
+     then Steps 5 and 7 again. A release run scans the list only, re-scores the
+     named jobs and applies them like any other job: the pre-dispatch guard
+     (never twice / company 2-in-60-days / today's tier) and the one ledger
+     writer (`record_apply_outcome.mjs`) apply as usual. Every released link that
+     did not go out is named in line 2 with its reason (taken down,
+     `company_cooldown_60d`, `daily_cap_reached`, `scored_not_eligible`, …).
+  List-company jobs are never auto-applied without step 2, and there is no
+  "fill the form and stop before submit" step for them;
 - the user says they applied to some jobs by hand → write them into the ledger
   so no run applies to them again (dry-run first, then `--apply`):
   `node shared/submission_ledger.mjs record-manual --url <link> --title "<title>" [--at YYYY-MM-DD]`

@@ -39,7 +39,9 @@ Each command prints one JSON object on stdout (child output goes to stderr).
   from a dead run first (as maybe submitted, never re-applied); computes the
   budget: at most min(N, today's tier left) applications and N×10 new jobs
   looked at. Its `line` is the only start message.
-- `next`: scans the company list first, then the next rotation window; drops
+- `next`: scans the company list first, then the next rotation window (with
+  `search_intent.sourcing_mode: "watchlist_only"` the list only — no rotation
+  window is ever scanned, and `--max-windows` is refused); drops
   what the ledger or the seen log already covers BEFORE scoring; hands out up
   to 50 new jobs in `batch_file`, or `done` with a reason (`target_reached`,
   `score_budget_reached`, `supply_exhausted`, `breaker_open`,
@@ -70,9 +72,18 @@ permission prompt stays a second spending gate.
 ## Held list jobs and hand-made applications
 
 - Held: eligible jobs at list companies are not applied to automatically. They
-  are listed in line 1 of the report with their links. The user applies by
-  hand, or releases them: `start --target <number of links> --release <link>…`
-  (list scan only, re-scored, applied like any other job).
+  are ALL listed in line 1 of the report as 「公司·岗位 链接」 (and in `held`).
+  List → the user looks and names the ones to apply to → release only those:
+  `start --target <number of links> --release <link>…` (list scan only,
+  re-scored, applied like any other job, through the pre-dispatch guard and the
+  one ledger writer). A released link that did not go out is named in line 2
+  with its reason (`not found` = taken down, `company_cooldown_60d`,
+  `daily_cap_reached`, `scored_not_eligible`, `not_dispatched:<stop>`, …).
+  The user may also apply by hand (record it, below).
+- Scan only the list: `node shared/install_watchlist.mjs --mode watchlist_only`
+  (dry-run) then `--apply`, after the user says so; `--mode watchlist_first`
+  turns it off. It sets `search_intent.sourcing_mode`; switching it does not
+  void earlier「不合适」judgements.
 - Hand-made: whatever the user applied to by hand goes into the ledger, so no
   run applies to it again and it counts toward the company's 2-in-60-days:
 
