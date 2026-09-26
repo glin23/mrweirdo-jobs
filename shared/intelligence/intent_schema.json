@@ -146,6 +146,11 @@
             }
           }
         },
+        "sourcing_mode": {
+          "type": "string",
+          "enum": ["watchlist_first", "watchlist_only"],
+          "description": "Optional; absent = watchlist_first. Where a stream run looks: watchlist_first = target_companies first, then the rotation pool; watchlist_only = target_companies only, the rotation pool is never scanned (restart-apply 关卡 3). Set by install_watchlist.mjs --mode after the user says so; never inferred from the resume."
+        },
         "exclude_role_keywords": {
           "type": "array",
           "description": "Role title fragments that should DROP results (whole-word, case-insensitive). Derived from the target-function anchor and obvious noise. Do not use one universal exclusion list: a SWE-seeking user must not exclude 'software engineer', while an Ops/PM-seeking user may exclude distant engineering/clinical/design/data roles when those are outside the stated target.",

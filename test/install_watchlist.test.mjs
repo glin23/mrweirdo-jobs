@@ -54,3 +54,41 @@ test('还没有 search_intent.json（没做引导）→ 响亮失败，不替用
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /search_intent\.json/);
 });
+
+// 关卡 3：「只投递 AI 视频创业公司相关岗位」→ 开关写在 search_intent.sourcing_mode。
+test('--mode watchlist_only：默认试跑只说要改什么；--apply 装名单并写开关；--mode watchlist_first 关掉；值拼错响亮拒绝', () => {
+  const home = homeWithIntent();
+  const before = readFileSync(join(home, 'search_intent.json'), 'utf8');
+  const dry = cli(home, ['--mode', 'watchlist_only']);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(JSON.parse(dry.stdout).sourcing_mode_after, 'watchlist_only');
+  assert.equal(readFileSync(join(home, 'search_intent.json'), 'utf8'), before, 'dry-run writes nothing');
+
+  const on = cli(home, ['--mode', 'watchlist_only', '--apply']);
+  assert.equal(on.status, 0, on.stderr);
+  let doc = intentOf(home);
+  assert.equal(doc.search_intent.sourcing_mode, 'watchlist_only');
+  assert.equal(doc.search_intent.target_companies.length, PRESET.length);
+  assert.equal(statSync(join(home, 'search_intent.json')).mode & 0o777, 0o600);
+
+  const off = cli(home, ['--mode', 'watchlist_first', '--apply']);
+  assert.equal(off.status, 0, off.stderr);
+  doc = intentOf(home);
+  assert.equal(doc.search_intent.sourcing_mode, 'watchlist_first');
+  assert.equal(doc.search_intent.target_companies.length, PRESET.length, 'the list is not added twice');
+
+  const bad = cli(home, ['--mode', 'list_only', '--apply']);
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /--mode list_only/);
+  assert.equal(intentOf(home).search_intent.sourcing_mode, 'watchlist_first');
+});
+
+test('不带 --mode：不碰已有开关', () => {
+  const home = homeWithIntent();
+  const doc = intentOf(home);
+  doc.search_intent.sourcing_mode = 'watchlist_only';
+  writeFileSync(join(home, 'search_intent.json'), JSON.stringify(doc));
+  const r = cli(home, ['--apply']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(intentOf(home).search_intent.sourcing_mode, 'watchlist_only');
+});
