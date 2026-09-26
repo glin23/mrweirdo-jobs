@@ -40,6 +40,7 @@
  *   - On 3rd failure → log + skip form, never crash batch
  */
 
+import '../../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join, resolve as pathResolve } from 'node:path';

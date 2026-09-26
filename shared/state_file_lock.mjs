@@ -21,6 +21,7 @@
 // answers 途经的中转文件）: the transit files carry what was typed into real
 // forms, and a 700 directory protects them wholesale.
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { chmodSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -25,6 +25,7 @@
 //     INVALID CSS (leading digit) — use [id="..."] form; the /^[0-9]/.test(id) guard is the rule.
 //   - Ashby triplicates error messages — always dedupe missing[] before iterating.
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

@@ -21,6 +21,7 @@
 // exists (written by the auto-apply skills when they start a row), the
 // dashboard shows it as ⏳ ACTIVE.
 
+import '../shared/safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';

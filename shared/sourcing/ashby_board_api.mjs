@@ -1,3 +1,4 @@
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 /**
  * ashby_board_api.mjs — Ashby Job Board API client (zero npm dep, Node 24 ESM)
  *

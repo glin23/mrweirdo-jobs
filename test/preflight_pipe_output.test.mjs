@@ -62,6 +62,7 @@ test('demo:check：preflight 输出读不懂时响亮失败，不静默显示 0'
   mkdirSync(join(root, 'scripts'));
   mkdirSync(join(root, 'shared'));
   copyFileSync(join(process.cwd(), 'scripts', 'demo_check.mjs'), join(root, 'scripts', 'demo_check.mjs'));
+  for (const f of ['safe_exit.mjs', 'preload_system_ca.mjs']) copyFileSync(join(process.cwd(), 'shared', f), join(root, 'shared', f)); // every entry imports it
   writeFileSync(join(root, 'shared', 'supervisor_preflight.mjs'), "process.stdout.write('{\"ok\": true, \"queue\": [{\"id\": 1');\n");
   const r = spawnSync(process.execPath, [join(root, 'scripts', 'demo_check.mjs'), '--json'], { cwd: root, env, encoding: 'utf8' });
   const out = JSON.parse(r.stdout);

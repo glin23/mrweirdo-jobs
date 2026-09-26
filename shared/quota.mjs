@@ -7,6 +7,7 @@
 //   const left = await getRemaining({ company: 'Google', apply_quota_limit: 3, apply_quota_period: 'semester' });
 //   if (await isCapReached(company)) { /* block batch */ }
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { atsHome } from './paths.mjs';

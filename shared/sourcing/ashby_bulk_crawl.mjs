@@ -47,6 +47,7 @@
  * logged but not counted as error (tenant churn is normal).
  */
 
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

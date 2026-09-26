@@ -14,6 +14,7 @@
 // Returns JSON on stdout:
 //   { ok: true|false, executed: [...labels], skipped: [...{label, reason}], errors: [...] }
 
+import '../../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve as pathResolve } from 'node:path';

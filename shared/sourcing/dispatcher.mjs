@@ -23,6 +23,7 @@
 //   // result.by_source = { remoteok: 12, greenhouse_bulk: 200, ... }
 //   // result.errors = [{ source, error }, ...]
 
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { classifyRoleType } from '../role_types.mjs';
 
 // Source adapter registry. Each adapter normalizes a different module's

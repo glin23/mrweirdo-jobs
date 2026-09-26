@@ -99,7 +99,7 @@ export async function loadDriver(profile, opts = {}) {
   const CONTRACT_IMPORT = "import { emitOutcome, recordFill } from";
   assert.ok(src.includes(CONTRACT_IMPORT), 'harness stale: driver_contract import not found in the driver');
   src = src.replace(CONTRACT_IMPORT, "import { emitOutcome as __shipped_emitOutcome, recordFill } from");
-  src = src.replace(/from '\.\//g, `from '${SHARED}/`) + STUBS;
+  src = src.replace(/(from |import )'\.\//g, `$1'${SHARED}/`) + STUBS;
   const file = join(home, `driver_under_test_${seq++}.mjs`);
   writeFileSync(file, src);
 

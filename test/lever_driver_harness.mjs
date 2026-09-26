@@ -60,7 +60,7 @@ export async function loadDriver(profile, { resume = true } = {}) {
     assert.ok(src.includes(decl), `harness stale: ${decl} not found in the driver`);
     src = src.replace(decl, `function __unused_${fn}(`);
   }
-  src = src.replace(/from '\.\//g, `from '${SHARED}/`) + STUBS;
+  src = src.replace(/(from |import )'\.\//g, `$1'${SHARED}/`) + STUBS;
   const file = join(home, `lever_under_test_${seq++}.mjs`);
   writeFileSync(file, src);
 

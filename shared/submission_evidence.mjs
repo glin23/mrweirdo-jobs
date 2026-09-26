@@ -24,6 +24,7 @@
 // suite walks the exported tables and fails on any rule without a live
 // fixture (ADR-14: 规则没有夹具，改了不知道漂没漂).
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { mkdirSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

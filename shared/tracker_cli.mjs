@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { OUTCOME_STATUSES } from './constants.mjs';

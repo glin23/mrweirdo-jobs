@@ -47,6 +47,7 @@
  *   - stdout: JSON { jobs, errors, tenants_attempted, tenants_with_jobs }
  */
 
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';

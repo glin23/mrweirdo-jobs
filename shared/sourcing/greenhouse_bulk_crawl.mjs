@@ -44,6 +44,7 @@
  *   slugs; bulkFetchGreenhouse() returns those in `errors`.
  */
 
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

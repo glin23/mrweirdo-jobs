@@ -3,6 +3,7 @@
 // Node 24+ required (uses global WebSocket). Zero deps by design.
 // Used by mrweirdo-jobs (Greenhouse / Ashby / Lever apply skills).
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve as pathResolve } from 'node:path';
 import { atsHome } from './paths.mjs';

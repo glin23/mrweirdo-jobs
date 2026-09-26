@@ -2,6 +2,7 @@
 // mrweirdo-jobs install/runtime doctor.
 // Pure local checks only; no external network and no ATS actions.
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { accessSync, constants, existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -1,3 +1,4 @@
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 /**
  * handshake_search.mjs — Handshake job search (v0.6 STUB)
  *

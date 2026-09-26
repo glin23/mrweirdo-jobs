@@ -5,6 +5,7 @@
 //
 // Does NOT modify profile.json — only returns suggestions for user to confirm.
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { readFileSync, existsSync } from 'node:fs';
 import { loadRecent } from './feedback.mjs';
 

@@ -6,6 +6,7 @@
 // The submit judgement is NOT local any more — Lever.checkSuccess() returns raw
 // page material and the single shared submissionVerdict() judges it (ADR-14).
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

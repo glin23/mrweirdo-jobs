@@ -1,3 +1,4 @@
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 /**
  * icims_board_api.mjs — iCIMS career portal scraper (v0.8 ALPHA, zero npm dep)
  *

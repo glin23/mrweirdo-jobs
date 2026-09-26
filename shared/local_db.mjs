@@ -25,6 +25,7 @@
 // Schema lives in-file (idempotent CREATE TABLE IF NOT EXISTS). First call
 // to initDb() runs schema; later calls are no-ops.
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { DatabaseSync } from 'node:sqlite';
 import { dirname, join } from 'node:path';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';

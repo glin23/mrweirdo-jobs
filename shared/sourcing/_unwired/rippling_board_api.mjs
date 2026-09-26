@@ -1,3 +1,4 @@
+import '../../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 /**
  * rippling_board_api.mjs — Rippling ATS career portal scraper (zero npm dep, Node 24 ESM)
  *

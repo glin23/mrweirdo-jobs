@@ -5,6 +5,7 @@
 // same job title. This script marks duplicate pending rows as skipped before
 // Step 10 selects auto-apply candidates.
 
+import './safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 import { DatabaseSync } from 'node:sqlite';
 import { dbPath } from './local_db.mjs';
 import { normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';

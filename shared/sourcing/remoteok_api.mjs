@@ -8,6 +8,7 @@
 // Usage:
 //   import { fetchRemoteOk, filterByKeywords, filterByExclude } from './remoteok_api.mjs';
 //   const jobs = await fetchRemoteOk({ tags: ['ai', 'data', 'product'] });
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 
 const BASE = 'https://remoteok.com/api';
 const DEFAULT_TIMEOUT_MS = 12000;

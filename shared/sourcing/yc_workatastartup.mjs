@@ -1,3 +1,4 @@
+import '../safe_exit.mjs'; // first: no exit-time SIGSEGV with system CAs on (preload_system_ca.mjs)
 /**
  * yc_workatastartup.mjs — YC Work-at-a-Startup sourcing (v0.9, public path).
  *
