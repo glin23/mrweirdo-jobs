@@ -139,6 +139,9 @@ function runTee(args, outPath, extraEnv = {}) {
     // the driver typed into the form. Born 600 even if the file pre-exists.
     const out = createWriteStream(outPath, { flags: 'w', mode: 0o600 });
     out.on('open', () => lockFile(outPath));
+    // A failed write leaves the file short: the recorder then files a crash
+    // (the safe direction). Said out loud; end()'s callback still resolves.
+    out.on('error', (e) => console.error(`[apply-batch] ⚠️ writing ${outPath} failed: ${e.message}`));
     const child = spawn(process.execPath, args, { cwd: repoRoot, env: { ...env, ...extraEnv } });
     child.stdout.on('data', (chunk) => {
       process.stdout.write(chunk);
@@ -148,9 +151,11 @@ function runTee(args, outPath, extraEnv = {}) {
       process.stderr.write(chunk);
       out.write(chunk);
     });
+    // Resolve only once the result file is on disk: the recorder reads it next,
+    // and on a slow disk the last chunk — the driver's outcome line — could
+    // still be queued, so the attempt was filed as a crash (verify 第 7 轮 FLUSH).
     child.on('close', (code) => {
-      out.end();
-      resolve(code ?? 1);
+      out.end(() => resolve(code ?? 1));
     });
   });
 }
