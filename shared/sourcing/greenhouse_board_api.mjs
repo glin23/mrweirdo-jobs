@@ -84,6 +84,8 @@ function _normalizeJob(slug, raw) {
     title: raw.title || '',
     url: raw.absolute_url || '',
     location,
+    // Offices are extra places of the job (restart-apply-2 location gate).
+    locations: [...new Set([location, ...(Array.isArray(raw.offices) ? raw.offices.map((o) => o?.name) : [])].filter(Boolean))],
     description: stripHtml(raw.content || ''),
     department,
     updated_at: raw.updated_at || '',

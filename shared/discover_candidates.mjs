@@ -5,7 +5,8 @@ import path from 'node:path';
 import { discoverAll, DEFAULT_SOURCES } from './sourcing/dispatcher.mjs';
 import { discoveryApplyBucket, isAutoSupportedCandidate } from './sourcing/apply_url_classification.mjs';
 import { hasUsableApplyUrl } from './sourcing/usable_apply_url.mjs';
-import { passesAllowedRoleType, roleTypesFromSearchIntent, roleTypeConflict } from './role_types.mjs';
+import { roleTypeBlockReason, roleTypesFromSearchIntent, roleTypeConflict } from './role_types.mjs';
+import { locationVerdict } from './location_gate.mjs';
 import { atsHome } from './paths.mjs';
 import { unusableAutoApplyReason } from './eligibility.mjs';
 import { progress } from './progress.mjs';
@@ -255,63 +256,6 @@ function passesExclude(title, excludes) {
   return !excludeKeywordMatch(title, excludes);
 }
 
-function passesLocation(loc, intent) {
-  if (!loc) return true;
-  const l = String(loc).toLowerCase();
-  const geo = intent.geographic_preference || {};
-  const allowedCountry = String(geo.primary_country || 'US').toLowerCase();
-  const countriesOpenTo = new Set((geo.countries_open_to || [geo.primary_country || 'US']).map((s) => String(s).toUpperCase()));
-  const relocationPolicy = geo.relocation_policy || 'selected_metros';
-  const broadRelocation = relocationPolicy === 'anywhere_primary_country' || relocationPolicy === 'anywhere_legal_work';
-  const remoteOK = geo.remote_acceptable !== false;
-  const preferredMetros = (geo.preferred_metros || []).map((s) => String(s).toLowerCase());
-
-  if (remoteOK && (l.includes('remote') || l.includes('anywhere') || l.includes('worldwide'))) return true;
-  if (preferredMetros.some((m) => l.includes(m))) return true;
-
-  const usLocation = l.includes('united states') || l.includes('usa') || /\bu\.s\.?\b/.test(l) ||
-    ['austin', 'new york', 'nyc', 'san francisco', 'bay area', 'boston', 'cambridge', 'seattle', 'chicago', 'los angeles', 'denver', 'menlo park', 'palo alto', 'cincinnati'].some((c) => l.includes(c));
-  const chinaLocation = l.includes('china') || ['beijing', 'shanghai', 'shenzhen', 'hong kong', 'guangzhou', 'hangzhou'].some((c) => l.includes(c));
-
-  if (broadRelocation && countriesOpenTo.has('US') && usLocation) return true;
-  if (broadRelocation && countriesOpenTo.has('CN') && chinaLocation) return true;
-  if (allowedCountry === 'us' && countriesOpenTo.has('US') && (l.includes('united states') || l.includes('usa') || /\bu\.s\.?\b/.test(l))) return true;
-
-  const foreignCities = [
-    'berlin', 'london', 'paris', 'amsterdam', 'madrid', 'barcelona', 'rome', 'milan',
-    'lisbon', 'warsaw', 'prague', 'vienna', 'zurich', 'stockholm', 'copenhagen',
-    'dublin', 'manchester', 'edinburgh', 'helsinki', 'oslo', 'budapest',
-    'tokyo', 'osaka', 'shanghai', 'beijing', 'shenzhen', 'hong kong', 'taipei',
-    'seoul', 'singapore', 'bangalore', 'bengaluru', 'mumbai', 'delhi', 'hyderabad',
-    'pune', 'chennai', 'kuala lumpur', 'jakarta', 'manila', 'bangkok', 'dubai',
-    'abu dhabi', 'tel aviv', 'riyadh', 'doha', 'jeddah', 'kuwait', 'sao paulo',
-    'são paulo', 'rio de janeiro', 'brasil', 'brazil', 'mexico city',
-    'buenos aires', 'lima', 'bogota', 'santiago', 'monterrey', 'guatemala',
-    'toronto', 'vancouver', 'montreal', 'calgary', 'ottawa', 'sydney', 'melbourne',
-    'brisbane', 'auckland', 'lagos', 'nairobi', 'cairo', 'cape town', 'johannesburg',
-  ];
-  if (foreignCities.some((f) => l.includes(f))) {
-    if (countriesOpenTo.has('CN') && chinaLocation) return true;
-    return false;
-  }
-
-  const foreignCountries = [
-    ' uae', 'united arab emirates', 'india', 'germany', 'france', 'spain', 'italy',
-    'netherlands', 'sweden', 'norway', 'denmark', 'finland', 'poland', 'mexico',
-    'colombia', 'argentina', 'chile', 'peru', 'japan', 'china', 'south korea',
-    'thailand', 'vietnam', 'philippines', 'indonesia', 'malaysia', 'pakistan',
-    'bangladesh', 'south africa', 'kenya', 'nigeria', 'egypt', 'saudi arabia',
-    'qatar', 'turkey', 'israel', 'canada', 'australia', 'new zealand', 'austria',
-    'ireland', 'belgium', 'switzerland', 'portugal', 'czechia', 'czech republic',
-    'hungary', 'greece', 'romania',
-  ];
-  if (foreignCountries.some((c) => l.includes(c))) {
-    if (countriesOpenTo.has('CN') && chinaLocation) return true;
-    return false;
-  }
-  return true;
-}
-
 function filterWithReasons(jobs, intent, roleTypes, intentDoc = {}) {
   const excludes = excludeKeywordsForIntent(intent, intentDoc);
   const kept = [];
@@ -326,8 +270,12 @@ function filterWithReasons(jobs, intent, roleTypes, intentDoc = {}) {
       const excludedKeyword = excludeKeywordMatch(job.title, excludes);
       if (unusableReason) reason = unusableReason;
       else if (excludedKeyword) reason = `excluded_title_keyword:${excludedKeyword}`;
-      else if (!passesLocation(job.location, intent)) reason = 'location_mismatch';
-      else if (!passesAllowedRoleType(job, roleTypes)) reason = 'role_type_not_allowed';
+      else {
+        // Reasons carry their detail after ':' (location_mismatch:London,
+        // requires_3plus_years:5); by_reason_kind in the funnel groups them.
+        const where = locationVerdict(job, intent);
+        reason = where.ok ? roleTypeBlockReason(job, roleTypes) : where.reason;
+      }
     }
 
     if (reason) {
@@ -494,6 +442,7 @@ const discoveryFunnel = {
     role_type_conflicts: roleTypeConflicts,
   },
   hard_filter_dropped_by_reason: countBy(hardFilterResult.dropped, (row) => row.reason),
+  hard_filter_dropped_by_reason_kind: countBy(hardFilterResult.dropped, (row) => String(row.reason).split(':')[0]),
   hard_filter_drop_examples: hardFilterResult.dropped.slice(0, 10),
   manual_or_unsupported_by_bucket: countBy(manualOrUnsupported, (job) => job.discovery_apply_bucket),
   to_score_by_source: countBy(toScore, (job) => job._discovery_source || job.search_source || job.source),

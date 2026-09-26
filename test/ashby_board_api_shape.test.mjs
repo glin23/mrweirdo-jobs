@@ -74,3 +74,18 @@ test('存活检查：板 404 仍判 expired（公司板没了）', async () => {
   const r = await withFetch(json(404, null), () => checkAshbyPosting(POSTING, new Map()));
   assert.equal(r.liveness_status, 'expired');
 });
+
+// restart-apply-2 地点筛：附加地点是对象 {location, address}（原来被当字符串，主地点空时
+// 会变成 "[object Object]"）；每个地点和结构化国家都交给地点闸。
+test('secondaryLocations 对象：locations 收全部地名、location_countries 收结构化国家；主地点空时取附加地点的名字', async () => {
+  const body = { jobs: [
+    { id: 'a', title: 'Marketing', location: 'London', address: { postalAddress: { addressCountry: 'United Kingdom' } },
+      secondaryLocations: [{ location: 'New York City', address: { postalAddress: { addressCountry: 'United States' } } }, { location: 'Germany', address: { postalAddress: {} } }] },
+    { id: 'b', title: 'Growth', location: '', secondaryLocations: [{ location: 'Austin', address: null }] },
+  ] };
+  const [a, b] = await withFetch(json(200, body), () => fetchJobs('acme'));
+  assert.deepEqual(a.locations, ['London', 'New York City', 'Germany']);
+  assert.deepEqual(a.location_countries, ['United Kingdom', 'United States']);
+  assert.equal(b.location, 'Austin');
+  assert.deepEqual(b.locations, ['Austin']);
+});

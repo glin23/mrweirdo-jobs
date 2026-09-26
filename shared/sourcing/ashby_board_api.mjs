@@ -77,16 +77,23 @@ async function fetchRaw(slug, timeoutMs = FETCH_TIMEOUT_MS) {
  * Normalize one Ashby job record to the shared sourcing shape.
  */
 function normalizeJob(raw, slug) {
-  const loc =
-    raw.location ||
-    (Array.isArray(raw.secondaryLocations) && raw.secondaryLocations[0]) ||
-    '';
+  // secondaryLocations is [{ location, address: { postalAddress: { addressCountry } } }]
+  // (was read as a string: an object became "[object Object]"). Every place and
+  // every structured country go to the location gate (restart-apply-2).
+  const secondary = Array.isArray(raw.secondaryLocations) ? raw.secondaryLocations : [];
+  const secondaryNames = secondary.map((s) => (typeof s === 'string' ? s : s?.location)).filter(Boolean);
+  const loc = raw.location || secondaryNames[0] || '';
+  const countries = [raw.address, ...secondary.map((s) => s?.address)]
+    .map((a) => a?.postalAddress?.addressCountry)
+    .filter(Boolean);
   return {
     company: slug,
     title: raw.title || '',
     url: raw.jobUrl || raw.applyUrl || '',
     apply_url: raw.applyUrl || raw.jobUrl || '',
     location: loc,
+    locations: [...new Set([loc, ...secondaryNames].filter(Boolean))],
+    location_countries: [...new Set(countries)],
     description: raw.descriptionPlain || '', // Ashby gives plain text directly
     department: raw.department || raw.team || '',
     updated_at: raw.publishedAt || raw.updatedAt || '',
