@@ -33,6 +33,9 @@ import { recoverInflight } from './inflight_recovery.mjs';
 import { companyTitleKey, jobFingerprint, normalizeCompany } from './job_identity.mjs';
 import { lockDir, lockFile } from './state_file_lock.mjs';
 import { batchLockHolder, liveBatchHint } from './lock_holder.mjs';
+import { installSafeExit } from './safe_exit.mjs';
+
+installSafeExit(); // exit codes here decide what the caller does (see safe_exit.mjs)
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const home = atsHome();

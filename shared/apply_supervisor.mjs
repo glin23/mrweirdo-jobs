@@ -7,6 +7,9 @@ import { atsHome } from './paths.mjs';
 import { roleTypesFromSearchIntent } from './role_types.mjs';
 import { formatMaxRows, resolveMaxRows } from './batch_limit.mjs';
 import { progress } from './progress.mjs';
+import { installSafeExit } from './safe_exit.mjs';
+
+installSafeExit(); // exit codes here decide what the caller does (see safe_exit.mjs)
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const home = atsHome();

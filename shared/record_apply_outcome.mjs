@@ -10,6 +10,11 @@ import { append as ledgerAppend, readAll, sqliteTs } from './submission_ledger.m
 import { attemptIndex } from './apply_guard.mjs';
 import { workAuthSources } from './answer_provenance.mjs';
 import { atsHome } from './paths.mjs';
+import { installSafeExit } from './safe_exit.mjs';
+
+// Its exit code decides whether apply_batch keeps going or files a crash: it must
+// never be lost to an exit-time SIGSEGV (see safe_exit.mjs).
+installSafeExit();
 
 function argValue(name) {
   const idx = process.argv.indexOf(name);

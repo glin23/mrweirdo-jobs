@@ -19,6 +19,8 @@
 // 'submitted' additionally REQUIRES verdict 'submitted'（§14.8 跨栈对照表——
 // outcome 由 verdict 推出，反向不成立）, enforced in validateOutcome.
 
+import { installSafeExit } from './safe_exit.mjs';
+
 export const OUTCOMES = Object.freeze([
   'submitted',
   'not_submitted',
@@ -80,6 +82,8 @@ export function validateOutcome(obj) {
 // nothing after emitOutcome runs. Switched on as soon as a driver process loads
 // this module, before its first write, so no async write is ever queued ahead
 // of the outcome line; emitOutcome repeats it for any other caller.
+installSafeExit(); // every driver / recorder / batch exit (see safe_exit.mjs)
+
 function blockingStdout() {
   const handle = process.stdout._handle;
   if (handle && typeof handle.setBlocking === 'function') handle.setBlocking(true);
