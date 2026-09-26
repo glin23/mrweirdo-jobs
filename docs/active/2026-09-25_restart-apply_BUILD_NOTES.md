@@ -573,3 +573,5 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 1. **只在 held 行把分隔符「、」换成「，」**：否决——任何全角标点紧贴 URL 都可能被终端/Markdown 并进链接，要空格隔开才稳。
 2. **只扫名单时对 `--max-windows` 静默忽略**：否决——显式给了轮转窗口却被吞，违背 Fail Fast，改为响亮拒绝。
 3. **切开关后沿用整份 search_intent 当依据版本**：否决——拍板人来回切一次开关会把 60 天内所有「不合适」作废、全部重打分，花钱不带来任何判断变化。
+
+> **第 5 次召唤追加（lead 复验 a089260 偶发 exit null + verify 第 10 轮 P3/P4）**：`2171bee`、`736f97b`，未推。**入口全覆盖**：凡首行 shebang 或有 main 守卫的 .mjs（shared/scripts/bin 共 57 个未装）首个 import 改为引 `shared/safe_exit.mjs`（启动时读完系统证书）；npx 启动器 `bin/mrweirdo-jobs.mjs` 随 npm 包单独发布、不带 shared/，改为就地同步读证书。守卫 `test/entry_preload_guard.test.mjs` 扫描全部入口，漏装即红（另有自检用例）。红测试：NODE_USE_SYSTEM_CA=1 下 `submission_evidence.mjs --tab x` ×200（8 路并发、不带上游 NODE_OPTIONS），旧码 **3/200 SIGSEGV** → 修后 5 轮 **0/1000**。连带：三个驱动测试夹具只改写 `from './`，补改写 side-effect `import './`；demo_check 夹具补拷 safe_exit。**P3**：开跑即额度满、一家未扫时第 3 行改为「今日额度已满，本次未扫描」（其他未扫就收工的情形写「本次未扫描（原因）」），不再说「没有新岗…只扫了名单」。**P4**：第 2 行放行链接、中断补记的链接/截图路径两侧留半角空格。红测试先行（6 红→绿；「没找岗就 finish」一条写在实现之后，未见红）。全量 `npm test` 连跑 3 次 504/504（第 1 次与上一轮全量尾段有约 3 分钟重叠，仍全绿），CI 另三步 exit 0；真实家目录零写入。未修：第 2 行原因码仍为英文（verify P4 附带提及，未列入本次指派）。
