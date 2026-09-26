@@ -84,9 +84,10 @@ since shipped and now lives in `docs/archive/`; the current one is
 
 ### Added
 - **`submission_ledger.mjs correct`** (2026-09-26). Appends a correction line
-  (`--of <line id> --verdict not_submitted|unknown|submitted --evidence "…"`),
-  never edits the original. Dry-run by default; evidence required; refused
-  while a run is active. `not_submitted` sets `may_have_submitted=false`, so the
+  (`--of <line id> --url <its job link> --verdict not_submitted|unknown|submitted
+  --evidence "…"`), never edits the original. Dry-run by default; the link must
+  name the same job as the line; evidence of at least 10 characters; a flag
+  value that looks like a flag is refused; refused while a run is active. `not_submitted` sets `may_have_submitted=false`, so the
   dedupe gate, the pre-dispatch gate and the 60-day company count (all read
   corrected lines) let the job be applied to again.
 - **Scan only the list companies: `search_intent.sourcing_mode`** (2026-09-26,

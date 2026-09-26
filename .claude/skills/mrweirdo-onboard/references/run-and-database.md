@@ -100,13 +100,14 @@ node shared/submission_ledger.mjs record-manual --file <list.json> --apply   # [
   word, evidence required, dry-run first:
 
 ```bash
-node shared/submission_ledger.mjs correct --of <ledger line id> --verdict not_submitted --evidence "<why, e.g. no confirmation e-mail in Gmail>"           # dry-run
-node shared/submission_ledger.mjs correct --of <ledger line id> --verdict not_submitted --evidence "<why>" --apply
+node shared/submission_ledger.mjs correct --of <ledger line id> --url <that line's job link> --verdict not_submitted --evidence "<why, e.g. no confirmation e-mail in Gmail>"           # dry-run
+node shared/submission_ledger.mjs correct --of <ledger line id> --url <that line's job link> --verdict not_submitted --evidence "<why>" --apply
 ```
 
   `not_submitted` = never reached the company: the job may be applied to again
   and no longer counts toward the company's 2-in-60-days. (`unknown` /
-  `submitted` keep it as applied.) Refused while a run is active.
+  `submitted` keep it as applied.) Refused while a run is active, when `--url`
+  is not the job of that line, or when the evidence is under 10 characters.
 
 The company is taken from the job board slug in the link (the same name every
 scan uses). `--company` is optional and only double-checks it: a display name
