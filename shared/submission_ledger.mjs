@@ -29,6 +29,10 @@ import { isAttempted } from './apply_guard.mjs'; // 「投过」唯一口径 (ci
 export const LEDGER_RELPATH = 'log/submissions.jsonl';
 export const LEDGER_ERAS = Object.freeze(['v2', 'legacy']);
 export const LEDGER_VERDICTS = Object.freeze(['submitted', 'not_submitted', 'unknown', 'legacy_unverified']);
+// 「已投」(the count the user reads) — not the same thing as 投过 (isAttempted in
+// apply_guard, which also holds maybe-submitted lines). DESIGN §8.
+export const SUBMITTED_VERDICTS = Object.freeze(['submitted', 'legacy_unverified']);
+export const isSubmitted = (e) => SUBMITTED_VERDICTS.includes(e.verdict);
 
 export function ledgerPath(home) {
   if (!home) throw new Error('ledgerPath: home is required — never guess the state home');
