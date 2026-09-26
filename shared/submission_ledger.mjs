@@ -23,7 +23,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { lockDir, lockFile } from './state_file_lock.mjs';
-import { SUBMITTED_STATUSES, jobFingerprint, normalizeCompany, normalizeTitle } from './job_identity.mjs';
+import { SUBMITTED_STATUSES, boardSlug, jobFingerprint, normalizeCompany, normalizeTitle } from './job_identity.mjs';
 import { isAttempted } from './apply_guard.mjs'; // 「投过」唯一口径 (circular import, used at call time only)
 
 export const LEDGER_RELPATH = 'log/submissions.jsonl';
@@ -365,10 +365,28 @@ export function recordManual(home, items, { apply = false } = {}) {
     const p = join(home, 'locks', name);
     if (apply && existsSync(p)) throw new Error(`record-manual: ${p} exists — a run is going on; finish it (or abandon it) first`);
   }
+  // The company is the board slug in the link — the same key the scans and the
+  // pre-dispatch gate use (verify 第 6 轮 R6: "Runway" ≠ runway-ml would slip
+  // past the 60-day company count). --company only double-checks it.
   const bad = [];
+  const companyOf = new Map();
   for (const it of items) {
-    if (!it?.url || !jobFingerprint(it.url)) bad.push(`${it?.url} (no job fingerprint — Greenhouse/Ashby/Lever job links only)`);
-    else if (!it.company || !it.title) bad.push(`${it.url} (company and title are both required)`);
+    if (!it?.url || !jobFingerprint(it.url)) {
+      bad.push(`${it?.url} (no job fingerprint — Greenhouse/Ashby/Lever job links only)`);
+      continue;
+    }
+    if (!it.title) {
+      bad.push(`${it.url} (title is required)`);
+      continue;
+    }
+    const slug = boardSlug(it.url);
+    if (slug && it.company && normalizeCompany(it.company) !== normalizeCompany(slug)) {
+      bad.push(`${it.url} (company "${it.company}" is not the job board's "${slug}" in the link — leave --company out, or write ${slug})`);
+    } else if (!slug && !it.company) {
+      bad.push(`${it.url} (the link names no job board — give --company as the company's board slug)`);
+    } else {
+      companyOf.set(it, slug ?? it.company);
+    }
   }
   if (bad.length) throw new Error(`record-manual: nothing written — ${bad.join('; ')}`);
   const entries = readAll(home);
@@ -389,7 +407,7 @@ export function recordManual(home, items, { apply = false } = {}) {
       job_id: nextId,
       ts: manualTs(it.at),
       apply_url: it.url,
-      company_key: normalizeCompany(it.company),
+      company_key: normalizeCompany(companyOf.get(it)),
       title_key: normalizeTitle(it.title),
       ats: fp.ats,
       outcome: MANUAL_OUTCOME,
@@ -423,7 +441,7 @@ if (invokedDirectly) {
   if (!['rebuild', 'backfill-legacy', 'record-manual'].includes(cmd)) {
     console.error('usage: node shared/submission_ledger.mjs rebuild [--apply]');
     console.error('       node shared/submission_ledger.mjs backfill-legacy [--apply]   (default: dry-run plan)');
-    console.error('       node shared/submission_ledger.mjs record-manual --url <link> --company <slug> --title <title> [--at YYYY-MM-DD] [--apply]');
+    console.error('       node shared/submission_ledger.mjs record-manual --url <link> --title <title> [--company <board slug, to double-check>] [--at YYYY-MM-DD] [--apply]');
     console.error('       node shared/submission_ledger.mjs record-manual --file <[{url,company,title,at}] json> [--apply]');
     process.exit(2);
   }
@@ -436,7 +454,13 @@ if (invokedDirectly) {
     const items = file ? JSON.parse(readFileSync(file, 'utf8'))
       : [{ url: cliArg('--url'), company: cliArg('--company'), title: cliArg('--title'), at: cliArg('--at') }];
     if (!Array.isArray(items)) throw new Error('record-manual: --file must hold a JSON array of {url, company, title, at}');
-    const report = recordManual(atsHome(), items, { apply });
+    let report;
+    try {
+      report = recordManual(atsHome(), items, { apply });
+    } catch (e) {
+      console.error(`[submission_ledger] ${e.message}`); // a refusal; nothing was written
+      process.exit(1);
+    }
     console.log(JSON.stringify(report, null, 2));
     if (!apply) console.error(`[submission_ledger] dry-run: would record ${report.to_append.length} hand-made application(s) (${report.already_recorded.length} already in the ledger); re-run with --apply`);
     process.exit(0);

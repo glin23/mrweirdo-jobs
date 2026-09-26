@@ -110,3 +110,25 @@ test('登记后算「投过」：同公司 60 天计数 +1；即找即投不再�
     await rig.close();
   }
 });
+
+// verify 第 6 轮 R6：公司身份从链接里的招聘板 slug 推（与找岗、投前闸同一口径）；
+// --company 只作核对，写成展示名（Runway ≠ runway-ml）响亮拒绝，一行不写。
+test('公司按链接推：不写 --company 取 slug；写了但对不上 → 拒绝；看不出 slug 的链接必须写', () => {
+  const runway = 'https://jobs.ashbyhq.com/runway-ml/00000000-0000-0000-0000-000000000009';
+  const home = newHome();
+  const bad = cli(home, ['--url', runway, '--company', 'Runway', '--title', 'Growth Intern', '--apply']);
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr, /runway-ml/);
+  assert.doesNotMatch(bad.stderr, /\n\s+at /, 'a refusal, not a stack trace');
+  assert.deepEqual(readAll(home), []);
+
+  assert.equal(cli(home, ['--url', runway, '--title', 'Growth Intern', '--apply']).status, 0);
+  assert.equal(readAll(home)[0].company_key, 'runwayml', 'the same key the rotation scan gives runway-ml');
+
+  const custom = 'https://careers.example.com/open?gh_jid=4242';
+  const noSlug = cli(home, ['--url', custom, '--title', 'Ops Intern', '--apply']);
+  assert.notEqual(noSlug.status, 0);
+  assert.match(noSlug.stderr, /--company/);
+  assert.equal(cli(home, ['--url', custom, '--company', 'examplecorp', '--title', 'Ops Intern', '--apply']).status, 0);
+  assert.equal(readAll(home).length, 2);
+});

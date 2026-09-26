@@ -64,6 +64,24 @@ export function jobFingerprint(url) {
   return null;
 }
 
+// The job board slug in a link — the company name every scan uses (ADR-S2:
+// company = board slug), so the ledger's per-company key can be derived from
+// the link itself. A gh_jid link on a company's own site has no slug → null.
+const BOARD_RULES = [
+  /greenhouse\.io\/([^/?#]+)\/jobs\/\d+/i,
+  new RegExp(`ashbyhq\\.com/([^/?#]+)/${UUID_SRC}`, 'i'),
+  new RegExp(`lever\\.co/([^/?#]+)/${UUID_SRC}`, 'i'),
+];
+
+export function boardSlug(url) {
+  if (!url || typeof url !== 'string') return null;
+  for (const re of BOARD_RULES) {
+    const m = url.match(re);
+    if (m) return m[1].toLowerCase();
+  }
+  return null;
+}
+
 // The second key of the dual identity: same company + same title = same job.
 export function companyTitleKey(company, title) {
   return `${normalizeCompany(company)}::${normalizeTitle(title)}`;
