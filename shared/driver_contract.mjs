@@ -71,12 +71,28 @@ export function validateOutcome(obj) {
   return obj;
 }
 
+// A driver's stdout must be written synchronously. On macOS a pipe write is
+// asynchronous, and emitOutcome exits right after printing: anything past the
+// first 64KB of a long outcome line (it carries every answer) was dropped, the
+// recorder found no outcome and filed a crash — "may have submitted", slot
+// used (same consequence as verify 第 7 轮 FLUSH). A blocking stdout makes every
+// write complete before the next statement, so exiting immediately is safe and
+// nothing after emitOutcome runs. Switched on as soon as a driver process loads
+// this module, before its first write, so no async write is ever queued ahead
+// of the outcome line; emitOutcome repeats it for any other caller.
+function blockingStdout() {
+  const handle = process.stdout._handle;
+  if (handle && typeof handle.setBlocking === 'function') handle.setBlocking(true);
+}
+if (/_apply_driver\.mjs$/.test(process.argv[1] ?? '')) blockingStdout();
+
 // The ONLY exit for a driver's final result: one structured JSON line on
 // stdout, then the mapped exit code. Drivers must not use bare process.exit
 // for outcomes (usage errors excepted). `io` is a test seam; production
 // callers pass nothing.
 export function emitOutcome(obj, io = {}) {
   const valid = validateOutcome(obj);
+  if (!io.log) blockingStdout();
   (io.log || console.log)(JSON.stringify(valid));
   return (io.exit || process.exit)(EXIT_CODES[valid.outcome]);
 }
