@@ -66,6 +66,18 @@ since shipped and now lives in `docs/archive/`; the current one is
   "Manager" is not senior) whose JD does not require 3+ years; before, only
   titles saying "New Grad". Intern-only users still never get full-time roles.
   Drop reasons now say `senior_title` / `requires_3plus_years:N`.
+- **No job requiring 3+ years reaches auto-apply** (2026-09-26, verify 第 13
+  轮 P1). Years like "3-5+", "5–10+", "2 or 3", and "N+ years …, ideally …" are
+  read correctly; a nice-to-have section does not count. A job the scorer or
+  the JD-aware recheck calls `other` is stored as `other`, and no later
+  title-only recheck turns it eligible again. Engineering / Design / Research
+  Managers count as senior.
+- **Excluded directions are dropped before scoring** (2026-09-26). Title
+  keywords match across hyphens ("full stack" = "Full-Stack" = "Fullstack");
+  when `target_function_anchor.excluded_functions` names software engineering or
+  ML research (and the user's own targets do not), engineer / developer /
+  researcher titles are dropped at the hard filter. A title naming a foreign
+  city ("… - London") is dropped whatever the location fields say.
 - **Location filter: US and US-remote only** (2026-09-26). Foreign places are
   always dropped, unknown places are no longer passed by default
   (`location_unrecognized:<text>`), and Ashby extra locations / structured
