@@ -10,9 +10,10 @@ Reads:
   - .claude/arnold/roles/builder.md
   - （第 2 次召唤）docs/active/2026-09-25_restart-apply_DESIGN.md 第 2 轮全文、docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮 V1-V13、VERIFY_REPORT §5
   - （第 3 次召唤）DESIGN 第 2 轮 §3/§4/§7/§10、VERIFY_REPORT 第 2-3 轮挂账（规则 6、P3 slug/锁、P4 跨午夜）
-Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply
+  - （第 4 次召唤 S5）DESIGN §10 S5 行 / §3 / §4 / §7、定稿 docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮、VERIFY_REPORT 第 5 轮（RACE / PID 复用）
+Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
 Updated: 2026-09-25
-Iterations: 4
+Iterations: 5
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -354,3 +355,135 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 4. **考虑过让 apply_batch 在流式模式下把闸拦下的行在工作库里标成跳过**，免得下一批又被拦一次。没有做：被拦的行在后续批次里只是被再拦一次，不花钱也不出错，多写一处库状态反而多一个要维护的地方。
 
 > **回炉第 1 轮（S3+S4，verify 第 4 轮 3/5）**：5 个提交 `5af0d81` `e80046e` `033f48f` `8865f00` + 口径测试提交，重投逻辑没动。① 并发（BUG-1）：新增 `locks/stream_run.lock`，从 start 持有到 finish；有没收尾的运行就响亮拒绝开跑，放弃要显式 `--abandon <run_id>`；派单锁的持有进程还活着时一律拒绝（`--abandon` 也不行），不再删对方目录、不再把对方在投的一单补记成可能已提交。先写了 L / X / 放弃三条红测试。② 名单（BUG-2）：`runway` 板是财务规划软件公司 Runway；按官网 runwayml.com/careers 链接改成 `runway-ml`（Ashby 200，44 岗，JD 自述 world models），错的板记进 `_meta.not_found_slugs_tried`。其余 20 家逐家抽岗位标题 + JD 开头的公司自述核对：全部是对的公司（Luma / Synthesia / ElevenLabs / Higgsfield AI / Mirage / Pika / Suno / Hedra / Tavus / Genmo / Creatify / OpusClip / Krea / Ideogram / Viggle / Black Forest Labs / HeyGen / Descript / Stability AI / Lightricks-LTX）。③ 名单板 404（BUG-3）：板接口加 `notFound: 'throw'`，只有名单来源用，404 进 errors、报告第 2 行列公司名；轮转照旧当空板。④ 开跑补记的「可能已提交」（BUG-4）写进第 2 行：「上次中断的运行有 1 家可能已提交：…，永不自动重投，请你核对邮箱或页面」。**lead 裁决（verify Y1）按 B**：不加任何「合格未投」记录（那等于把拍板人否掉的岗位队列重新引进来），合格但没轮到投的岗下次重新打分可以接受；验收口径改为「零重复投递 + 已判不合适的零重复打分」，新增一条 e2e 固定这个口径（第 2 次运行只重打那 5 个合格未投的岗，驱动 6 次、没有重复网址）。这条是刻画测试，写完直接绿，如实说明。测试 448→453，CI 四步 exit 0，真实家目录零写入，未推。
+
+# 第 4 次召唤：即找即投 S5 编排改写 + 退役 + D10 + 运行锁 P3 ×2（2026-09-25）
+
+> 按 DESIGN §10 第 3 次召唤（S5）施工，外加 lead 派遣的 D10 第一版、verify 第 5 轮 P3 ×2、拍板人手投登记。11 个提交 `7a7af88`..`f3e260e`，未 push。真实 `~/.mrweirdo-jobs/` 零写入：`jobs.db` 前后 mtime/size 都是 1782006129 / 1728512，`log/` 下仍无 `submissions.jsonl` / `seen.jsonl`，`locks/` 空，没有 `archive/`，`search_intent.json` mtime 1780932205 未变，`run-tmp` 下无 `stream-*` [实测]。没有真投，没有 push。
+
+## 实现摘要（S5）
+
+| 派遣项 | 提交 | 改了什么 |
+|---|---|---|
+| verify 第 5 轮 P3 RACE | `7a7af88` | `start` 先建自己的运行目录、再以 O_EXCL 建锁（`claimHome` 抛错由 `start` 删目录后响亮退出）。于是「锁在但目录不在」只可能是已收工或已死的运行，另一个 start 不会再把正在建目录的锁当残留清掉；两个 start 同时抢锁，输的一方给出人话拒绝，不吐堆栈。`cleanOldRuns` 跳过自己的目录；拿锁后任何一步失败都放锁、删目录 |
+| verify 第 5 轮 P3 PID 复用 | `7a7af88` | 新 `shared/lock_holder.mjs`（30 行）：派单锁的 pid 活着且命令行是 `apply_batch.mjs` 才算活；活着但命令行不是 → 当陈旧锁、响亮说明后接管；读不到命令行 → 保守当活。拒绝提示里写明 `kill <pid>` 和「ps 看不到 apply_batch 就删哪个锁文件」。`stream_run` 和 `apply_batch` 共用。顺带：运行锁 JSON 坏了说删哪个文件（verify 第 5 轮 P4） |
+| D10 第一版 | `0959763` `0af61f9` | `submit-scores` 入库后，本批里来自名单扫描的合格行在工作库里标 `auto_apply_eligible=0, skip_reason='held_for_review'`、写看过记录 `held_for_review`（7 天内不重打不重报），不进派单；第 1 行列「公司·岗位·链接」，第 3 行写明「其中 K 个是名单公司、等你过目」。放行：`start --release <链接>`（可重复）→ 只扫名单、重新打分、合格照常派单；放行的岗没找到 / 被闸拦下，第 2 行写明 |
+| 第 6 步交接 | `02ce51e` | `submit-scores` 输出 `gap_report`（本批缺信息报告的路径；运行目录收工即删，技能在 finish 前读） |
+| 拍板人手投登记 | `11932cb` | `node shared/submission_ledger.mjs record-manual --url --company --title [--at YYYY-MM-DD] [--apply]` 或 `--file <json 数组>`；默认试跑 |
+| preflight 只核本次运行 | `d2d3ccf` | `rebuild(…, { onlyRowsInDb })`，preflight 用它：只核库里有的账本行（工作库 = 本次运行） |
+| 看板改数账本 | `961a977` | 「今日已尝试 N/档位」（`attemptIndex().todayCount`）+「已投 N」（新导出 `isSubmitted`：submitted + legacy_unverified）；档位读 `MRWEIRDO_DAILY_TIER`，删 `DAILY_CAP=50`；最近 10 条读账本；删「下一批」队列段 |
+| 名单写进 search_intent | `60bcbee` | 新 `shared/install_watchlist.mjs`：默认试跑列出要加的公司；`--apply` 合并写入（用户已有的在前、同 ats+slug 不重复），原子改名、600 |
+| jobs.db 退役搬归档 | `42e4728` | 新 `shared/retire_jobs_db.mjs`：先核数（抽出 `legacyCountCheck`，backfill 同用），过了才把 `jobs.db`（连 -wal/-shm）改名搬到 `archive/jobs-legacy-<本地日期>.db`，600 / 目录 700；历史没迁、归档已存在、派单锁或在途标记在 → 拒绝 |
+| 编排文档 | `e7c2a3d` | onboard 第 3 步保留身份行 + cover letter 告知、名单只在用户说「要」后 `--apply`；第 4-7 步改为 `start → (next → 打分 → submit-scores)… → finish`，无清单、无 prune、无 retry_gap_rows、无 apply_report；`references/run-and-database.md` 改写；jobskill 同步；两份 `-auto` 说明书改认 stream_run、删 daily_count |
+| 变更日志 | `f3e260e` | CHANGELOG Changed ×4、Added ×3、Fixed ×1 |
+
+行数：`stream_run.mjs` 523 → 613，`submission_ledger.mjs` 360 → 461，`apply_batch.mjs` 582 → 588，`dashboard.mjs` 271 → 206，onboard `SKILL.md` 496 → 416；新模块 3 个（lock_holder 30、install_watchlist 61、retire_jobs_db 78）。两个超档驱动没碰。
+
+**沙箱真实数据走查**（真实家目录拷贝到 scratchpad，CDP 指向关闭的端口 9，跑完留在 scratchpad，未触真实家目录）[实测]：
+1. 未迁历史 → `start` 拒绝并指向 backfill-legacy；
+2. `backfill-legacy` 试跑 182 + 33 → `--apply` 核数 `{ok:true, 182, 182, fingerprints_match:true}`，账本 215 行；
+3. `retire_jobs_db` 试跑 → `--apply`：`jobs.db` 搬到 `archive/jobs-legacy-2026-09-25.db`，核数同上；
+4. `install_watchlist` 试跑「would add 21」→ `--apply` 共 21 家；
+5. `start --target 2 --no-submit --max-windows 0` → `next`：21 块板 602 岗，过滤后 6 个，1 个被历史拦下（already_attempted_fp），5 个进第 1 批 → 全判不合适 → `finish`：「试跑不提交：看了 5 个新岗，合适的 0 个」，运行目录删净、锁已放；
+6. 清掉沙箱看过记录，真模式 `start --target 2 --max-windows 0`，把 2 个实习判合格：两个都是名单公司 → 全部 held，**派单进程 0 次**（stderr 无 apply-batch），第 1 行列出 opusclip / pika 两条链接。第 3 行原来写「合适的只有 2 个，没凑到 2 个」，读起来像漏投 → 修成带「其中 2 个是名单公司、等你过目」（`0af61f9`）。
+
+## TDD 落地证据（S5）
+
+- `stream_run_lock.test.mjs`（3 条，新）。**红**：RACE 第 0 轮输家吐 `EEXIST` 堆栈；把旧版 `stream_run.mjs` 换回来、去掉堆栈断言单跑，第 2 轮「两个都开跑」（`got 2`）；PID 复用被拒；活派单进程的拒绝里没有 `kill`。**绿** 3/3。
+- `apply_batch_stream.test.mjs` +1 条、改 1 条（活锁改用真实命令行为 `apply_batch.mjs` 的替身进程）。**红**：PID 复用拒绝开跑、拒绝提示无 kill。第一次实现后 PID 用例仍红：测试进程自己的命令行里有 `apply_batch_stream.test.mjs`，子串 `apply_batch` 命中 → 改为匹配 `apply_batch.mjs`。**绿**。
+- `stream_run_e2e.test.mjs`：并发 X 改用替身活派单进程（原来用测试进程 pid，新判法下它是「复用」）；「名单优先」断言改为名单岗被 held、驱动 0 次（D10 改变的行为，如实改）；新增 D10 用例（held → 下次不重打不重报 → --release 投出 → 放行链接不存在报「没找到」）**红**：驱动照投名单岗；新增第 3 行 held 说明断言**红**；规则 6 用例加 `gap_report` 断言**红**。**绿** 18/18。
+- `ledger_manual.test.mjs`（6 条，新）。**红**：CLI 不认 record-manual（6/6）。**绿** 6/6。
+- `preflight_ledger_scope.test.mjs`（2 条，新，走真 preflight CLI）。**红**：历史行和以前运行的行报 `ledger_row_without_db_row`。**绿** 2/2。
+- `dashboard_ledger.test.mjs`（2 条，新）。**红** 2/2。**绿** 2/2。`submitted_predicate.test.mjs` 的看板用例移交此文件，源级守卫名单去掉 dashboard（它不再读库）。
+- `install_watchlist.test.mjs`（3 条，新）。实现和测试同一步写成，**红是事后把模块挪走跑出来的**（0/3），如实写明。**绿** 3/3。
+- `retire_jobs_db.test.mjs`（4 条，新）。**红** 4/4（模块不存在）。**绿** 4/4。
+- `onboard_presentation.test.mjs` / `phase3_skill_policy.test.mjs`：文档契约随拍板 D8（说跑即开始）改口径——「回复"开始"执行」queue gate 断言换成「跑 N 个」、四条 stream_run 命令、无 prune / retry_gap_rows / apply_report、`--release`、`record-manual`、身份行保留、名单只在用户说要之后 `--apply`；另加 jobskill 与两份 -auto 说明书的断言。**红** 6 条。**绿**。
+- 全量：`npm test` **453 → 477**，0 fail。项目没有覆盖率工具，没有覆盖率数字。
+
+## 自审记录（S5）
+
+- 「投过」仍只有 `isAttempted` 一份；「已投」新增 `isSubmitted` 一份（DESIGN §8 口径），看板两者都只调共享定义。手投登记查重也用 `isAttempted`（`submission_ledger` ↔ `apply_guard` 循环 import，只在调用时用，ESM 下安全，已跑通）。
+- held 只改本次运行的工作库和看过记录，不写账本：held 不算投过，不占日额度、不占 60 天名额。
+- 新 catch 1 处（apply_batch 拒绝提示里解析锁 JSON 失败 → 用原来的通用提示），有注释，不压异常。
+- 真实家目录的所有写入口（backfill / retire / install_watchlist / record-manual）默认试跑，`--apply` 才写，本轮一次都没对真实家目录执行。
+
+## 偏离 DESIGN（S5，均申报）
+
+1. **D10 放行机制 `--release <链接>` 是我定的**（DESIGN 未明点 6 只写「你回 1 以后，照常走驱动」）。放行运行默认只扫名单（`--max-windows` 缺省 0），被放行的岗排第一批最前、重新打分；拍板人只管说「投 + 链接」，由 agent 翻成命令。
+2. **held 的合格岗算进第 3 行的「合适」数，并注明其中几个等过目**；第 1 行在「投出」之后接「名单公司 K 个合格、等你过目：公司·岗位·链接」。DESIGN 没规定位置。
+3. **`--no-submit` 不 held**（试跑不派单，held 没有意义，也不写看过记录）。
+4. **手投登记不在 DESIGN 里，按最小实现**：放在 `submission_ledger` 的 CLI（和 backfill-legacy 同处，改了文件头「唯一写账人」的说明：驱动尝试仍只由 record_apply_outcome 写，历史迁入与手投由账本模块自己的 CLI 写）；verdict 用设计允许的 `submitted`，来源靠 `outcome: manual_submitted` + `reason: reported_by_user` 标出，**没加新字段**；行号接账本最大号（≥100001）；有运行在进行时拒写（防和工作库行号撞）。**代价**：`--at` 缺省是现在，手投登记会算进「今日已尝试」（同一个口径，不开例外）——登记当天的历史手投请带 `--at` 写实际日期。
+5. **preflight 一致性检查的做法**：DESIGN 写「只核本次运行的工作库行」，我实现为「只核库里有的账本行」（`onlyRowsInDb`）。工作库行号全局唯一，等价于本次运行；旧流程跑 jobs.db 时也不再被 v2 行误伤。
+6. **看板删掉「下一批」队列段**，最近 10 条改读账本（公司、标题用账本里的归一写法，小写）。
+7. **第 6 步不再调 retry_gap_rows**：卡缺信息的岗在档案变了之后由规则 6 自动回到候选，技能里只记答案。为此 `submit-scores` 多输出一个 `gap_report` 路径。
+8. **第 7 步删掉「48h 后 /mrweirdo-confirm、/mrweirdo-tracker」**：两者读 jobs.db，退役后看不到新运行（DESIGN 未明点 10），不再推荐。
+9. **两份 -auto 说明书还顺带注明 stream 模式跳过 job_report 钩子**（S3 偏离 5 的行为，文档补齐）。
+10. **install_watchlist 是新 CLI**（DESIGN 只说引导步骤写进 target_companies，没定机制）；写入 search_intent 会改变打分依据版本，之后第一次运行会把以前的「不合适」重看一遍（S3 已知行为），文件头注明。
+11. **retire 脚本固定搬 `<家目录>/jobs.db`**，不跟 `MRWEIRDO_DB_PATH`：退役的是缺省历史库，不是某次运行的工作库。
+12. 文档契约测试（onboard_presentation / phase3_skill_policy）随拍板 D8 改口径，旧的 queue gate 断言删除。
+
+## 发现的旧 bug / 新观察（S5，没修，列出待决）
+
+1. **真实家目录的 search_intent 还是 6 月方向、简历还是 5 月版**（S3 观察 1 仍在）：沙箱里 ElevenLabs 三个自由职业岗过了硬过滤。首批试投前需要拍板人按新第 1-3 步重新引导（新简历 `/Users/lee/Desktop/Lee_Lin_Resume.pdf`）。
+2. `.claude/settings.json` 没有放行 `stream_run.mjs`，所以每一步都会弹权限框——真投的第二道闸仍在，但 `next` / `finish` 也会弹，体验上啰嗦。要不要放行只读的几步，交 lead 决定（我没改设置）。
+3. `record_profile_answers --asked-by` 的枚举里还有 `queue_gate`，现在已经没有这个时刻；无害，未改。
+4. verify 第 5 轮 P4 的 GAP（放弃一个其实还活着的窗口）与「store 读不到 --to-score 静默 0 条」仍未修。
+5. 放行链接的写法：看过记录里存的是招聘板给的链接（Ashby 带 `/application` 后缀）；`--release` 按指纹比对，带不带后缀都认 [实测 `jobFingerprint` 两种写法得同一个 `ashby:<uuid>`；e2e 只用了 GH 链接]。
+
+## 遗留事项（S5）
+
+- **放量前置**：lead 在拍板人点头后按下面「真跑前清单」执行；清单里所有 `--apply` 都是对真实家目录，本轮一次没跑。
+- 驱动真表单行为仍未验证（全是替身），首批试投 2 条时拍板人在场。
+- `PRE_SUBMIT_RETRIES_60D` 仍是单一常量 1，没动。
+- 新观察 1-4 交 lead 决定放待解还是一起做。
+
+### 真跑前清单（lead 在拍板人点头后按顺序执行）
+
+每条前面都先：`export MRWEIRDO_HOME="$HOME/.mrweirdo-jobs"; unset MRWEIRDO_DB_PATH MRWEIRDO_ONBOARD_TMP_DIR; cd /Users/lee/Projects/mrweirdo-jobs`
+
+0. （前置，拍板人在场）按新第 1-3 步重新引导：`bash scripts/intake_resume.sh "/Users/lee/Desktop/Lee_Lin_Resume.pdf"`，重生成 `search_intent.json`，再 `node shared/validate_user_profile.mjs`。
+1. 历史迁入试跑：`node shared/submission_ledger.mjs backfill-legacy` —— 预期 stderr「would append 182 legacy_submitted + 33 legacy_attempt」。
+2. 迁入：`node shared/submission_ledger.mjs backfill-legacy --apply` —— 预期 `verify: {ok:true, submitted_in_db:182, legacy_unverified_in_ledger:182, fingerprints_match:true}`，`appended: 215`。
+3. 核数：`wc -l ~/.mrweirdo-jobs/log/submissions.jsonl`（= 215）；`node shared/retire_jobs_db.mjs`（试跑，`count_check.ok: true`、182/182，列出 `to: …/archive/jobs-legacy-<日期>.db`）。
+4. 归档：`node shared/retire_jobs_db.mjs --apply` —— 之后 `ls ~/.mrweirdo-jobs/jobs.db` 应不存在，`ls -l ~/.mrweirdo-jobs/archive/` 有 `jobs-legacy-<日期>.db`（600，大小 1728512）。
+5. 拍板人手投过的岗登记（lead 整理成 `[{url,company,title,at}]` 的 JSON，company 用招聘板 slug）：`node shared/submission_ledger.mjs record-manual --file <list.json>`（试跑核对）→ 同命令加 `--apply`。
+6. 名单：`node shared/install_watchlist.mjs`（试跑，would add 21）→ 拍板人说要 → `node shared/install_watchlist.mjs --apply`。
+7. Chrome：`bash shared/chrome-cdp-launcher.sh`；体检 `node shared/supervisor_preflight.mjs`（`cdp` 与 `work_authorization_answered` 须 OK）。
+8. 不提交试跑：`node shared/stream_run.mjs start --target 2 --no-submit` → 循环 `next --run <id>` / 打分 / `submit-scores --run <id> --batch <k> --scored <file>` → `finish --run <id>`，核对 3 行。
+9. 试投 2 条（拍板人在场；名单公司合格的会被 held，所以实际只投非名单公司，符合 D5 首批只投圈 3）：`node shared/stream_run.mjs start --target 2` → 同上循环 → `finish`。
+10. 立刻真环境复验：`node shared/stream_run.mjs start --target 2 --no-submit` → 循环 → `finish`，核对第 2 次打分列表与第 1 次无交集、那 2 家不在候选里；`npm run status` 看「今日已尝试 2/10」。
+
+## 性能硬指标自查（S5）
+
+- 不涉及 HTTP 端点，p95 不适用。
+- 沙箱名单扫描 21 块板 602 岗（本轮没计时；S4 实测 19 秒）；每个 start 多一次 `ps`（毫秒级，只在派单锁存在时）。
+- preflight 在流式模式下每批跑一次（约 6 秒，含 role_guard_smoke 和语法检查），沿用既有行为。
+- 覆盖率：项目没有覆盖率工具，没有数字。
+
+## API 接口 8 契约自查（S5）
+
+本轮不新增、不修改任何 HTTP 端点，不适用。网络访问只在沙箱走查里对 Ashby / Greenhouse 公开板接口做了只读 GET（复用现有模块）。
+
+## 本项目铁律对照（S5）
+
+- 测试串行：`npm test`（`--test-concurrency=1`）✓；新测试全部用临时家目录。
+- CI 每一步本地跑 [实测，`f3e260e` 之上]：① `npm test` exit 0，477/477 ② `node scripts/role_guard_smoke.mjs` exit 0 ③ `node scripts/public_alpha_gate.mjs` exit 0 ④ shared + scripts 全部 `node --check` exit 0 ✓
+- 主流程冒烟：e2e 走真 stream_run → 真 store → 真 supervisor → 真 apply_batch → 真队列 / 记账人 / 账本 → 3 行报告（含 D10、放行、手投登记后不再投）；另在真实数据沙箱上跑通「迁入 → 归档 → 装名单 → 名单真接口扫描 → 去重闸 → 打分 → held → 收工」。不能真投。
+
+## 交付自查清单（S5）
+
+- [x] TDD：每步先红后绿；install_watchlist 一步是事后挪走模块跑红，已如实写明
+- [x] 全绿 477/477；CI 四步本地全过
+- [ ] 覆盖率 ≥80%：项目没有覆盖率工具，没有测
+- [x] 并发红测试先行：10 轮同时开跑，旧代码第 2 轮双开，新代码 10/10 只开一个
+- [x] 没有压异常的空 catch；生产代码里没有 mock
+- [x] 偏离 12 条全部标注；新观察只列不修
+- [x] 两个超档驱动未碰；SKILL.md 用精准替换，未整篇覆盖
+- [x] 真实 `~/.mrweirdo-jobs/` 零写入；没有真投递；没有对真实家目录跑 backfill / 归档 / 名单 / 手投的 --apply；没有 push
+- [x] CHANGELOG 顶部加了 Changed ×4、Added ×3、Fixed ×1
+
+## 试过的错误方向（S5）
+
+1. **RACE 第一版打算只加「锁里 start 进程的 pid 已死才算残留」**（verify 给的修法之一）。放弃：start 进程本来就很快退出，之后 pid 死了但运行还活着，这个判断在 start 之外完全没用，还会引入 pid 复用的同类问题；「先建目录再用 O_EXCL 建锁」让「锁在目录不在」本身就只剩一种含义，更简单。
+2. **PID 复用判法第一版用子串 `apply_batch`**：测试进程自己的命令行里有 `apply_batch_stream.test.mjs`，被当成活派单进程；真实场景里任何路径带这个词的进程都会误判。改为匹配 `apply_batch.mjs`。
+3. **D10 第一版想在 apply_batch 里按「是否名单公司」拦**：apply_batch 手里只有工作库行，不知道这一行是不是名单扫描来的（工作库没有这一列，加列要改表结构）。改为 stream_run 在入库后、派单前把这些行的资格关掉，信息在批次文件里现成就有。
+4. **沙箱走查第一次在 zsh 里用 `time N=$(…)` 包 next**：输出被吞，看起来像 next 什么都没做；单独重跑才看到正常出批。只是走查脚本的问题，不是代码问题。
