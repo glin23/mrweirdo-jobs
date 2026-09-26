@@ -138,6 +138,9 @@ test('规则 6：缺信息被页面拒收 → 下次运行不打分不派；补�
     const first = await rig.run(5);
     assert.equal(rig.driverCalls().length, 1);
     assert.match(first.finish.lines[1], /1 个卡在缺信息/);
+    // Step 6 hand-off: the batch that applied names its gap report (in the run
+    // directory, gone after finish — the skill reads it before finishing).
+    assert.match(first.batches[0].gap_report, /stream-.*\/apply-gap-report\.json$/);
     assert.equal(readSeen(rig.home).find((r) => r.fp === 'greenhouse:1').code, 'needs_info');
 
     const second = await rig.run(5);

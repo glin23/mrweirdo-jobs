@@ -47,6 +47,15 @@ for (const url of expired) db.prepare("UPDATE jobs SET liveness_status = 'expire
 console.log(JSON.stringify({ ok: true, expired: expired.length }));
 `;
 
+// Gap report stand-in: writes where the real one writes (the run directory, via
+// MRWEIRDO_ONBOARD_TMP_DIR), so the skill's Step 6 hand-off can be checked.
+const GAP_REPORT_STUB = `
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+writeFileSync(join(process.env.MRWEIRDO_ONBOARD_TMP_DIR, 'apply-gap-report.json'), JSON.stringify({ condensed_missing_questions: [] }));
+console.log(JSON.stringify({ ok: true }));
+`;
+
 const REAL_FOR_STREAM = new Set(['auto_apply_queue.mjs', 'validate_auto_row.mjs']);
 
 export const INTENT = {
@@ -82,6 +91,7 @@ export async function makeStreamRig(prefix) {
     const target = join(repo, 'shared', name);
     if (name === 'discover_candidates.mjs') writeFileSync(target, DISCOVER_STUB);
     else if (name === 'liveness_gate.mjs') writeFileSync(target, LIVENESS_STUB);
+    else if (name === 'apply_gap_report.mjs') writeFileSync(target, GAP_REPORT_STUB);
     else if (STUBS[name] != null && !REAL_FOR_STREAM.has(name)) writeFileSync(target, STUBS[name]);
     else if (/_apply_driver\.mjs$/.test(name)) writeFileSync(target, DRIVER_STUB);
     else symlinkSync(join(REAL_SHARED, name), target);

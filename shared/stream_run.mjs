@@ -8,9 +8,10 @@
 // machine the agent drives; everything else is here:
 //
 //   start --target N [--no-submit] [--confirm-tier-over-30] [--max-windows K]
+//         [--release <apply_url>]… [--abandon <run_id>]
 //   next --run ID                    → {action:'score', batch_file, scored_file} | {action:'done', reason}
-//   submit-scores --run ID --batch k --scored FILE
-//   finish --run ID                  → { lines: [3], … }
+//   submit-scores --run ID --batch k --scored FILE → {…, gap_report}
+//   finish --run ID                  → { lines: [3], held, … }
 //
 // Each command prints ONE JSON object on stdout; child output goes to stderr.
 // What persists across runs is only the ledger, the seen log and the rotation
@@ -501,6 +502,9 @@ function submitScores() {
     eligible: stored.eligible,
     attempted_this_run: st.attempted_this_run,
     stopped_by: applied?.stopped_by ?? null,
+    // Step 6 hand-off: the missing-info questions of this batch. It lives in
+    // the run directory, which finish deletes — read it before finishing.
+    gap_report: applied && existsSync(join(st.run_dir, 'apply-gap-report.json')) ? join(st.run_dir, 'apply-gap-report.json') : null,
   }));
 }
 
