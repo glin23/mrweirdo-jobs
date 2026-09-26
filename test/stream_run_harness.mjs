@@ -64,6 +64,14 @@ export function job(company, n, { fit = false, title = `Growth Intern ${n}`, des
   return { company, title, apply_url: ghUrl(company.toLowerCase(), n), location: 'Remote', description, fit };
 }
 
+// A process whose command line names apply_batch — what a live batch looks like
+// to `ps` — idling until the test kills it.
+export function fakeLiveBatch(dir) {
+  const script = join(dir, 'apply_batch.mjs');
+  writeFileSync(script, 'setInterval(() => {}, 1000);\n');
+  return spawn(process.execPath, [script], { stdio: 'ignore' });
+}
+
 export async function makeStreamRig(prefix) {
   const base = mkdtempSync(join(tmpdir(), prefix));
   const home = join(base, 'home');

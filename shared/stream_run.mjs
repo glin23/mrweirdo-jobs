@@ -31,6 +31,7 @@ import { compact, fillBasisVersion, jdHash, lookupSeen, readSeen, recordSeen, sc
 import { recoverInflight } from './inflight_recovery.mjs';
 import { companyTitleKey, jobFingerprint } from './job_identity.mjs';
 import { lockDir, lockFile } from './state_file_lock.mjs';
+import { batchLockHolder, liveBatchHint } from './lock_holder.mjs';
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
 const home = atsHome();
@@ -110,49 +111,61 @@ function refuseWithoutHistory() {
 const streamLockPath = () => join(home, 'locks', 'stream_run.lock');
 const batchLockPath = () => join(home, 'locks', 'apply_batch.lock');
 
-function pidAlive(pid) {
+function readLock(path) {
   try {
-    process.kill(pid, 0);
-    return true;
+    return readJson(path);
   } catch (e) {
-    return e.code === 'EPERM'; // exists under another user
+    throw new Error(`${path} is not readable JSON (${e.message}) — if no run is going on, delete it and start again`);
   }
 }
 
+// The caller has ALREADY created its own run directory: a lock is only ever
+// written by a run whose directory exists, so "lock whose directory is gone"
+// can only mean a finished or dead run — never another start caught between
+// writing its lock and creating its directory (VERIFY 第 5 轮 RACE). The lock
+// itself is created with O_EXCL, so of two simultaneous starts exactly one wins.
+// Throws the refusal; the caller removes its directory and says it.
 function claimHome(runId) {
   if (existsSync(batchLockPath())) {
-    const { pid } = readJson(batchLockPath());
-    if (Number.isInteger(pid) && pidAlive(pid)) {
-      die(`an apply batch is running (pid ${pid}) — refusing to start while a driver may be mid-form; wait for it to finish`);
+    const { pid } = readLock(batchLockPath());
+    const holder = batchLockHolder(pid);
+    if (holder === 'alive') {
+      throw new Error(`an apply batch is running (pid ${pid}) — refusing to start while a driver may be mid-form; wait for it to finish; ${liveBatchHint(pid, batchLockPath())}`);
     }
+    if (holder === 'reused') log(`⚠️ ${batchLockPath()} names pid ${pid} which is alive but not an apply batch (the number was reused) — treating the lock as stale`);
   }
   const abandon = argValue('--abandon');
   if (existsSync(streamLockPath())) {
-    const held = readJson(streamLockPath());
+    const held = readLock(streamLockPath());
     if (!existsSync(runDirOf(held.run_id))) {
       log(`⚠️ stale stream lock for ${held.run_id} (its run directory is gone) — clearing it`);
     } else if (abandon === held.run_id) {
       log(`⚠️ abandoning ${held.run_id} (started ${held.started_at}) as asked — its unscored batch and work DB are dropped`);
     } else {
-      die(`stream run ${held.run_id} is still active (started ${held.started_at}) — finish it with \`finish --run ${held.run_id}\`; if that window is gone for good, start again with \`--abandon ${held.run_id}\``);
+      throw new Error(`stream run ${held.run_id} is still active (started ${held.started_at}) — finish it with \`finish --run ${held.run_id}\`; if that window is gone for good, start again with \`--abandon ${held.run_id}\``);
     }
-    rmSync(streamLockPath());
+    rmSync(streamLockPath(), { force: true });
   } else if (abandon) {
-    die(`--abandon ${abandon}: no active stream run to abandon`);
+    throw new Error(`--abandon ${abandon}: no active stream run to abandon`);
   }
   mkdirSync(dirname(streamLockPath()), { recursive: true, mode: 0o700 });
-  writeFileSync(streamLockPath(), `${JSON.stringify({ run_id: runId, started_at: new Date().toISOString(), pid: process.pid })}\n`, { mode: 0o600, flag: 'wx' });
+  try {
+    writeFileSync(streamLockPath(), `${JSON.stringify({ run_id: runId, started_at: new Date().toISOString(), pid: process.pid })}\n`, { mode: 0o600, flag: 'wx' });
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    throw new Error('another stream run is starting at this same moment and got the lock first — finish or abandon that one before starting again');
+  }
 }
 
 function releaseHome(runId) {
   if (existsSync(streamLockPath()) && readJson(streamLockPath()).run_id === runId) rmSync(streamLockPath());
 }
 
-function cleanOldRuns() {
+function cleanOldRuns(keepRunId) {
   const dir = onboardTmpDir();
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
-    if (name.startsWith(RUN_PREFIX)) rmSync(join(dir, name), { recursive: true, force: true });
+    if (name.startsWith(RUN_PREFIX) && name !== keepRunId) rmSync(join(dir, name), { recursive: true, force: true });
   }
 }
 
@@ -164,47 +177,78 @@ async function fullRotationWindows(windowSize) {
   return Math.ceil(longest / windowSize);
 }
 
+// D10 放行（lead 裁决）: `--release <apply_url>`, repeatable — a list job held
+// for review that the user said to apply to. It is found again by the list
+// scan, scored again, and dispatched like any other job instead of held.
+function releaseUrls() {
+  const urls = process.argv.flatMap((a, i) => (a === '--release' ? [process.argv[i + 1]] : []));
+  for (const u of urls) {
+    if (!u || !jobFingerprint(u)) die(`--release ${u}: not a Greenhouse/Ashby/Lever job link`);
+  }
+  return urls;
+}
+
 async function start() {
   const target = Number(argValue('--target'));
   if (!Number.isInteger(target) || target <= 0) die('--target N (a positive integer: how many to apply to) is required');
   refuseWithoutHistory();
-  const now = new Date();
-  const runId = `${RUN_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
-  claimHome(runId);
-  // An unrecorded attempt from a dead run is recorded before anything else,
-  // and only then may old run directories (its work DB) be removed (ADR-S8).
-  let recovered = null;
-  try {
-    const m = recoverInflight({ home, repoRoot, env: process.env, tmpDir: onboardTmpDir(), log });
-    // The user reads 3 lines, not stderr: a maybe-submitted attempt recovered
-    // here must reach the report (VERIFY 第 4 轮 BUG-4 / DESIGN 失败路 1).
-    const e = m && effectiveEntries(readAll(home)).filter((l) => l.job_id === m.row_id && l.apply_url === m.apply_url).at(-1);
-    if (e && isAttempted(e)) recovered = { apply_url: e.apply_url, name: `${e.company_key}·${e.title_key}`, screenshot: e.evidence?.path || null };
-  } catch (e) {
-    die(e.message);
-  }
-  cleanOldRuns();
-  const seenCompact = compact(home, now);
   let tier;
   try {
     tier = dailyTier(process.env, hasArg('--confirm-tier-over-30'));
   } catch (e) {
     die(e.message);
   }
-  const entries = readAll(home);
-  const budget = budgetLine(attemptIndex(entries, now), target, tier, now);
+  const windowSize = Number(process.env.MRWEIRDO_SOURCE_WINDOW_SIZE ?? 1000);
+  if (!Number.isInteger(windowSize) || windowSize < 0) die(`MRWEIRDO_SOURCE_WINDOW_SIZE=${process.env.MRWEIRDO_SOURCE_WINDOW_SIZE} is not a window size`);
+  const release = releaseUrls();
 
+  const now = new Date();
+  const runId = `${RUN_PREFIX}${now.toISOString().replace(/[:.]/g, '-')}-${process.pid}`;
+  // Directory first, lock second (see claimHome).
   const runDir = runDirOf(runId);
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
   lockDir(runDir);
-  const workDb = join(runDir, 'work.db');
-  initRunDb({ path: workDb, seqFloor: Math.max(maxJobId(entries), SEQ_FLOOR_MIN) });
+  try {
+    claimHome(runId);
+  } catch (e) {
+    rmSync(runDir, { recursive: true, force: true });
+    die(e.message);
+  }
+  let st;
+  let seenCompact;
+  try {
+    // An unrecorded attempt from a dead run is recorded before anything else,
+    // and only then may old run directories (its work DB) be removed (ADR-S8).
+    let recovered = null;
+    const m = recoverInflight({ home, repoRoot, env: process.env, tmpDir: onboardTmpDir(), log });
+    // The user reads 3 lines, not stderr: a maybe-submitted attempt recovered
+    // here must reach the report (VERIFY 第 4 轮 BUG-4 / DESIGN 失败路 1).
+    const e = m && effectiveEntries(readAll(home)).filter((l) => l.job_id === m.row_id && l.apply_url === m.apply_url).at(-1);
+    if (e && isAttempted(e)) recovered = { apply_url: e.apply_url, name: `${e.company_key}·${e.title_key}`, screenshot: e.evidence?.path || null };
+    cleanOldRuns(runId);
+    seenCompact = compact(home, now);
+    const entries = readAll(home);
+    const budget = budgetLine(attemptIndex(entries, now), target, tier, now);
+    const workDb = join(runDir, 'work.db');
+    initRunDb({ path: workDb, seqFloor: Math.max(maxJobId(entries), SEQ_FLOOR_MIN) });
+    // Released jobs are list jobs held for review: they are found by the list
+    // scan, so a release-only run needs no rotation window.
+    const maxWindows = argValue('--max-windows') != null ? Number(argValue('--max-windows'))
+      : release.length ? 0 : await fullRotationWindows(windowSize);
+    st = newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, recovered, release });
+  } catch (e) {
+    releaseHome(runId);
+    rmSync(runDir, { recursive: true, force: true });
+    die(e.message);
+  }
+  saveState(st);
+  savePool(st, []);
+  console.log(JSON.stringify({ ok: true, run_id: runId, line: st.budget.line, budget: st.budget, seen_compact: seenCompact }));
+}
 
-  const windowSize = Number(process.env.MRWEIRDO_SOURCE_WINDOW_SIZE ?? 1000);
-  if (!Number.isInteger(windowSize) || windowSize < 0) die(`MRWEIRDO_SOURCE_WINDOW_SIZE=${process.env.MRWEIRDO_SOURCE_WINDOW_SIZE} is not a window size`);
-  const maxWindows = argValue('--max-windows') != null ? Number(argValue('--max-windows')) : await fullRotationWindows(windowSize);
+function newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, recovered, release }) {
   const cursorFile = join(home, 'source_cursor.json');
-  const st = {
+  return {
     run_id: runId,
     run_dir: runDir,
     work_db: workDb,
@@ -229,11 +273,10 @@ async function start() {
     skipped_before_scoring: {},
     source_errors: [],
     recovered_inflight: recovered,
+    release,
+    held: [],
     stop_reason: budget.max_attempts === 0 ? 'daily_cap_reached' : null,
   };
-  saveState(st);
-  savePool(st, []);
-  console.log(JSON.stringify({ ok: true, run_id: runId, line: budget.line, budget, seen_compact: seenCompact }));
 }
 
 // ---- next ------------------------------------------------------------------

@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { append } from '../shared/submission_ledger.mjs';
 import { makeBatchRig, gh } from './apply_batch_harness.mjs';
+import { fakeLiveBatch } from './stream_run_harness.mjs';
 
 const prior = (url) => ({
   era: 'v2', job_id: 5, ts: '2026-09-01T00:00:00.000Z', apply_url: url, company_key: 'old', title_key: 'x', ats: 'greenhouse',
@@ -63,8 +64,25 @@ test('陈旧锁（持锁进程已经不在）→ 自动接管并响亮说明；�
   assert.match(r.stderr, /stale lock.*no longer running/);
   assert.equal(rig.driverCalls().length, 1);
 
+  const live = fakeLiveBatch(rig.base);
+  try {
+    writeFileSync(join(rig.home, 'locks', 'apply_batch.lock'), JSON.stringify({ pid: live.pid, started_at: '2026-09-25T00:00:00Z' }));
+    const r2 = rig.run(rig.addJobs([{ company: 'Beta', title: 'Ops Intern', apply_url: gh('beta', 2) }]));
+    assert.equal(r2.status, 1);
+    assert.match(r2.stderr, /another apply batch appears to be running/);
+    assert.match(r2.stderr, new RegExp(`kill ${live.pid}`), 'the refusal spells out the way out');
+  } finally {
+    live.kill();
+  }
+});
+
+test('PID 复用（VERIFY 第 5 轮 P3）：锁里的 pid 活着但不是派单进程 → 当陈旧锁接管并响亮说明', () => {
+  const rig = makeBatchRig('mrw-batch-reused-pid-');
+  mkdirSync(join(rig.home, 'locks'), { recursive: true });
+  // process.pid = this test runner: alive, command line is not apply_batch.
   writeFileSync(join(rig.home, 'locks', 'apply_batch.lock'), JSON.stringify({ pid: process.pid, started_at: '2026-09-25T00:00:00Z' }));
-  const r2 = rig.run(rig.addJobs([{ company: 'Beta', title: 'Ops Intern', apply_url: gh('beta', 2) }]));
-  assert.equal(r2.status, 1);
-  assert.match(r2.stderr, /another apply batch appears to be running/);
+  const r = rig.run(rig.addJobs([{ company: 'Acme', title: 'Ops Intern', apply_url: gh('acme', 1) }]));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, new RegExp(`stale lock.*pid ${process.pid} .*not an apply batch`));
+  assert.equal(rig.driverCalls().length, 1);
 });

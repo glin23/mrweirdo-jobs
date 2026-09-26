@@ -11,7 +11,7 @@ import { append, readAll } from '../shared/submission_ledger.mjs';
 import { SEEN_RELPATH, readSeen } from '../shared/seen_log.mjs';
 import { initRunDb } from '../shared/local_db.mjs';
 import { writeInflight } from '../shared/apply_guard.mjs';
-import { makeStreamRig, job, ghUrl } from './stream_run_harness.mjs';
+import { fakeLiveBatch, makeStreamRig, job, ghUrl } from './stream_run_harness.mjs';
 
 // 30 jobs at 30 different companies, 8 of them a fit (V1's board).
 const board30 = () => Array.from({ length: 30 }, (_, i) => job(`Co${i}`, i + 1, { fit: i < 8 }));
@@ -307,18 +307,20 @@ test('并发 L（VERIFY 第 4 轮 BUG-1）：窗口 A 的运行没收工，窗�
 
 test('并发 X：另一个进程正持有派单锁（驱动在跑、在途标记在）→ 开跑拒绝，不补记、不动在途标记（--abandon 也不行）', async () => {
   const rig = await makeStreamRig('mrw-stream-conc-x-');
+  const live = fakeLiveBatch(rig.base); // a real batch's command line names apply_batch.mjs
   try {
     mkdirSync(join(rig.home, 'locks'), { recursive: true });
-    writeFileSync(join(rig.home, 'locks', 'apply_batch.lock'), JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() }));
+    writeFileSync(join(rig.home, 'locks', 'apply_batch.lock'), JSON.stringify({ pid: live.pid, started_at: new Date().toISOString() }));
     writeInflight(rig.home, { run_id: 'stream-other', work_db: join(rig.home, 'run-tmp', 'stream-other', 'work.db'), row_id: 100001, apply_url: ghUrl('busy', 1), result_file: join(rig.home, 'x.jsonl'), started_at: new Date().toISOString() });
     for (const args of [['start', '--target', '5'], ['start', '--target', '5', '--abandon', 'stream-other']]) {
       const r = await rig.step(args);
       assert.equal(r.status, 1);
-      assert.match(r.stderr, new RegExp(`apply batch is running \\(pid ${process.pid}\\)`));
+      assert.match(r.stderr, new RegExp(`apply batch is running \\(pid ${live.pid}\\)`));
     }
     assert.ok(existsSync(join(rig.home, 'locks', 'inflight.json')), 'the live attempt is not recorded as a crash');
     assert.deepEqual(readAll(rig.home), []);
   } finally {
+    live.kill();
     await rig.close();
   }
 });

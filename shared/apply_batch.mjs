@@ -32,6 +32,7 @@ import {
   writeInflight,
 } from './apply_guard.mjs';
 import { recoverInflight } from './inflight_recovery.mjs';
+import { batchLockHolder, liveBatchHint } from './lock_holder.mjs';
 import { fillBasisVersion, readSeen, scoringBasisVersion, seenIndex } from './seen_log.mjs';
 
 const repoRoot = process.env.MRWEIRDO_REPO_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
@@ -196,8 +197,9 @@ function driverFor(row) {
 }
 
 // ADR-S8: a lock whose holder process no longer exists (SIGKILL, power loss)
-// is taken over — out loud. A live holder, or a lock we cannot read, is left
-// alone and the open below refuses as before.
+// is taken over — out loud; so is one whose pid now belongs to an unrelated
+// process (VERIFY 第 5 轮 P3 PID 复用). A live batch, or a lock we cannot read, is
+// left alone and the open below refuses as before.
 function takeOverStaleLock(lockPath) {
   if (!existsSync(lockPath)) return;
   let pid;
@@ -207,13 +209,10 @@ function takeOverStaleLock(lockPath) {
     return; // unreadable lock: not ours to judge; the 'wx' open refuses loudly
   }
   if (!Number.isInteger(pid)) return;
-  try {
-    process.kill(pid, 0);
-    return; // alive
-  } catch (e) {
-    if (e.code !== 'ESRCH') return; // EPERM = exists under another user
-  }
-  console.error(`[apply-batch] ⚠️ stale lock ${lockPath}: pid ${pid} is no longer running — taking it over`);
+  const holder = batchLockHolder(pid);
+  if (holder === 'alive') return;
+  const why = holder === 'gone' ? 'is no longer running' : 'is alive but not an apply batch (the number was reused)';
+  console.error(`[apply-batch] ⚠️ stale lock ${lockPath}: pid ${pid} ${why} — taking it over`);
   unlinkSync(lockPath);
 }
 
@@ -243,7 +242,14 @@ function acquireBatchLock() {
     }
     console.error(`[apply-batch] another apply batch appears to be running: ${lockPath}`);
     console.error(`[apply-batch] existing lock: ${existing}`);
-    console.error('[apply-batch] stop the other run first; if it crashed, remove the stale lock file manually.');
+    let hint = 'stop the other run first; if it crashed, remove the stale lock file manually.';
+    try {
+      const { pid } = JSON.parse(existing);
+      if (Number.isInteger(pid)) hint = liveBatchHint(pid, lockPath);
+    } catch {
+      // unreadable lock: the generic hint above stands
+    }
+    console.error(`[apply-batch] ${hint}`);
     process.exit(1);
   } finally {
     if (fd !== undefined) closeSync(fd);
