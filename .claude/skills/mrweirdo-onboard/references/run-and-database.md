@@ -94,6 +94,20 @@ node shared/submission_ledger.mjs record-manual --url <link> --title "<title>" [
 node shared/submission_ledger.mjs record-manual --file <list.json> --apply   # [{"url","title","at"}]
 ```
 
+- Correcting a line: when a job the ledger says was applied to never actually
+  went out (e.g. no confirmation e-mail, and the user wants to apply again),
+  append a correction — never edit or delete the line. Only with the user's
+  word, evidence required, dry-run first:
+
+```bash
+node shared/submission_ledger.mjs correct --of <ledger line id> --verdict not_submitted --evidence "<why, e.g. no confirmation e-mail in Gmail>"           # dry-run
+node shared/submission_ledger.mjs correct --of <ledger line id> --verdict not_submitted --evidence "<why>" --apply
+```
+
+  `not_submitted` = never reached the company: the job may be applied to again
+  and no longer counts toward the company's 2-in-60-days. (`unknown` /
+  `submitted` keep it as applied.) Refused while a run is active.
+
 The company is taken from the job board slug in the link (the same name every
 scan uses). `--company` is optional and only double-checks it: a display name
 that differs from the slug (e.g. "Runway" for `runway-ml`) is refused. Only a

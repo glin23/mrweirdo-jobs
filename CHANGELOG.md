@@ -83,6 +83,12 @@ since shipped and now lives in `docs/archive/`; the current one is
   history line failed it as `ledger_row_without_db_row`.
 
 ### Added
+- **`submission_ledger.mjs correct`** (2026-09-26). Appends a correction line
+  (`--of <line id> --verdict not_submitted|unknown|submitted --evidence "…"`),
+  never edits the original. Dry-run by default; evidence required; refused
+  while a run is active. `not_submitted` sets `may_have_submitted=false`, so the
+  dedupe gate, the pre-dispatch gate and the 60-day company count (all read
+  corrected lines) let the job be applied to again.
 - **Scan only the list companies: `search_intent.sourcing_mode`** (2026-09-26,
   restart-apply 关卡 3「只投递 AI 视频创业公司相关岗位」). `"watchlist_only"` =
   a stream run scans `target_companies` only and never the rotation pool; too
