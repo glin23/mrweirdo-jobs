@@ -151,6 +151,9 @@ Example runtime shape (fresh profile, funnel not yet run):
 Required `search_intent.json` guidance:
 
 - Set `role_type_targets` using only `intern`, `part_time`, `new_grad_FT`.
+  `new_grad_FT` = full-time roles a new graduate can take: any non-senior
+  full-time title whose JD does not require 3+ years (not only titles saying
+  "New Grad"). Location is US + US-remote only unless `countries_open_to` says otherwise.
 - Keep legacy `seniority` aligned: `intern`, `part_time`, `intern_or_part_time`, `new_grad_FT`, or `both`.
 - Always produce `target_function_anchor` per
   `shared/intelligence/intent_schema.json`: include

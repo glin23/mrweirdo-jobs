@@ -60,6 +60,17 @@ since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
 ### Changed
+- **`new_grad_FT` means "a full-time role a new graduate can take"** (2026-09-26,
+  restart-apply-2, 拍板人「3年以上的跳过」). Any non-senior full-time role
+  (Senior / Sr. / Staff / Principal / Lead / Director / Head / VP / Chief;
+  "Manager" is not senior) whose JD does not require 3+ years; before, only
+  titles saying "New Grad". Intern-only users still never get full-time roles.
+  Drop reasons now say `senior_title` / `requires_3plus_years:N`.
+- **Location filter: US and US-remote only** (2026-09-26). Foreign places are
+  always dropped, unknown places are no longer passed by default
+  (`location_unrecognized:<text>`), and Ashby extra locations / structured
+  countries and Greenhouse offices count. A bare "Remote" passes unless all the
+  job's other places are abroad.
 - **Released list jobs are always accounted for** (2026-09-26, restart-apply
   关卡 3). A `--release` link that did not go out is named in line 2 with its
   reason — today's tier used up (no longer misreported as "not found"),
