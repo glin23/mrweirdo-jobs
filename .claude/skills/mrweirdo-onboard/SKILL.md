@@ -410,7 +410,8 @@ Then, only if it applies, at most one short line each:
   and go through Steps 5 and 7 again (it scans the list only, re-scores, applies);
 - the user says they applied to some jobs by hand → write them into the ledger
   so no run applies to them again (dry-run first, then `--apply`):
-  `node shared/submission_ledger.mjs record-manual --url <link> --company <board slug> --title "<title>" [--at YYYY-MM-DD]`;
+  `node shared/submission_ledger.mjs record-manual --url <link> --title "<title>" [--at YYYY-MM-DD]`
+  (the company comes from the link's board slug);
 - Step 6 questions were collected → go to Step 6.
 
 The live counts (今日已尝试 / 已投) are in `npm run status`.

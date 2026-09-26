@@ -78,10 +78,15 @@ permission prompt stays a second spending gate.
 
 ```bash
 cd "$MRWEIRDO_REPO_ROOT"
-node shared/submission_ledger.mjs record-manual --url <link> --company <board slug> --title "<title>" [--at YYYY-MM-DD]           # dry-run
-node shared/submission_ledger.mjs record-manual --url <link> --company <board slug> --title "<title>" [--at YYYY-MM-DD] --apply
-node shared/submission_ledger.mjs record-manual --file <list.json> --apply   # [{"url","company","title","at"}]
+node shared/submission_ledger.mjs record-manual --url <link> --title "<title>" [--at YYYY-MM-DD]           # dry-run
+node shared/submission_ledger.mjs record-manual --url <link> --title "<title>" [--at YYYY-MM-DD] --apply
+node shared/submission_ledger.mjs record-manual --file <list.json> --apply   # [{"url","title","at"}]
 ```
+
+The company is taken from the job board slug in the link (the same name every
+scan uses). `--company` is optional and only double-checks it: a display name
+that differs from the slug (e.g. "Runway" for `runway-ml`) is refused. Only a
+`gh_jid` link on a company's own site, which names no board, needs `--company`.
 
 ## One-time history migration (before the first stream run)
 
