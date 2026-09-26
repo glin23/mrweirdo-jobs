@@ -127,7 +127,7 @@ test('只扫名单 + --release：拍板人点名的岗照常投，经唯一写�
 
     const again = await rig.run(1, { startArgs: ['--release', a.apply_url] });
     assert.deepEqual(rig.driverCalls(), [a.apply_url], 'never applied twice');
-    assert.match(again.finish.lines[1], new RegExp(`放行的 1 个没投：${esc(a.apply_url)}（already_attempted_fp）`));
+    assert.match(again.finish.lines[1], new RegExp(`放行的 1 个没投： ${esc(a.apply_url)} （already_attempted_fp）`));
   } finally {
     await rig.close();
   }
@@ -143,7 +143,7 @@ test('只扫名单 + --release 被 60 天同公司 2 次拦下：驱动不碰，
     rig.board({ watchlist: [b] });
     const r = await rig.run(1, { startArgs: ['--release', b.apply_url] });
     assert.deepEqual(rig.driverCalls(), []);
-    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个没投：${esc(b.apply_url)}（company_cooldown_60d）`));
+    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个没投： ${esc(b.apply_url)} （company_cooldown_60d）`));
   } finally {
     await rig.close();
   }
@@ -159,7 +159,9 @@ test('--release 遇今日额度已满：不扫不投，报告说额度满，不�
     const r = await rig.run(1, { startArgs: ['--release', a.apply_url] });
     assert.deepEqual(rig.driverCalls(), []);
     assert.doesNotMatch(r.finish.lines[1], /没找到/);
-    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个没投：${esc(a.apply_url)}（daily_cap_reached）`));
+    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个没投： ${esc(a.apply_url)} （daily_cap_reached）`));
+    // verify 第 10 轮 P3：一家都没扫，第 3 行不许说「没有新岗…只扫了名单公司」。
+    assert.equal(r.finish.lines[2], '今日额度已满，本次未扫描');
   } finally {
     await rig.close();
   }
@@ -173,7 +175,7 @@ test('--release 的岗重新打分不合格：不投，报告明说（不静默�
     rig.board({ watchlist: [a] });
     const r = await rig.run(1, { startArgs: ['--release', a.apply_url] });
     assert.deepEqual(rig.driverCalls(), []);
-    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个没投：${esc(a.apply_url)}（scored_not_eligible）`));
+    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个没投： ${esc(a.apply_url)} （scored_not_eligible）`));
   } finally {
     await rig.close();
   }
@@ -188,6 +190,22 @@ test('sourcing_mode 只管扫哪里、不管怎么打分：切换开关不作废
     assert.equal(scoringBasisVersion(rig.home), before);
     writeFileSync(join(rig.home, 'search_intent.json'), JSON.stringify({ search_intent: { ...INTENT.search_intent, target_companies: LIST.slice(1), ...ONLY } }));
     assert.notEqual(scoringBasisVersion(rig.home), before, 'other intent fields still count');
+  } finally {
+    await rig.close();
+  }
+});
+
+test('开跑后没找岗就 finish：第 3 行说本次未扫描，不说「没有新岗」', async () => {
+  const rig = await makeStreamRig('mrw-stream-wlonly-noscan-');
+  try {
+    rig.targets(LIST, ONLY);
+    rig.board({ watchlist: [job('pika', 1, { fit: true })] });
+    const start = await rig.step(['start', '--target', '1']);
+    assert.equal(start.status, 0, start.stderr);
+    const fin = await rig.step(['finish', '--run', start.json.run_id]);
+    assert.equal(fin.status, 0, fin.stderr);
+    assert.equal(fin.json.lines[2], '本次未扫描（未开始找岗就收工了）');
+    assert.deepEqual(rig.discoverCalls(), []);
   } finally {
     await rig.close();
   }

@@ -651,20 +651,27 @@ function report(st, rows, lines, unscored) {
   if (preSubmit.length) parts.push(`${preSubmit.length} 个表单没打开（没点提交，下次还能再试）`);
   const extras = [];
   const rec = st.recovered_inflight;
-  if (rec) extras.push(`上次中断的运行有 1 家可能已提交：${rec.name}（${rec.screenshot || rec.apply_url}，永不自动重投，请你核对邮箱或页面）`);
+  // Links and paths are set off by half-width spaces: a full-width bracket or
+  // comma right after a URL gets swallowed into it (verify 第 10 轮 P4).
+  if (rec) extras.push(`上次中断的运行有 1 家可能已提交：${rec.name}（ ${rec.screenshot || rec.apply_url} ，永不自动重投，请你核对邮箱或页面）`);
   if (STOP_TEXT[st.stop_reason]) extras.push(STOP_TEXT[st.stop_reason]);
   if (failedBoards.length) extras.push(`名单里 ${failedBoards.length} 家没扫到：${failedBoards.join('、')}`);
   const why = releaseWhy(st, rows, lines);
   const releaseMissing = st.release.filter((u) => why.get(u) === 'not_found');
   const releaseBlocked = st.release.filter((u) => why.get(u) && why.get(u) !== 'not_found');
-  if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个没找到（可能已下架）：${releaseMissing.join('、')}`);
-  if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => `${u}（${why.get(u)}）`).join('、')}`);
+  if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个没找到（可能已下架）：${releaseMissing.map((u) => ` ${u} `).join('、')}`);
+  if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => ` ${u} （${why.get(u)}）`).join('、')}`);
   const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length;
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 
   // Held list jobs are fit but not applied to: say so where the fit count is.
   const fit = `${st.eligible_this_run} 个${st.held.length ? `（其中 ${st.held.length} 个是名单公司、等你过目）` : ''}`;
   let line3;
+  // Stopped before the first scan (today's tier used up at start): nothing was
+  // looked at, so neither「没有新岗」nor「只扫了名单」is true (verify 第 10 轮 P3).
+  const scannedNothing = !st.watchlist_done;
+  if (scannedNothing && st.stop_reason === 'daily_cap_reached') return { lines: [line1, line2, '今日额度已满，本次未扫描'], submitted, held: st.held };
+  if (scannedNothing) return { lines: [line1, line2, `本次未扫描（${st.stop_reason ?? '未开始找岗就收工了'}）`], submitted, held: st.held };
   if (st.scored_this_run === 0 && unscored > 0) {
     line3 = `这次没打分：还有 ${unscored} 个新岗没打分就收工了`;
   } else if (st.scored_this_run === 0) {

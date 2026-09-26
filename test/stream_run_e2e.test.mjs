@@ -251,7 +251,7 @@ test('崩溃恢复（ADR-S8）：上次运行在途标记还在 → start 先补
     assert.deepEqual(r.scored, []);
     assert.deepEqual(rig.driverCalls(), []);
     // VERIFY 第 4 轮 BUG-4: the user only reads 3 lines — the recovered maybe-submitted one must be there.
-    assert.match(r.finish.lines[1], /上次中断的运行有 1 家可能已提交：crash·growth intern 1（.*boards\.greenhouse\.io\/crash\/jobs\/1.*请你核对邮箱或页面）/);
+    assert.match(r.finish.lines[1], /上次中断的运行有 1 家可能已提交：crash·growth intern 1（ \S*boards\.greenhouse\.io\/crash\/jobs\/1 ，永不自动重投，请你核对邮箱或页面）/);
   } finally {
     await rig.close();
   }
@@ -400,7 +400,7 @@ test('D10 名单公司合格不自动投：第 1 行列出「公司·岗位·链
 
     const gone = ghUrl('pika', 404);
     const missing = await rig.run(1, { startArgs: ['--release', gone] });
-    assert.match(missing.finish.lines[1], new RegExp(`放行的 1 个没找到（可能已下架）：${gone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(missing.finish.lines[1], new RegExp(`放行的 1 个没找到（可能已下架）： ${gone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} (；|$)`), 'link set off by half-width spaces (verify 第 10 轮 P4)');
     assert.equal(rig.driverCalls().length, 2);
   } finally {
     await rig.close();
