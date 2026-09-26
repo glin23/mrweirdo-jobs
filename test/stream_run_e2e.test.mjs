@@ -187,7 +187,7 @@ test('名单优先：名单公司的岗排在第一批最前；名单里挂掉�
     const r = await rig.run(5);
     assert.deepEqual(r.scored, [target.apply_url, other.apply_url]);
     assert.deepEqual(rig.discoverCalls().map((c) => c.kind), ['watchlist', 'rotation']);
-    assert.deepEqual(rig.driverCalls(), [target.apply_url]);
+    assert.deepEqual(rig.driverCalls(), [], 'the list job is held for review (D10), the other one is taken down');
     assert.match(r.finish.lines[1], /名单里 1 家没扫到：Broken Co/);
     assert.equal(readSeen(rig.home).find((s) => s.apply_url === other.apply_url).code, 'expired');
   } finally {
@@ -357,6 +357,45 @@ test('验收口径（lead 裁决 B）：合格但没轮到投的岗下次会重�
     assert.equal(calls.length, 6);
     assert.equal(new Set(calls).size, 6, 'zero repeated dispatch');
     assert.equal(first.scored.length, 20);
+  } finally {
+    await rig.close();
+  }
+});
+
+// D10 第一版（lead 裁决，DESIGN 未明点 6 简化方案）：名单公司合格时不自动投，
+// 标 held_for_review，3 行报告第 1 行列出「公司·岗位·链接」交拍板人过目；held 的
+// 岗记进看过记录，下次不重复报；拍板人一句话放行（start --release <链接>）。
+test('D10 名单公司合格不自动投：第 1 行列出「公司·岗位·链接」；下次不重打不重报；--release 放行后照常投', async () => {
+  const rig = await makeStreamRig('mrw-stream-d10-');
+  rig.env.MRWEIRDO_DAILY_TIER = '25'; // three runs on one day share the daily tier
+  try {
+    const dream = job('pika', 1, { fit: true });
+    const dreamUnfit = job('pika', 2);
+    const other = job('Other', 3, { fit: true });
+    rig.board({ watchlist: [dream, dreamUnfit], rotation: [other] });
+
+    const first = await rig.run(5);
+    assert.deepEqual(rig.driverCalls(), [other.apply_url], 'only the non-list job is applied to');
+    assert.match(first.finish.lines[0], /^投出 1 个：Other·Growth Intern 3；名单公司 1 个合格、等你过目/);
+    assert.ok(first.finish.lines[0].includes(`pika·Growth Intern 1·${dream.apply_url}`), first.finish.lines[0]);
+    assert.deepEqual(first.finish.held, [{ company: 'pika', title: 'Growth Intern 1', apply_url: dream.apply_url }]);
+    assert.equal(readSeen(rig.home).find((r) => r.apply_url === dream.apply_url).code, 'held_for_review');
+    assert.ok(readAll(rig.home).every((e) => e.apply_url !== dream.apply_url), 'held is not an attempt');
+
+    const second = await rig.run(5);
+    assert.deepEqual(second.scored, [], 'held, not-a-fit and applied jobs all skip scoring');
+    assert.equal(second.finish.skipped_before_scoring.seen_held_for_review, 1);
+    assert.doesNotMatch(second.finish.lines[0], /等你过目/, 'not reported again');
+
+    const released = await rig.run(1, { startArgs: ['--release', dream.apply_url] });
+    assert.deepEqual(released.scored, [dream.apply_url], 'a release run scans the list only and rescores the released job');
+    assert.deepEqual(rig.driverCalls(), [other.apply_url, dream.apply_url]);
+    assert.match(released.finish.lines[0], /^投出 1 个：pika·Growth Intern 1$/);
+
+    const gone = ghUrl('pika', 404);
+    const missing = await rig.run(1, { startArgs: ['--release', gone] });
+    assert.match(missing.finish.lines[1], new RegExp(`放行的 1 个没找到（可能已下架）：${gone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.equal(rig.driverCalls().length, 2);
   } finally {
     await rig.close();
   }

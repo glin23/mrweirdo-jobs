@@ -274,6 +274,7 @@ function newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, 
     source_errors: [],
     recovered_inflight: recovered,
     release,
+    release_outcome: {},
     held: [],
     stop_reason: budget.max_attempts === 0 ? 'daily_cap_reached' : null,
   };
@@ -303,11 +304,14 @@ function gate(st, candidates, kind) {
   const idx = attemptIndex(readAll(home), now);
   const seen = seenContext();
   const taken = new Set(st.pooled_keys);
+  const release = new Set(st.release.map((u) => jobFingerprint(u).fp));
   const kept = [];
   for (const raw of candidates) {
     const c = { ...raw, apply_url: raw.apply_url || raw.url, _watchlist: kind === 'watchlist' };
     const fp = jobFingerprint(c.apply_url);
     if (!fp) throw new Error(`discovery handed over an auto-apply candidate without a job fingerprint: ${c.apply_url}`);
+    const released = release.has(fp.fp);
+    c._released = released;
     const ct = companyTitleKey(c.company, c.title);
     if (taken.has(fp.fp) || taken.has(ct)) {
       bump(st, 'duplicate_in_run');
@@ -316,20 +320,26 @@ function gate(st, candidates, kind) {
     const block = identityBlock(c, idx, now, seen);
     if (!block.ok) {
       bump(st, block.reason);
+      if (released) st.release_outcome[fp.fp] = block.reason;
       continue;
     }
     const jd = jdHash(c.description);
-    const hit = lookupSeen(seen.index, c).find((r) => stillSeen(r, { jd_hash: jd }, seen.basis, now));
+    // A release lifts the hold, nothing else: a released job that was since
+    // taken down or judged not a fit stays skipped.
+    const hit = lookupSeen(seen.index, c).find((r) => !(released && r.code === 'held_for_review') && stillSeen(r, { jd_hash: jd }, seen.basis, now));
     if (hit) {
       bump(st, `seen_${hit.code}`);
+      if (released) st.release_outcome[fp.fp] = `seen_${hit.code}`;
       continue;
     }
+    if (released) st.release_outcome[fp.fp] = 'pooled';
     taken.add(fp.fp);
     taken.add(ct);
     kept.push(c);
   }
   st.pooled_keys = [...taken];
-  return kept.sort((a, b) => (b.description?.length || 0) - (a.description?.length || 0));
+  // Released first (the user asked for exactly these), then longest JD first.
+  return kept.sort((a, b) => (b._released - a._released) || ((b.description?.length || 0) - (a.description?.length || 0)));
 }
 
 function scan(st, kind) {
@@ -430,6 +440,31 @@ function afterBatch(st, batch) {
   }
 }
 
+// D10 第一版（lead 裁决 / DESIGN 未明点 6 简化方案）: a list (dream) company
+// has two tries in 60 days, so an eligible job there is NOT applied to on its
+// own. It is taken out of this run's queue, remembered as held_for_review (so
+// it is not scored or reported again for 7 days) and listed in line 1 for the
+// user, who applies by hand or releases it with `start --release <link>`.
+function holdListJobs(st, batch) {
+  const list = new Map(batch.filter((c) => c._watchlist && !c._released).map((c) => [c.apply_url, c]));
+  if (list.size === 0) return 0;
+  const db = new DatabaseSync(st.work_db);
+  let held = 0;
+  try {
+    const rows = db.prepare("SELECT id, company, title, apply_url FROM jobs WHERE status = '🤖 AI sourced' AND COALESCE(auto_apply_eligible, 0) = 1").all();
+    const scoring = scoringBasisVersion(home);
+    for (const row of rows.filter((r) => list.has(r.apply_url))) {
+      db.prepare("UPDATE jobs SET auto_apply_eligible = 0, skip_reason = 'held_for_review', updated_at = datetime('now') WHERE id = ?").run(row.id);
+      recordSeen(home, { apply_url: row.apply_url, company: row.company, title: row.title, code: 'held_for_review', jd_hash: jdHash(list.get(row.apply_url).description), basis_version: scoring, reason: null });
+      st.held.push({ company: row.company, title: row.title, apply_url: row.apply_url });
+      held += 1;
+    }
+  } finally {
+    db.close();
+  }
+  return held;
+}
+
 function submitScores() {
   const st = loadState(argValue('--run'));
   const k = Number(argValue('--batch'));
@@ -444,11 +479,12 @@ function submitScores() {
   st.scored_this_run += batch.length;
   st.eligible_this_run += stored.eligible;
   st.pending_batch = null;
+  const held = st.no_submit ? 0 : holdListJobs(st, batch);
   saveState(st);
 
   let applied = null;
   const remaining = st.budget.max_attempts - st.attempted_this_run;
-  if (!st.no_submit && stored.eligible > 0 && remaining > 0) {
+  if (!st.no_submit && stored.eligible - held > 0 && remaining > 0) {
     const args = ['shared/apply_supervisor.mjs', '--real', '--max', String(remaining), '--stream-run', st.run_id];
     if (st.confirm_over_30) args.push('--confirm-tier-over-30');
     const r = runChild(st, args);
@@ -487,7 +523,7 @@ function report(st, rows, lines, unscored) {
 
   const line1 = st.no_submit
     ? `试跑不提交：看了 ${st.scored_this_run} 个新岗，合适的 ${st.eligible_this_run} 个`
-    : `投出 ${submitted.length} 个${submitted.length ? `：${submitted.join('、')}` : ''}`;
+    : `投出 ${submitted.length} 个${submitted.length ? `：${submitted.join('、')}` : ''}${st.held.length ? `；名单公司 ${st.held.length} 个合格、等你过目（你手投，或说「投」+链接我来投）：${st.held.map((h) => `${h.company}·${h.title}·${h.apply_url}`).join('、')}` : ''}`;
   const parts = [];
   if (uncertain.length) parts.push(`${uncertain.length} 个判不确定（截图：${uncertain.map((e) => e.evidence?.path || '无截图').join('、')}，请你看一眼）`);
   if (needsInfo.length) parts.push(`${needsInfo.length} 个卡在缺信息`);
@@ -497,6 +533,10 @@ function report(st, rows, lines, unscored) {
   if (rec) extras.push(`上次中断的运行有 1 家可能已提交：${rec.name}（${rec.screenshot || rec.apply_url}，永不自动重投，请你核对邮箱或页面）`);
   if (STOP_TEXT[st.stop_reason]) extras.push(STOP_TEXT[st.stop_reason]);
   if (failedBoards.length) extras.push(`名单里 ${failedBoards.length} 家没扫到：${failedBoards.join('、')}`);
+  const releaseMissing = st.release.filter((u) => !st.release_outcome[jobFingerprint(u).fp]);
+  const releaseBlocked = st.release.filter((u) => !['pooled', undefined].includes(st.release_outcome[jobFingerprint(u).fp]));
+  if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个没找到（可能已下架）：${releaseMissing.join('、')}`);
+  if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => `${u}（${st.release_outcome[jobFingerprint(u).fp]}）`).join('、')}`);
   const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length;
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 
@@ -512,7 +552,7 @@ function report(st, rows, lines, unscored) {
   }
   if (st.stop_reason === 'score_budget_reached') line3 += `（到了看的上限 ${st.budget.max_scored}）`;
   if (st.scored_this_run > 0 && unscored > 0) line3 += `；还有 ${unscored} 个新岗没打分就收工了`;
-  return { lines: [line1, line2, line3], submitted };
+  return { lines: [line1, line2, line3], submitted, held: st.held };
 }
 
 function finish() {
@@ -522,7 +562,7 @@ function finish() {
   // Found but never scored: left in the pool, or handed out and never submitted.
   const pendingCount = st.pending_batch != null ? readJson(join(st.run_dir, `batch-${st.pending_batch}.json`)).length : 0;
   const unscored = loadPool(st).length + pendingCount;
-  const { lines: out, submitted } = report(st, rows, lines, unscored);
+  const { lines: out, submitted, held } = report(st, rows, lines, unscored);
 
   // Rotation cursor: a window whose candidates were all taken is done; one
   // with candidates left over is where the next run starts.
@@ -546,6 +586,7 @@ function finish() {
     run_id: st.run_id,
     lines: out,
     submitted,
+    held,
     stop_reason: st.stop_reason,
     scored: st.scored_this_run,
     eligible: st.eligible_this_run,
