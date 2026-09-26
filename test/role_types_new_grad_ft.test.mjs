@@ -71,3 +71,37 @@ test('下游一致：deriveRoleTypeFromJob（DB 行没 employment_type/JD）与�
   assert.equal(deriveRoleTypeFromJob({ role_type_match: 'intern', title: 'Growth Marketer' }), 'new_grad_FT', 'a mislabeled intern is still not an intern');
   assert.equal(deriveRoleTypeFromJob({ role_type_match: 'intern', title: 'Growth Intern' }), 'intern');
 });
+
+// verify 第 13 轮 P1 复现（scratchpad/r13/years_repro.test.mjs 收进仓库）：区间上限带 + 与
+// 「, ideally …」曾让 8 个要求 ≥3 年的岗漏进打分。
+test('P1：区间上限带 + 的也是要求（runway / luma / synthesia / elevenlabs）', () => {
+  assert.equal(requiredYears('- 3-5+ years in customer-facing technical roles'), 3);
+  assert.equal(requiredYears('- 5–10+ years of product management with a strong growth'), 5);
+  assert.equal(requiredYears('- Have 8–12+ years of experience in Enterprise AI'), 8);
+});
+test('P1：「, ideally …」修饰的是方向，不是把年限变成 preferred（elevenlabs / higgsfield / pika / krea）', () => {
+  assert.equal(requiredYears('- 5+ years in Compensation or Total Rewards, ideally in a high-growth'), 5);
+  assert.equal(requiredYears('- 4+ years of experience, ideally with 1+ years contributing'), 4);
+  assert.equal(requiredYears('- 10+ years of legal experience, ideally including in-house'), 10);
+});
+test('P1：真实漏网 Luma PM Growth 不再过 new_grad_FT 闸', () => {
+  const job = { title: 'Product Manager, Growth', employment_type: 'FullTime', description: '- 5–10+ years of product management with a strong growth focus' };
+  assert.equal(passesAllowedRoleType(job, ['intern', 'new_grad_FT']), false);
+});
+test('年限：真正的 preferred 仍不算要求；「1-3 years」「2 or 3 years」取下限放行', () => {
+  assert.equal(requiredYears('- 1-3 years in customer support'), 1);
+  assert.equal(requiredYears('2 or 3 years of experience'), 2);
+  assert.equal(requiredYears('3+ years preferred'), null);
+  assert.equal(requiredYears('Preferred: 3+ years in growth'), null);
+  assert.equal(requiredYears('What you need\n- 1+ years in marketing\nNice to have\n- 3+ years in AI video\n'), 1);
+  assert.equal(requiredYears('Preferred Qualifications\n- 4+ years at a startup\n'), null);
+  assert.equal(requiredYears('Requirements\n- 4+ years at a startup\nNice to have\n- Figma\n'), 4);
+});
+test('带人的经理算资深：Engineering / Design / Research / Solutions Engineering Manager；Marketing Manager 不算', () => {
+  for (const title of ['Engineering Manager - Growth and Revenue', 'Product Design Manager', 'Solutions Engineering Manager', 'Research Manager']) {
+    assert.equal(roleTypeBlockReason(FT(title), BOTH), 'senior_title', title);
+  }
+  for (const title of ['Affiliate Marketing Manager', 'Social Media Community Manager', 'Online Community Manager', 'Lead Generation Specialist', 'Contract Manager']) {
+    assert.equal(roleTypeBlockReason(FT(title), BOTH), null, title);
+  }
+});

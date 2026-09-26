@@ -5,13 +5,17 @@ const NEW_GRAD_RE = /\b(new\s?grad|new\s?graduate|university\s?grad|university\s
 // entry full-time role is often「X Manager」(Community / Affiliate / Field
 // Marketing Manager) — restart-apply-2 BUG_REPORT; "Senior Manager" is caught
 // by "senior". "Chief" matches "Chief of Staff" too (not an entry role).
-const SENIOR_RE = /\b(senior|sr\.?|staff|principal|lead|director|head|vp|chief)\b/i;
+// A people manager of engineers / designers / researchers is senior too (verify
+// 第 13 轮 P2); "Lead Generation" is a job, not a rank.
+const SENIOR_RE = /\b(senior|sr\.?|staff|principal|lead(?!\s*gen)|director|head|vp|chief)\b|\b(engineering|design|research)\s+manager\b/i;
 // A non-intern title with no employment field (Greenhouse gives none) counts as
 // full-time unless something says temporary (a "Summer … Fellowship Program" is not a job).
 // Even with a full-time employment field, a title saying (Freelance) / (Contract)
 // is not a full-time job (seen on ElevenLabs boards).
-const NOT_FULL_TIME_TITLE_RE = /\b(contract|contractor|freelance|temp|temporary|seasonal|fixed[\s-]?term)\b/i;
-const NOT_PERMANENT_RE = /\b(contract|contractor|temp|temporary|seasonal|summer|fellowship|fixed[\s-]?term|freelance|volunteer)\b/i;
+// "Contract" as a kind of job, not the thing a Contract Manager manages.
+const CONTRACT = 'contract(?!\\s*(?:manager|management|specialist|administrator|analyst|negotiat))';
+const NOT_FULL_TIME_TITLE_RE = new RegExp(`\\b(${CONTRACT}|contractor|freelance|temp|temporary|seasonal|fixed[\\s-]?term)\\b`, 'i');
+const NOT_PERMANENT_RE = new RegExp(`\\b(${CONTRACT}|contractor|temp|temporary|seasonal|summer|fellowship|fixed[\\s-]?term|freelance|volunteer)\\b`, 'i');
 const FULL_TIME_RE = /\b(full[\s-]?time|fulltime|permanent|regular employee)\b/i;
 // Structured employment_type / schedule values that describe a *permanent*
 // role. Used only to flag a conflict (intern-titled but employment looks
@@ -83,23 +87,49 @@ function fullTimeEntryBlock(job) {
 const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const N = '(\\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)';
 // Not the upper end of a range ("3-5 years" is 3, never 5).
-const NOT_RANGE_END = '(?<!(?:\\d|one|two|three|four|five|six|seven|eight|nine|ten)\\s*(?:-|–|—|to)\\s*)';
+const NOT_RANGE_END = '(?<!(?:\\d|one|two|three|four|five|six|seven|eight|nine|ten)\\s*(?:-|–|—|to|or)\\s*)';
 const YEARS_RES = [
   new RegExp(`${NOT_RANGE_END}\\b${N}\\s*\\+\\s*(?:years|yrs)\\b`, 'gi'),
-  new RegExp(`\\b${N}\\s*(?:-|–|—|to)\\s*${N}\\s*(?:years|yrs)\\b`, 'gi'),
+  // "3-5 years", "3-5+ years", "5–10+ years", "2 or 3 years" → the lower end
+  new RegExp(`\\b${N}\\s*(?:-|–|—|to|or)\\s*${N}\\s*\\+?\\s*(?:years|yrs)\\b`, 'gi'),
   new RegExp(`\\b(?:minimum|min\\.?|at least)\\s*(?:of\\s*)?${N}\\s*(?:years|yrs)\\b`, 'gi'),
   new RegExp(`${NOT_RANGE_END}\\b${N}\\s*(?:or more|and above|plus)\\s*(?:years|yrs)\\b`, 'gi'),
   new RegExp(`${NOT_RANGE_END}\\b${N}\\s*(?:years|yrs)\\s*(?:of\\s*)?(?:professional\\s*|relevant\\s*|related\\s*|work\\s*|industry\\s*|hands-on\\s*)?experience\\b`, 'gi'),
 ];
-const PREFERRED_RE = /^[^.;\n]{0,40}\b(preferred|nice to have|a plus|bonus|ideally)\b/i;
-const PREFERRED_BEFORE_RE = /\b(preferred|nice to have|bonus|ideally)\b[^.;\n]{0,30}$/i;
+// Preferred only when the marker qualifies the years themselves: "3+ years
+// preferred", "(3+ years is a plus)", "Preferred: 3+ years", "ideally 3+ years".
+// NOT "5+ years in X, ideally in Y" — there "ideally" qualifies the field
+// (verify 第 13 轮 P1: that reading let 4 senior jobs through).
+const PREFERRED_RE = /^\s*(?:of\s+[\w\s/&-]{0,25}?)?(?:experience\s*)?[\s(,-]*(?:is\s+|are\s+)?(?:preferred|a plus|nice to have|bonus)\b/i;
+const PREFERRED_BEFORE_RE = /\b(preferred|nice to have|bonus|ideally|plus)\b[\s:()-]*$/i;
+// A heading line (not a bullet, short) opening a nice-to-have section: its
+// bullets are not requirements until the next heading.
+const HEADING_RE = /^(?![-•*·●▪◦]|\d+[.)])[^\n]{1,60}$/;
+const PREFERRED_HEADING_RE = /\b(nice[\s-]to[\s-]haves?|preferred|bonus|pluses|good to have|extra credit)\b/i;
+
+function requiredText(text) {
+  const lines = text.split('\n');
+  if (lines.length < 2) return text;
+  let preferred = false;
+  const keep = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (HEADING_RE.test(line) && !/\byears?\b|\byrs\b/i.test(line)) {
+      preferred = PREFERRED_HEADING_RE.test(line);
+      continue;
+    }
+    if (!preferred) keep.push(line);
+  }
+  return keep.join('\n');
+}
 const toNum = (t) => (/^\d+$/.test(t) ? Number(t) : NUM_WORDS[t.toLowerCase()]);
 
 // The highest "at least N years" a JD states as required (N = the lower end of a
 // range), or null when it states none. Mentions marked preferred / nice to have
 // are not requirements.
 export function requiredYears(description) {
-  const text = String(description || '');
+  const text = requiredText(String(description || ''));
   let max = null;
   for (const re of YEARS_RES) {
     for (const m of text.matchAll(re)) {
@@ -128,8 +158,13 @@ export function roleTypeBlockReason(job = {}, allowedRoleTypes = ['intern', 'par
 }
 
 export function deriveRoleTypeFromJob(job = {}) {
+  // A stored "other" is a veto made where the JD was visible (scorer / JD-aware
+  // recheck at store time); a title-only recheck must never lift it (verify 第
+  // 13 轮 P1). Likewise a title that reads senior now is never entry-level.
+  if (String(job.role_type_match || '').trim().toLowerCase() === 'other') return 'other';
   const stored = normalizeRoleType(job.role_type_match);
   const derived = classifyRoleType(job) || 'other';
+  if (stored === 'new_grad_FT' && SENIOR_RE.test(String(job.title || ''))) return 'other';
   if ((stored === 'intern' || stored === 'part_time') && derived !== stored) return derived;
   return stored || derived;
 }

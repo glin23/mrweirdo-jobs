@@ -166,7 +166,11 @@ for (const job of candidates) {
   const capped = cappedNames.has(String(job.company || '').toLowerCase());
   const storedRoleType = score.role_type_match || job.role_type || 'other';
   const recheckedRoleType = classifyRoleType(job);
-  const roleType = wantedRoleTypes.has(recheckedRoleType) ? recheckedRoleType : storedRoleType;
+  // What goes into the DB is a veto the later rechecks cannot lift (verify 第 13
+  // 轮 P1): the DB row has no JD, so a recheck there cannot see "5+ years" and
+  // would call the job entry full-time again. The scorer's own "not a target
+  // type" wins; else the JD-aware recheck; only both agreeing stores a target.
+  const roleType = !wantedRoleTypes.has(storedRoleType) ? storedRoleType : recheckedRoleType;
   const passThreshold = (score.fit_score ?? 0) >= threshold;
   const recommended = score.recommended === true;
   const roleOk = wantedRoleTypes.has(storedRoleType) && wantedRoleTypes.has(recheckedRoleType);
