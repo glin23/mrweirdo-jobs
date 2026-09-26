@@ -200,11 +200,29 @@ function releaseHome(runId) {
   if (existsSync(streamLockPath()) && readJson(streamLockPath()).run_id === runId) rmSync(streamLockPath());
 }
 
+// A run directory is named `stream-<time>-<pid of the start that made it>`.
+// It is a leftover only once that start process is gone: while it runs it may
+// be another start that just created its directory and is about to lock it and
+// try for the home — deleting it under that start made the loser crash with
+// ENOENT instead of refusing (lead 复验 f3aef0f, RACE 8/100). A start that loses
+// removes its own directory; one that finished exited long ago.
+function startProcessAlive(name) {
+  const pid = Number(name.slice(name.lastIndexOf('-') + 1));
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === 'EPERM';
+  }
+}
+
 function cleanOldRuns(keepRunId) {
   const dir = onboardTmpDir();
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
-    if (name.startsWith(RUN_PREFIX) && name !== keepRunId) rmSync(join(dir, name), { recursive: true, force: true });
+    if (!name.startsWith(RUN_PREFIX) || name === keepRunId || startProcessAlive(name)) continue;
+    rmSync(join(dir, name), { recursive: true, force: true });
   }
 }
 

@@ -4,7 +4,8 @@
 //   PID  — 派单锁里的 pid 被一个无关进程复用，开跑永远被拒、提示里没有出路。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fakeLiveBatch, makeStreamRig } from './stream_run_harness.mjs';
 
@@ -92,6 +93,27 @@ test('开跑中途死掉留下的认领文件（>30 秒）→ 不自动清（会
     const r = await rig.step(['start', '--target', '3', '--max-windows', '0']);
     assert.equal(r.status, 1);
     assert.match(r.stderr, /stream_run\.claim is \d+s old .*delete it/);
+  } finally {
+    await rig.close();
+  }
+});
+
+// lead 复验 f3aef0f：RACE 偶发败方崩出 ENOENT（lockDir 扫描自己的运行目录时目录没了）。
+// 胜方开跑时清旧运行目录，把败方刚建、还没来得及上锁和抢锁的目录当残留删了。
+// 旧运行目录只在「建它的 start 进程已经不在」时才算残留。
+test('清旧运行目录只清建目录的进程已不在的：别的 start 正在建的目录（进程活着）留着', async () => {
+  const rig = await makeStreamRig('mrw-lock-clean-');
+  try {
+    const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+    const liveDir = join(rig.home, 'run-tmp', `stream-2026-09-26T00-00-00-000Z-${process.pid}`);
+    const deadDir = join(rig.home, 'run-tmp', `stream-2026-09-26T00-00-00-000Z-${dead}`);
+    mkdirSync(liveDir, { recursive: true });
+    mkdirSync(deadDir, { recursive: true });
+    const r = await rig.step(['start', '--target', '3', '--max-windows', '0']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(existsSync(liveDir), 'a directory whose start process is still running is not ours to delete');
+    assert.equal(existsSync(deadDir), false, 'a leftover from a dead start is cleaned');
+    await rig.step(['finish', '--run', r.json.run_id]);
   } finally {
     await rig.close();
   }
