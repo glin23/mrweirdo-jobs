@@ -12,8 +12,9 @@ Reads:
   - .claude/arnold/roles/builder.md、PROJECT_CONTEXT.yaml（ci_smoke）
   - （第 2 轮）DESIGN 第 2 轮 §3 / §4.7 / §5 未明点 7·12·13 / ADR-S3·S6·S8·S9 / §10；PRODUCT_SPEC 第 2 轮 R1-R7、V1-V13；BUILD_NOTES「第 2 次召唤」
   - （第 4 轮）DESIGN 第 2 轮数据结构、失败路 1-6、崩溃与并发决策；PRODUCT_SPEC 第 2 轮去重规则与验收标准 V1-V13；定稿 docs/specs/restart-apply.md；BUILD_NOTES「第 3 次召唤」13 条偏离；stream_run / seen_log / inflight_recovery / apply_guard / apply_batch / store_scored_jobs / watchlist_source / greenhouse 驱动改动
+  - （第 6 轮）BUILD_NOTES「第 4 次召唤」12 条偏离与真跑前清单；stream_run / lock_holder / submission_ledger record-manual / supervisor_preflight / retire_jobs_db / install_watchlist / dashboard / watchlist_source 改动；onboard·jobskill·两份 -auto 说明书 diff
 Updated: 2026-09-25
-Iterations: 5
+Iterations: 8
 ---
 
 # VERIFY_REPORT — restart-apply 小修包（072f203 / 7cd693c / d326b17 / 29e6147 + 文档 150d1df）
@@ -773,3 +774,429 @@ S3（看过记录 seen_log、规则 6、一次性工作库 initRunDb、store 写
 
 - **GAP 场景第一版用字符串替换改写 `store_scored_jobs` 的相对 import**：把文件内其他文本也替换坏了，报 SyntaxError，看起来像「A 被放弃后崩溃」。改成一个包装文件（先等 3 秒，再按绝对路径 import 真模块）以后，才看到真实行为：exit 0、入库 0、不派单。
 - **一开始把 RACE 预判成「窗口极窄、只是理论问题」**：实测同时发起时一半概率双开，所以升为真问题（P3），不再只是挂账。
+
+---
+
+# 第 6 轮 — S5 编排改写 + 退役 + D10 + 锁 P3 ×2（7a7af88..64bc3c1，12 提交）
+
+> Mode: daily。硬边界：没有真投；真实 `~/.mrweirdo-jobs/` 只读（开工与收工 `jobs.db` 都是 1782006129 / 1728512，`search_intent.json` 1780932205，`log/` 无账本/看过记录，`locks/` 空，无 `archive/`）；没有 push；没有提交代码。独立 worktree `scratchpad/wt6`（tip 64bc3c1），逐提交在 `scratchpad/p6_<sha>`，一律假 HOME。自写场景 3 个文件（`zz_v6_d10` / `zz_v6_d10b` / `zz_v6_lock`，不入库）。真跑前清单在真实家目录的**拷贝**（`scratchpad/sbx/home`，不含 chrome-profile）上逐条走了 1-8 步；外网只做只读 GET（名单 21 家公开招聘板）。
+
+## 验收范围
+
+12 个提交：① 运行锁原子化 + 派单锁 PID 复用自救（7a7af88）② D10 名单公司合格不自动投、`--release` 放行（0959763 / 0af61f9）③ 缺信息报告路径交接（02ce51e）④ 手投登记 `record-manual`（11932cb）⑤ preflight 只核库里有的账本行（d2d3ccf）⑥ 看板改数账本（961a977）⑦ install_watchlist / retire_jobs_db 两个新 CLI（60bcbee / 42e4728）⑧ onboard / jobskill / 两份 -auto 说明书改写（e7c2a3d）⑨ 变更日志与施工记录（f3e260e / 64bc3c1）。另按派遣单：真跑前清单 10 步逐条可执行性、V1-V13 终验、逐提交 CI 四步。
+
+## 5 维高危区评估
+
+- ① 核心业务逻辑（最高）：D10 是拍板人定的「梦想公司投前过目」闸，漏一次 = 用掉这家 60 天 2 次里的 1 次；放行必须只放那一条、仍过投前闸。手投登记写进账本后直接改变以后的去重与 60 天计数，写错比不写更难发现。
+- ② 安全边界（高）：真跑前清单全部是对真实家目录的 `--apply`，要确认默认试跑、顺序对、失败响亮；record-manual 的错误输入不能静默写坏账本。
+- ③ 性能：每个 start 多一次 `ps`，毫秒级；不涉及。
+- ④ 集成点（中）：名单扫描与轮转扫描用同一批公开接口，名单公司同时出现在轮转源里（`greenhouse_companies.json` / `ashby_tenants.json` 都含 heygen、pika、synthesia 等）——D10 只认来源不认公司，这是本轮最该打的点。
+- ⑤ 主流程（高）：onboard 第 4-7 步照着说明书能不能跑通；退役后 jobs.db 不该再冒出来。
+
+## 7 类测试
+
+- ① 等价类（6 次）：`--release` × {名单里 held 的岗、已手投的岗、同公司 60 天已满、重打分不合适、非招聘链接、空参数}；record-manual 链接 × {GH、GH 变体 `job-boards…?gh_src`、Ashby、Ashby `/application`、LinkedIn}。
+- ② 边界值（4 次）：held 满 7 天（改 ts 为 8 天前）；`--at` × {`2026-13-45`、`2027-01-01`、`9/24`、缺值}；同文件内重复链接；运行锁残留 + 同时开跑。
+- ③ 决策表（1 张）：D10「来源=名单? × 被放行? × 看过记录 held? × 重打分合格?」逐格对 holdListJobs + gate 读码，另补「名单扫描失败、轮转扫到同一家」这一格（实测 R9）。
+- ④ 状态迁移（4 次）：held → 7 天内再跑（不打分不报）→ 放行 → 投出；held → 过期 → 重打分再列出；运行锁 {无、残留、活} × 同时开跑；A finish 与 B start 同时。
+- ⑤ 用例测试（2 次）：真实数据拷贝走清单 1-8 步（迁入 → 归档 → 手投登记 → 装名单 → 名单真接口扫描 → 打分 → 收工）；归档后再跑一次真模式 start/next/finish 看 jobs.db 会不会被重建。
+- ⑥ pairwise（1 次）：record-manual 的 {写法变体} × {公司名写法 slug / 展示名}，得出 R6。
+- ⑦ 风险驱动：D10 和手投登记是本轮唯一会让「不该投的被投」的新代码，14 个自写场景里 10 个打这两处。
+
+## 5 轮回归循环记录（第 6 轮）
+
+1. 写测试：14 个自写场景（R1-R9、STALE2、RACE3、FIN-START，外加 record-manual CLI 探针与清单沙箱走查）。R9、R6、STALE2 三个是先写成「应当拦住」的断言、跑出来没拦住（红），证据见下。
+2. 全套：tip 477 条全绿 + 自写 12 条全过（断言为观测型的 R6 / R9 / STALE2 打印结果）；逐提交 CI 见下表。
+3. 辨析：R9 真 bug（P2）；R6、STALE2、清单第 7 步真 bug（P3）；其余 P4。
+4. 不修：R9 要改 holdListJobs 的判定依据，R6 要改 record-manual 的公司来源，STALE2 要改锁的清残留路径——都超 Quinn 界限。
+5. 转 lead。
+
+**逐提交 CI**（CI 四步，独立 worktree + 假 HOME）：
+
+| 提交 | npm test | role_guard | alpha_gate | node --check |
+|---|---|---|---|---|
+| 7a7af88 | 457/457 | 0 | 0 | 0 |
+| 0959763 | 458/458 | 0 | 0 | 0 |
+| 02ce51e | 458/458 | 0 | 0 | 0 |
+| 11932cb | 464/464 | 0 | 0 | 0 |
+| d2d3ccf | 466/466 | 0 | 0 | 0 |
+| 961a977 | 467/467 | 0 | 0 | 0 |
+| 60bcbee | 470/470 | 0 | 0 | 0 |
+| 42e4728 | 474/474 | 0 | 0 | 0 |
+| e7c2a3d | 477/477 | 0 | 0 | 0 |
+| 0af61f9 | 477/477 | 0 | 0 | 0 |
+| f3e260e | 477/477 | 0 | 0 | 0 |
+| 64bc3c1 | 477/477 | 0 | 0 | 0 |
+
+## 结论明细（第 6 轮）
+
+### ✅ 通过
+
+- **锁 P3 ×2 已修**[实测]：
+  - RACE：两个 start 同时 ×10 轮（builder 测试）、三个 start 同时 ×10 轮（自写 RACE3）——每轮恰好 1 个开跑，输家响亮拒绝、无堆栈。
+  - PID 复用：pid 活着但命令行不是 `apply_batch.mjs` → 当陈旧锁、响亮说明后接管；真派单进程活着 → 拒绝，提示写明 `kill <pid>` 与「ps 看不到 apply_batch 就删哪个锁文件」。
+  - FIN-START（A 收工与 B 开跑同时 ×10）：B 要么被拒（A 还在）、要么正常开跑，无异常、无残锁。
+- **D10 主体**[实测]：
+  - R1：放行运行里又冒出 2 个新的名单合格岗 → 只投放行那 1 条，另 2 条照 held、第 1 行列出。
+  - R2：放行但同公司 60 天已 2 次 → 不投，第 2 行「放行的 1 个没投：…（company_cooldown_60d）」。
+  - R3：放行一条已手投登记的岗 → 不打分不投，第 2 行写 `already_attempted_fp`。
+  - R5：Ashby 放行链接带不带 `/application` 都认。
+  - R7：held 满 7 天 → 重打分、再列一次（符合「7 天不重报」）。
+  - R8：`--release` 给 LinkedIn 链接或空参数 → 拒绝开跑。
+  - 结论：放行只解除 held，不绕过任何投前闸（已投、同公司同标题、60 天 2 次、投前失败上限、规则 6 都还在，派单时 apply_batch 再过一遍）。
+- **手投登记**[实测]：默认试跑不建 `log/`；`--apply` 写入、账本 600；同一文件内 GH 变体与 Ashby `/application` 变体按指纹去重；重复登记 → `already_recorded`、不重写；坏链接 / 缺标题 / 坏日期 / 非数组 → 整批不写并报错；运行锁在时 `--apply` 拒绝、试跑放行；登记后的岗再跑 → 拦下（R3），计入 60 天（R2）。
+- **preflight 只核库里有的行**[读码 + 实测]：工作库行号从账本最大号往上排，本次运行的行与历史/以前运行不会撞号；本次运行的行照旧逐行核（批 2 的 preflight 核批 1 的行）。放掉的只有「账本行在库里找不到」这一类，在一次性工作库下它本来就恒真，不是该拦的真问题。代价见 ⚠️。
+- **说明书**[读码]：onboard 第 4-7 步照着能跑（沙箱按它走通 start → next → submit-scores → finish）；删行核对过：旧 queue gate、prune、retry_gap_rows、apply_report、48h confirm/tracker 推荐都是有意删除（偏离 7/8/12 已申报），身份行与 cover letter 告知搬到第 3 步保留；两份 -auto 与 jobskill 为精准替换，无整篇覆盖。
+- **看板 / 名单 / 退役**[实测，沙箱]：看板「今日已尝试 0/10 · 已投 182」、最近 10 条读账本；install_watchlist 试跑不写、`--apply` 只加 target_companies（其他字段逐字节不变）、600、重复 `--apply` 不重复加；retire 在迁入前拒绝（182 vs 0）、迁入后 `--apply` 搬到 `archive/jobs-legacy-2026-09-25.db`（600，1728512 字节，目录 700），再跑提示「已归档」。
+- **V1-V13 终验**[实测]：V1 V2 V3 V7 V8 V11 V12 V13 在 `stream_run_e2e`（真 stream_run），V4 V5 V6 V9 V10 在 `apply_batch_guard`，tip 全绿；D10 改动后 V9 对非名单公司不变，名单公司改走 held（设计如此）。V12 / V13：held 写的看过记录只有链接、公司、标题、JD 指纹，不含正文与答案。
+
+### ❌ 真 bug（4 个）
+
+**R9（P2，命中 ① 核心逻辑 + ④ 集成点）名单公司的岗从轮转扫描进来，不 held、直接自动投**
+- 复现（`zz_v6_d10b`）：名单扫描 pika 这家失败（HTTP 500），轮转扫描拿到 pika 的合格岗 → 驱动被派 1 次。报告自相矛盾：第 1 行「投出 1 个：pika·Growth Intern 1」，第 2 行「名单里 1 家没扫到：Pika」。
+- 原因[读码]：`holdListJobs` 按候选的来源标记 `c._watchlist` 判，不按公司判。而名单 21 家里至少 10 家同时在轮转源里（greenhouse_companies / ashby_tenants）。名单扫描某家失败（限速、超时、瞬时 5xx）或名单接口没返回、轮转接口返回了同一岗，都会漏过去。
+- 后果：违反关卡 2 拍板 ③「梦想公司投前过目」，用掉这家 60 天 2 次里的 1 次。不会重复投递。
+- 修法建议：held 判定改为「公司键 ∈ search_intent.target_companies 的 slug 归一」（与来源无关）；约 5-8 行 + 1 条测试。
+
+**R6（P3，命中 ① + ② 数据正确性）手投登记的公司名不校验，写成展示名就漏掉 60 天同公司计数**
+- 复现：record-manual 两条 `jobs.ashbyhq.com/runway-ml/…`、公司写「Runway」→ 轮转扫到 runway-ml 第 3 个合格岗 → 照投（60 天内同公司第 3 次）。
+- 原因：账本公司键 = `normalizeCompany(用户写的名字)`，扫描来的公司键 = slug 归一。名单里「Runway→runway≠runwayml」「Higgsfield→higgsfield≠higgsfieldai」两家会错；GH 驱动的「以前投过我们吗」也按公司键查，会答错。
+- 说明书和清单第 5 步都写了「用招聘板 slug」，但工具不拦；而 GH / Ashby 链接里本来就带 slug。
+- 修法建议：GH / Ashby 链接一律从链接取 slug 当公司（或与 `--company` 不一致时拒绝）；约 5 行。
+
+**STALE2（P3，命中 ① 并发）运行锁残留时两个 start 同时开跑，15 轮里 3 轮双开**
+- 复现（`zz_v6_lock`）：先放一把指向不存在目录的运行锁，再同时发两个 start，结果 `[1,1,1,1,1,1,2,1,2,1,1,1,1,2,1]`。
+- 原因[读码]：`claimHome` 清残留是「读到残留 → rmSync → wx 建锁」，两个进程都判残留，后删的一方会把先建好的新锁删掉，然后自己也建成功。O_EXCL 只保护了「没有锁」这一种起点。
+- 后果：两个运行并存，后开的 `cleanOldRuns` 会删掉先开的运行目录。派单锁串行 + 每行现读账本，仍不会重投。前提比第 5 轮 RACE 严（要先有一次没收尾的运行 + 同时开跑）。
+- 修法建议：清残留改成「把残留锁 rename 到带自己 pid 的名字，rename 成功的一方才继续」，或清残留段外再套一把 O_EXCL 的短锁；约 5-10 行。这条路径第 5 轮就存在，属于我上轮漏检。
+
+**CL7（P3，命中 ⑤ 主流程 / 清单可执行性）真跑前清单第 7 步单独跑 preflight 会重新建出一个空的 `jobs.db`**
+- 复现（沙箱）：第 4 步归档后 `jobs.db` 不存在 → 第 7 步 `node shared/supervisor_preflight.mjs` → 家目录出现新的 `jobs.db`（644、0 行），preflight 还因此报 `queue_nonempty` FAIL。
+- 原因：preflight 调 `auto_apply_queue --summary` / `queue_diagnostics`，它们 `initDb()` 默认库。stream 运行本身不会重建（实测删掉后真模式 start/next/finish 一轮，jobs.db 没再出现）。
+- 后果：退役不再「一次到位」；之后 tracker / confirm 读到的是空库；lead 在第 4 步核过「jobs.db 应不存在」，第 7 步后又出现，会误判归档失败。不影响投递和去重。
+- 修法建议：清单第 7 步改为 `MRWEIRDO_DB_PATH=$(mktemp -d)/probe.db node shared/supervisor_preflight.mjs`，并写明只看 `cdp` 与 `work_authorization_answered`、`queue_nonempty` FAIL 是正常；或者让 preflight 在默认库不存在时不建库。
+
+### ⚠️ 风险 / 挂账（P4）
+
+- **R4 放行后重打分判不合适 → 报告不说**：三行是「投出 0 个 / 没投成 0 个 / 合适的只有 0 个」，拍板人说了「投这条」却看不到为什么没投。建议放行岗未合格时第 2 行写「放行的 1 个这次判不合适」。
+- **`--at` 接受任何 JS 能解析的日期**：`9/24` 被记成 2001-09-24（落到 60 天窗外，同公司计数漏掉；指纹去重仍有效），`2027-01-01` 也照收。建议只收 `YYYY-MM-DD` 且不晚于今天。
+- **record-manual 报错带 Node 堆栈**：响亮、整批不写，但读起来吓人。
+- **清单第 10 步 `npm run status` 是常驻刷新的看板**，在 Bash 工具里不会自己退出；应写 `node scripts/dashboard.mjs --once`。
+- **残文**：`mrweirdo-greenhouse-auto/SKILL.md:145` 仍建议 `datasette serve ~/.mrweirdo-jobs/jobs.db`（归档后不存在）；onboard 菜单仍把「进度跟踪」路由到读 jobs.db 的 tracker（DESIGN 未明点 10，已知）。
+- **preflight 一致性检查放宽的代价**：如果哪天 preflight 被指到错的库，它会 `checked: 0, ok: true` 静默通过，而不是像以前那样报一堆 `ledger_row_without_db_row`。建议 `checked === 0` 且本次运行已有派单时打一行 WARN。
+- 删掉的「`profile_gate.ok` 为 false 先问那一个问题」：现在工作授权在第 1-3 步必问、清单第 7 步也核 `work_authorization_answered`，apply_batch 仍打印 profile gate 提示；可接受。
+
+### 真跑前清单逐条（沙箱实测 1-8 步）
+
+| 步 | 结论 |
+|---|---|
+| 0 重新引导 | 可执行：`scripts/intake_resume.sh` 存在、收 1 个 PDF 参数；新简历路径存在。重生成 search_intent 是 agent 按第 1-3 步做，不是命令 |
+| 1-2 迁入 | 可执行：输出与清单预期逐字一致（182 + 33、appended 215、verify ok）；重跑 appended 0 |
+| 3 核数 | 可执行：215 行；retire 试跑 count_check 182/182。迁入前先跑 retire 会响亮拒绝（安全） |
+| 4 归档 | 可执行：搬走、600、1728512、目录 700；再跑提示已归档 |
+| 5 手投登记 | 可执行，但**需先修 R6**，或 lead 严格用链接里的 slug 当 company、日期只写 `YYYY-MM-DD` |
+| 6 名单 | 可执行：试跑 would add 21；`--apply` 只改 target_companies |
+| 7 Chrome + preflight | **需改**（CL7）：会重建空 jobs.db；`queue_nonempty` 必 FAIL 要写明是正常 |
+| 8 不提交试跑 | 可执行：名单 21 块板 → 5 个新岗、1 个被历史拦下 → 收工、锁放、运行目录删净 |
+| 9 试投 2 条 | 未跑（禁真投）。**需先修 R9**，否则名单公司可能经轮转被自动投 |
+| 10 复验 | 需把 `npm run status` 换成 `--once` |
+
+## 6. Quinn 重构记录（第 6 轮）
+
+零。四个真 bug 都超 1-3 行或涉业务逻辑，转 lead。
+
+## 7. 质量 3 指标（第 6 轮）
+
+- 覆盖率：项目没有覆盖率工具，无数字。
+- `verify_self_miss_rate: 11%`（1/9）：STALE2 的清残留路径在第 5 轮（033f48f）已存在，上轮只测了单个 start 遇残留，没测残留 + 同时开跑。
+- 真 bug：4 个（P2 ×1、P3 ×3），另 P4 ×6。
+
+## 8. 老坑清单核查（第 6 轮）
+
+项目 `.claude/arnold/roles/` 下没有 verify.md，项目未定义老坑清单。ci_smoke 只填了 main_chain：主流程「找岗 → 大批量一键投递 → 投递报告」在 e2e 与沙箱真实数据上跑通到打分/收工，投递本身禁真投未跑；schema_upgrade_path / isolation_field 未填，对应铁律不启用。
+
+## 覆盖度评估
+
+**质量分 3/5 —— 代码可推（推送本身不触发任何投递），真跑前清单不可放行，需回炉一轮小修。**
+
+- 锁 P3 ×2、D10 放行路径、手投登记的去重与计数、preflight 放宽、说明书改写、退役/名单 CLI、V1-V13、逐提交 CI 都实测过关。
+- 扣 2 分：R9 让拍板人亲定的「梦想公司投前过目」有一条可漏的路（P2）；R6 手投登记写错公司名会让 60 天计数失效；STALE2 残留锁下仍会双开；清单第 7 步会把退役掉的 jobs.db 重建出来。四处合计约 25-30 行，全部落在「首批试投前」这一步上。
+- 放行条件：修 R9 + R6 + CL7（清单改写即可）后，清单 1-10 步可放行；STALE2 可同包修。
+
+## 试过的错误方向（第 6 轮）
+
+- **逐提交 CI 第一版用 `grep "^# pass"` 取测试数**：Node 24 的报告器输出是 `ℹ pass N`，第一版表里测试数全空，差点记成「没跑」。改为按 `ℹ (pass|fail)` 取，并单独记 npm test 的退出码。
+- **一开始认为 D10 只要看 `--release` 的放行路径**：放行路径全部过关以后，回头按决策表补「来源 × 公司」这一格，才发现名单公司可以不经名单扫描进来（R9）。
+- **R6 起初打算只测 record-manual 的链接变体**：做 pairwise 时把「公司名写法」也拉进来，才看到展示名与 slug 归一后不同的 2 家。
+
+---
+
+# 第 7 轮 — S5 回炉复验（b669201 / df92547 / dc135e7 / 293169c）+ lead 偶发失败定性
+
+> Mode: daily。硬边界同前：没有真投；真实 `~/.mrweirdo-jobs/` 开工与收工都是 `jobs.db` 1782006129 / 1728512、`search_intent.json` 1780932205，`log/` 无账本，`locks/` 空，无 `archive/`；没有 push，没有提交代码（修复只在 scratchpad 副本里试，已还原）。独立 worktree `scratchpad/wt7`（tip 293169c），逐提交在 `scratchpad/p7_<sha>`，假 HOME。
+
+## 验收范围
+
+① 第 6 轮四个真 bug 的修法（R9 名单公司按公司认、R6 手投公司从链接推、STALE2 残留锁并发、清单第 7/10 步）；② lead 在干净 worktree 第一次全量跑出的 2 条失败（`apply_batch_guard.test.mjs:154` 实际 3 期望 11；`submission_ledger.test.mjs:214` P2 answers）要定性：是测试时序不稳，还是产品在负载下真会误停批；③ builder 申报的「高负载 1 次误停批」是否同源；④ 逐提交 CI 四步。
+
+## 5 维高危区评估
+
+- ① 核心业务逻辑（最高）：偶发失败如果是产品问题，真跑时就是「该投的没投、没投成的被记成可能已提交」，直接违背「能替拍板人真投出去」。
+- ② 数据正确性（高）：结局记错会永久写进账本（账本只追加），影响 60 天计数和以后永不重投的判断。
+- ③ 性能 / 负载（高，本轮新增）：问题只在机器慢的时候出现，要能在慢的条件下稳定复现，不能只靠多跑几次碰运气。
+- ④ 集成点：驱动子进程 → 结果文件 → 记账子进程这条交接链。
+- ⑤ 主流程：名单公司 held、手投登记、并发开跑这三个修法不能回退。
+
+## 7 类测试
+
+- ① 等价类（3 次）：结果文件写盘 {正常、慢}；手投公司 {不写、写对 slug、写成展示名}；认领文件 {新、>30 秒}。
+- ② 边界值（2 次）：残留锁 + 同时开跑 ×20 轮；认领文件 60 秒前（过 30 秒界）。
+- ③ 决策表（1 张）：`runTee` 收尾「子进程关闭 × 写入是否已落盘 × 记账人何时读」三格，对照结局（正常 / 记成 crashed / 熔断）。
+- ④ 状态迁移（2 次）：名单扫描失败 → 轮转进来 → held → `--release` → 投出；手投登记 → 60 天闸。
+- ⑤ 用例测试（2 次）：沙箱清单第 5/7/10 步；全量 481 条在「慢磁盘」下有修 / 无修两遍对照。
+- ⑥ pairwise：N/A，本轮变量都已在决策表和等价类里穷尽。
+- ⑦ 风险驱动：负载复现是本轮重点。先试 CPU 压满（8 核空转）和磁盘压满（dd 连写），各 12-24 次都没复现；改成确定性地让异步写盘回调晚到 80 毫秒（`--require slowfs.cjs`，模拟慢磁盘），一次就复现。
+
+## 5 轮回归循环记录（第 7 轮）
+
+1. 写测试：`zz_v7_re`（R9 / R6 / STALE2 ×20 / 认领文件，4 条）、`zz_v7_gap`（打印熔断证据）、`repro.mjs`（脱离项目的 200 次最小复现），外加慢磁盘预加载 `slowfs.cjs`。
+2. 全套：tip 在慢磁盘下 **469/481，12 条失败**；同一个 tip 只改 1 行（见下）后，在慢磁盘下 **481/481**。
+3. 辨析：12 条失败全部同源（见 ❌ FLUSH），是产品 bug，不是测试写法问题。`submission_ledger:214` 不在这 12 条里，复现不了（见 ⚠️）。
+4. 不修：这是派单主链路上的业务代码，按 Quinn 界限转 builder。
+5. 转 lead。
+
+**逐提交 CI**（CI 四步，独立 worktree + 假 HOME，正常负载）：
+
+| 提交 | npm test | role_guard | alpha_gate | node --check |
+|---|---|---|---|---|
+| b669201 | 478/478 | 0 | 0 | 0 |
+| df92547 | 481/481 | 0 | 0 | 0 |
+| dc135e7 | 481/481 | 0 | 0 | 0 |
+| 293169c | 481/481 | 0 | 0 | 0 |
+
+## 结论明细（第 7 轮）
+
+### ✅ 通过（第 6 轮四项）
+
+- **R9 已修**[实测]：
+  - 名单扫描 pika 返回 500，轮转扫到 pika 的合格岗 → held，只投非名单公司的那一条；第 1 行列出 pika 等你过目。
+  - 之后 `--release` 这条 → 照常投出。
+  - 公司键用 `search_intent.target_companies` 的 slug 归一。轮转源（GH / Ashby 公开接口与 bulk crawl）的 company 字段也是 slug，读码一致。
+- **R6 已修**[实测]：
+  - 公司写「Runway」配 `runway-ml` 链接 → 整批拒绝，一行人话、无堆栈。
+  - 不写公司 → 从链接推出 `runway-ml`。写 `RUNWAY-ML` → 归一后相符，照收。
+  - 登记两条以后，同公司第 3 个合格岗被 60 天闸拦下，驱动 0 次。
+- **STALE2 已修**[实测]：
+  - 残留锁 + 两个 start 同时开跑 ×20 轮，每轮恰好 1 个开跑。
+  - 认领文件残留时：30 秒内提示「另一个正在开跑」；超过 30 秒报出文件路径和存在了多久，请人删除。两种都拒绝开跑、不自动清。
+- **清单第 5/7/10 步**[实测，沙箱]：
+  - 第 7 步用探针库跑体检：`work_authorization_answered` OK，`queue_nonempty` FAIL（清单已写明这是正常），跑完 `jobs.db` 没有重建。
+  - 第 10 步 `dashboard.mjs --once` 打一屏就退出。
+  - 第 5 步写错公司名会被拒。
+
+### ❌ 真 bug（1 个）
+
+**FLUSH（P2，命中 ① 核心逻辑 + ② 数据正确性 + ④ 集成点）驱动结果文件还没写完，记账人就去读了：结局被记成 crashed，连续 3 次就熔断停批**
+
+- 位置：`shared/apply_batch.mjs` 的 `runTee`。
+
+  ```js
+  child.on('close', (code) => {
+    out.end();
+    resolve(code ?? 1);
+  });
+  ```
+
+  `out.end()` 只是「请求收尾」，写入流里排队的内容还没落盘，函数就返回了。紧接着 `runNode`（`spawnSync`）同步起记账子进程，**同步调用期间主进程的事件循环被卡住**，排队的那几段写入要等记账人跑完才能继续。所以记账人读到的结果文件可能缺最后一行 outcome，于是按「驱动死了没留结局」记成 `crashed / driver_died_without_outcome`（`record_apply_outcome.mjs:93`）。apply_batch 随后自己读这个文件，也读不到 outcome，按 `crashed` 推进熔断计数（`apply_batch.mjs:524`）。
+- 复现（三层证据）：
+  - 最小复现（脱离项目，200 次）：写盘回调晚到时 2/200 次记账人读到空文件；改成 `out.end(() => resolve(...))` 后 0/200。
+  - lead 那条失败，慢磁盘下一次就复现：驱动 3 次，stderr 为「breaker open: 3 dispatches in a row ended crashed」；账本三行都是 `crashed/driver_died_without_outcome`。这和 lead 看到的「actual 3 expected 11」逐字一致。
+  - 全量对照：慢磁盘下 tip 12 条失败（V1 V2 V6 V7 V10、规则 6、D10 ×2、补信息回路、记账失败、投前失败上限、10 家缺信息），只改这 1 行后 481/481。builder 申报的「投前失败上限 e2e 偶发误停批」就在这 12 条里，是同一个根因。
+- 真跑时会怎样：
+  - 真驱动一次要跑几十秒，stdout 和 stderr 两路日志都写进同一个结果文件，最后一行 outcome 正好在进程退出前到达，排在别的写入后面。所以真环境比测试更容易踩中，机器越忙越容易。
+  - 后果一（记错，而且永久）：页面明确说「缺信息没交上」的岗，被记成 crashed，也就是「可能已提交」。它永不再投，还占掉这家 60 天 2 次里的 1 次，补信息回路也断了。真投成的岗被记成 crashed，报告里说「没投成」，拍板人会去邮箱核对。
+  - 后果二（误停批）：连续 3 次 → 熔断停批，后面该投的都没投，报告写 breaker_open。
+  - 不会重复投递：crashed 一律按「可能已提交」处理。
+- 改法：1 行，`out.end(() => resolve(code ?? 1));`，等写入流 finish 以后再交给记账人。另外建议加 1 条回归测试：测试里用慢磁盘预加载（`--require` 一个把 fs.write / fs.writev / fs.open 回调推迟 80 毫秒的 cjs），跑「10 家全卡缺信息」这一条，先红后绿。这样以后不靠运气也能守住。
+- 为什么 lead 单独连跑 3 次都是绿的：只有写盘回调慢到跨过「子进程关闭 → 起记账人」这一瞬间才会出错。全量跑 481 条时机器更忙，偶尔才踩中。CPU 压满不一定会踩中（我压 8 核 12 次都没中），磁盘或线程池排队才是关键。
+
+### ⚠️ 风险 / 未定性
+
+- **`submission_ledger.test.mjs:214`（P2 answers）没能复现，未定性**：
+  - 这条测试不经过 `runTee`，直接同步调记账人，读码找不到依赖计时的地方。
+  - 慢磁盘 ×11 次、CPU+磁盘满载 ×12 次、并行 ×10 次，全部是绿的。
+  - 两个可能：一是同时段机器上还有别的全量测试在跑，子进程被信号打断（`spawnSync` status 为 null）；builder 看到的「记账打印了 ok:true 但状态非 0」也像这一类。二是一个我没找到的问题。
+  - 建议：不阻塞。在 `apply_batch.mjs` 的 `record_failed` 分支、以及这条测试的断言信息里打出 `r.signal` / `r.error`，下次再出现就能自己说清楚原因（约 3 行）。
+- **FIN-START 残留窗口**（builder 自报）：`finish` 放锁不走认领段。我第 6 轮 ×10 轮没触发，维持 P4。
+
+## 6. Quinn 重构记录（第 7 轮）
+
+零。FLUSH 虽然只改 1 行，但在派单主链路上，按界限转 builder。scratchpad 里试改的副本已 `git checkout` 还原，worktree 已删。
+
+## 7. 质量 3 指标（第 7 轮）
+
+- 覆盖率：项目没有覆盖率工具，无数字。
+- `verify_self_miss_rate: 100%`（1/1）：FLUSH 从 S2（22bc56e 接线）起就存在，第 2-6 轮我都没测过慢磁盘下结果文件的交接，这次是 lead 的偶发失败带出来的，如实记为漏检。
+- 真 bug：1 个（P2），另有未定性 1 条、P4 1 条。
+
+## 8. 老坑清单核查（第 7 轮）
+
+项目未定义 verify.md 老坑清单。ci_smoke.main_chain 主流程：本轮找到的 FLUSH 正落在「大批量一键投递 → 投递报告」这一段，主流程冒烟在慢磁盘下失败、修后通过。
+
+## 覆盖度评估
+
+**质量分 3/5 —— 回炉 1 行（FLUSH），修后可推；真跑前清单在 FLUSH 修好前不可放行。**
+
+- 第 6 轮四个问题全部实测修好，逐提交 CI 全绿。
+- 扣分项：FLUSH 是 P2 产品 bug，不是测试时序问题。真跑时机器一忙，就会把没投成的记成「可能已提交」（永久、占名额），或者误停批，而且真驱动比测试更容易踩中。改法 1 行，已在副本上验证：慢磁盘下 12 条失败 → 0 条。
+- 放行条件：builder 提交这 1 行 + 慢磁盘回归测试；lead 复验时在慢磁盘预加载下全量 481（+1）全绿。submission_ledger:214 未定性，不阻塞，建议顺手补上 signal/error 诊断输出。
+
+## 试过的错误方向（第 7 轮）
+
+- **先用 CPU 压满复现**（8 个空转进程 + 6 路并行，12 次）：全绿，差点得出「不稳是测试环境问题」。问题其实出在写盘回调排队，不在 CPU，所以改成确定性推迟 fs 回调，一次就中。
+- **再用 dd 连写压磁盘**（12 次）：仍然全绿。页缓存把 dd 的压力吸收掉了，单个小文件写入的回调延迟并不稳定。这也说明「多跑几次没复现」不能当作没问题的证据。
+- **怀疑 submission_ledger 失败是 spawnSync 的 1 MiB 输出上限把记账人杀了**：插桩量了 84 次记账调用，stdout 最多 80 字节、stderr 最多 169 字节，排除。
+
+---
+
+# 第 8 轮 — FLUSH 修复 + 驱动 stdout 同步写 + 退出 SIGSEGV（ed18bf3..4450766，7 提交）
+
+> Mode: daily。硬边界同前：没有真投；真实 `~/.mrweirdo-jobs/` 只读（`jobs.db` 1782006129 / 1728512 未变，无账本、无 archive）；没有 push；没有提交代码。worktree `scratchpad/wt8`（tip 4450766），逐提交在 `scratchpad/p8_<sha>`，一律假 HOME。本机环境 `NODE_USE_SYSTEM_CA=1`、node v24.7.0，CI 表就是在这个环境下跑的。外网只读 GET 2 次（Ashby / GH 公开接口）。
+
+## 验收范围
+
+① 独立复现「退出时 SIGSEGV」的根因（有 / 无 `NODE_USE_SYSTEM_CA` 对照），并 grep 全库 `process.exit`，列出 safe_exit 没覆盖到的入口；② 驱动 stdout 改同步写以后，管道满时会不会阻塞或死锁，点提交前后有没有新风险；③ runTee 修复在慢磁盘下复核；④ 第 6/7 轮全部问题终验，判断真跑前清单能否放行；⑤ 逐提交 CI 四步。
+
+## 5 维高危区评估
+
+- ① 核心业务逻辑（最高）：退出码丢了 = 记账人明明记完了账，却被当成失败 → 停批 + 下次开跑补记「可能已提交」，把没投成的岗永久封掉。这和第 7 轮 FLUSH 是同一类后果。
+- ② 数据正确性（高）：账本只追加，记错就是永久的。
+- ③ 性能 / 负载（高）：SIGSEGV 只在「进程启动后很快就退出」时出现，和负载相关，要做大样本统计，不能靠多跑几次碰运气。
+- ④ 集成点（高）：驱动 → 管道 → apply_batch → 结果文件 → 记账人整条交接链，外加 stream_run / apply_batch 起的所有子进程。
+- ⑤ 主流程（高）：真跑前清单 1-10 步。
+
+## 7 类测试
+
+- ① 等价类（6 次）：退出方式 × {`process.exit`、自然退出（`exitCode`）、未捕获异常} × {CA 开、CA 关}，外加装了 safe_exit 的两种。
+- ② 边界值（2 次）：驱动一次写 2 MB 且父进程暂停读 3 秒；结局行约 900 KB（builder 测试）。
+- ③ 决策表（1 张）：全库 45 个会退出的文件 ×「是否在 safe_exit 覆盖链上（静态 import 可达）」×「在不在投递流水线上」×「退出 0 是否被调用方当成功」，逐格读码，结果见 ❌。
+- ④ 状态迁移（1 次）：驱动写满管道 → 阻塞 → 父进程恢复读 → 结局照常送达、退出码正确。
+- ⑤ 用例测试（2 次）：真实家目录拷贝走清单 1-8 步和第 10 步；慢磁盘下全量。
+- ⑥ pairwise（1 次）：{CA 开 / 关} × {真实 CLI：record-manual 试跑、materialize_cover_letter、validate_user_profile}，各 200 次。
+- ⑦ 风险驱动：本轮新代码只动「退出」和「交接」这两处，14 组统计实验全部打在这里。
+
+## 5 轮回归循环记录（第 8 轮）
+
+1. 写测试：
+   - `segv/run.mjs`：并发 8 路起短命进程，统计收到的信号。
+   - `run2.mjs`：同样的统计，但用来起真实 CLI。
+   - `pauser.mjs`：父进程先暂停读管道，看驱动会不会卡死。
+   - 慢磁盘预加载，跑全量。
+   - 两个变异：把 runTee 改回旧写法、把 settleSystemCa 注释掉，看测试能不能抓到。
+2. 全套：
+   - tip 正常负载 486/486。
+   - tip 慢磁盘 486/486（第 7 轮同条件下是 469/481）。
+   - 第 7 轮自写的 4 个回归场景全过。
+3. 辨析：builder 的 SIGSEGV 根因成立；safe_exit 有覆盖缺口（见 ❌）。
+4. 不修：缺口涉及多个文件和子进程的启动方式，超出 Quinn 界限。
+5. 转 lead。
+
+**逐提交 CI**（CI 四步，独立 worktree + 假 HOME，本机 `NODE_USE_SYSTEM_CA=1`）：
+
+| 提交 | npm test | role_guard | alpha_gate | node --check |
+|---|---|---|---|---|
+| ed18bf3 | 482/482 | 0 | 0 | 0 |
+| cfd2584 | 482/482 | 0 | 0 | 0 |
+| 1b17895 | 482/482 | 0 | 0 | 0 |
+| e20e1fc | 484/484 | 0 | 0 | 0 |
+| d341de7 | 484/484 | 0 | 0 | 0 |
+| 9178eb6 | 486/486 | 0 | 0 | 0 |
+| 4450766 | 486/486 | 0 | 0 | 0 |
+
+## 结论明细（第 8 轮）
+
+### ✅ 通过
+
+- **① SIGSEGV 根因独立复现成立**[实测，每格 400 次，8 路并发]：
+
+  | 退出方式 | CA=1 | CA=0 |
+  |---|---|---|
+  | `process.exit(2)` | SIGSEGV 34 + SIGABRT 1 | 0 |
+  | 未捕获异常 | SIGSEGV 22 | 0 |
+  | 自然退出（`exitCode`） | 0 | 0 |
+  | 装 safe_exit + `process.exit` | 0 | 0 |
+  | 装 safe_exit + 自然退出 | 0 | 0 |
+
+  真实 CLI 也会崩（CA=1，各 200 次）：record-manual 试跑 3 次、materialize_cover_letter 2 次、validate_user_profile 10 次；CA=0 时全部 0。
+  - 这很可能就是第 7 轮没定性的 `submission_ledger.test.mjs:214`：同步调用记账人，偶发崩溃后 status 为 null [猜，与现象吻合；本机 CA=1]。
+  - 变异验证：注释掉 `settleSystemCa()` 后 `exit_segv.test` 两条都变红（1/200、3/200）。但这是概率性的红，单次跑可能漏掉，见 ⚠️。
+- **② 驱动 stdout 同步写**[实测 + 读码]：
+  - 只对进程名是 `*_apply_driver.mjs` 的驱动打开，另外 `emitOutcome` 在真实输出前再开一次。
+  - 父进程暂停读管道 3 秒时，驱动写 2 MB 会阻塞约 3 秒，父进程一恢复读就写完。结局行完整，退出码是 2，没有死锁。
+  - 真跑时不会死锁：apply_batch 在驱动运行期间只 `await` runTee，事件循环一直在读；它自己往上游写 stdout 是异步的，不会反压到驱动。所以驱动只会在父进程被挂起（Ctrl+Z）时停下，恢复后继续。
+  - 停在点提交之前 → 什么都没发生；停在点提交之后、打结局之前 → 恢复后照常打出结局。父进程如果死了，驱动写入会 EPIPE 退出，改之前异步写也一样。
+  - 没发现新的点提交前后风险。
+- **③ runTee 修复**[实测]：
+  - 慢磁盘下全量 486/486。
+  - 把 runTee 改回旧写法，`apply_batch_flush.test` 变红；恢复后变绿。
+- **④ 第 6/7 轮终验**[实测]：
+  - R9（名单公司岗从轮转进来也 held，放行后投出）、R6（错公司名被拒、公司从链接推、60 天闸生效）、STALE2（×20 轮 0 双开）、认领文件提示——4/4 过。
+  - FLUSH 已修，见 ③。
+  - 清单在新的沙箱拷贝上逐步走了一遍：
+    - 1-2：182 + 33、appended 215、ok；
+    - 3：215、182/182；
+    - 4：归档 600，jobs.db 不存在；
+    - 5：`[{url,title,at}]` 推出 `heygen`，账本 216 行；
+    - 6：would add 21 → 21；
+    - 7：探针库体检只有 `queue_nonempty` / `cdp` 两项 FAIL（都在预期内），jobs.db 没重建；
+    - 8：名单扫描 → 5 个新岗、1 个被历史拦下 → 收工、锁已放；
+    - 10：`--once` 显示「已投 183」。
+- **⑤ 逐提交 CI** 7/7 全绿（见上表）。
+
+### ❌ 真问题（1 个）
+
+**SAFE-GAP（P3，命中 ① + ④）safe_exit 只包了 `process.exit`，而且只装在 5 个入口；流水线上仍有子进程会因 SIGSEGV 把「成功」变成「失败」**
+
+- 覆盖范围[读码，静态 import 链]：只有 7 个文件在覆盖链上：apply_batch、apply_supervisor、stream_run、record_apply_outcome、三个驱动。全库另外 36 个会退出的文件没装。
+- 按后果分三类：
+  - **流水线上、退出 0 会被当成失败**：`materialize_cover_letter.mjs`。apply_batch 每行派单前都调它，成功路径是 `print → process.exit(0)`（:36），同一出口实测会崩（2/200）。崩了 apply_batch 就判「cover letter 生成失败」，驱动遇到要求 cover letter 的表单会记 `needs_user:cover_letter_required_not_generated`，按规则 6 在档案变化之前一直卡住（看过记录 needs_info 没有期限）。也就是说，一个本该投成的岗因为一次偶发崩溃被搁置。频率低：它是长一点的进程，崩溃概率低于纯短命进程，没做到精确统计。
+  - **流水线上、只在失败时 exit**：validate_auto_row（exit 1/2）、store_scored_jobs（exit 1）、liveness_gate / discover_candidates（只有 help / plan 分支 exit 0）、supervisor_preflight（`exitCode` 自然退出）。崩了也还是非 0，语义不变，无害。
+  - **人手动跑的 CLI**：`submission_ledger.mjs`（backfill / record-manual `exit(0)`）、`retire_jobs_db.mjs`（:62 `exit(0)` 在搬完之后）、`install_watchlist`、`validate_user_profile`（实测 10/200）、`record_profile_answers`（第 6 步，`exit(main())`）。崩的时候数据已经写完，只是终端看到「segmentation fault」，lead 或 agent 可能误以为失败、再跑一次。重跑都是幂等的（实测 backfill / retire / record-manual 第二次都是 0 或已处理），record_profile_answers 我没核幂等。
+- 另外，未捕获异常这条路不经过 `process.exit`，装了 safe_exit 照样崩（实测 17/400）。结果仍是非 0，语义不变，但说明「包 `process.exit`」这个办法天生盖不全。
+- 根治建议（实测有效）：在进程启动时先把系统证书读完，不要等到退出前才读。
+  - 做法：preload 文件只写一行 `tls.getCACertificates('system')`。
+  - 效果：`NODE_OPTIONS=--import <preload>` 下，裸 `process.exit` 0/400、未捕获异常 0/400。
+  - 落点：apply_batch 的 `runNode` / `runTee` 和 stream_run 的 `runChild` 给所有子进程注入这个 NODE_OPTIONS，约 5 行；或者清单和技能说明书里统一 `unset NODE_USE_SYSTEM_CA`。本机不开它，Ashby / GH 公开接口照样 200（实测），它只在公司代理换证书的网络里才需要。
+
+### ⚠️ 风险 / 挂账（P4）
+
+- `exit_segv.test` 靠概率抓崩溃：变异后只红 1/200、3/200，崩溃率再低一点就会漏过。另外 Linux CI 上天生是绿的（测试注释已写明）。它能防回退，但不算硬守卫。
+- `emit_outcome_flush.test` 也只在 macOS 上会红，同上。
+- FIN-START 残留窗口（builder 自报），维持 P4。
+
+## 6. Quinn 重构记录（第 8 轮）
+
+零。
+
+## 7. 质量 3 指标（第 8 轮）
+
+- 覆盖率：项目没有覆盖率工具，无数字。
+- `verify_self_miss_rate: 50%`（1/2）：第 7 轮把 `submission_ledger:214` 判为「未定性」，没查到它其实是本机环境变量引起的 SIGSEGV（本轮找到的根因可以解释它）。SAFE-GAP 是本轮新代码的覆盖缺口，不算漏检。
+- 真问题：1 个 P3，另外 P4 3 条。
+
+## 8. 老坑清单核查（第 8 轮）
+
+项目未定义 verify.md 老坑清单。主流程冒烟（ci_smoke.main_chain）在慢磁盘和 CA=1 下都跑通到打分 / 收工，投递本身禁止真投、未跑。
+
+## 覆盖度评估
+
+**质量分 4/5 —— 可推。清单有条件放行：第 9 步首批试投 2 条前，先二选一——①修掉 SAFE-GAP（给所有子进程注入 preload，约 5 行）；②在清单开头的 export 行里加 `unset NODE_USE_SYSTEM_CA`，并请拍板人确认本机不需要它（不走公司代理）。**
+
+- FLUSH、驱动结局截断、SIGSEGV 根因三处修法都实测成立；第 6/7 轮问题全部终验通过；逐提交 CI 全绿；慢磁盘全量全绿；清单 1-8 和 10 在真实数据拷贝上走通。
+- 扣 1 分：SIGSEGV 修法只包了 `process.exit`、只装了 5 个入口。流水线上的 cover letter 生成仍会偶发把成功当失败，把可投的岗搁置；未捕获异常这条路也包不住。影响低频，不会重投，但和 FLUSH 是同一类「该投的没投」。
+- 驱动 stdout 同步写没有引入新风险。
+
+## 试过的错误方向（第 8 轮）
+
+- **一开始只拿 builder 的「exit(2) 短命脚本」当证据**：它只能证明 `process.exit` 会崩。补做「自然退出」和「未捕获异常」两格对照以后，才看出包 `process.exit` 盖不全，而在启动时先读完证书两种都能盖住。
+- **覆盖检查起初只 grep `installSafeExit`**：直接 grep 会漏掉「通过 import driver_contract 间接装上」的文件（比如 cdp、驱动）。改成沿静态 import 链判可达，才得到准确的 7 个 SAFE / 36 个 bare。
