@@ -7,6 +7,7 @@ import { discoveryApplyBucket, isAutoSupportedCandidate } from './sourcing/apply
 import { hasUsableApplyUrl } from './sourcing/usable_apply_url.mjs';
 import { roleTypeBlockReason, roleTypesFromSearchIntent, roleTypeConflict } from './role_types.mjs';
 import { locationVerdict } from './location_gate.mjs';
+import { excludeKeywordMatch, functionExcludeKeywords } from './title_excludes.mjs';
 import { atsHome } from './paths.mjs';
 import { unusableAutoApplyReason } from './eligibility.mjs';
 import { progress } from './progress.mjs';
@@ -240,16 +241,12 @@ function excludeKeywordsForIntent(intent = {}, intentDoc = {}) {
   const keywords = [
     ...ALWAYS_EXCLUDE_ROLE_KEYWORDS,
     ...(intent.exclude_role_keywords || []),
+    ...functionExcludeKeywords(intentDoc),
   ];
   for (const group of CONTEXTUAL_EXCLUDE_ROLE_GROUPS) {
     if (!profileAllows(intentDoc, group.allowWhen)) keywords.push(...group.keywords);
   }
   return [...new Set(keywords.map((s) => String(s).toLowerCase()).filter(Boolean))];
-}
-
-function excludeKeywordMatch(title, excludes) {
-  const t = String(title || '');
-  return excludes.find((kw) => new RegExp(`\\b${escapeRegex(kw)}\\b`, 'i').test(t)) || null;
 }
 
 function passesExclude(title, excludes) {
