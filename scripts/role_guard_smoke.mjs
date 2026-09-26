@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyRoleType, roleTypesFromSearchIntent, roleTypeConflict } from '../shared/role_types.mjs';
+import { classifyRoleType, passesAllowedRoleType, roleTypesFromSearchIntent, roleTypeConflict } from '../shared/role_types.mjs';
 import { renderAnswerTemplate } from '../shared/answer_templates.mjs';
 import { graduationSelectValues, hoursPerWeekAnswer, monthYear } from '../shared/greenhouse_value_rules.mjs';
 
@@ -45,9 +45,13 @@ function mustFail(script, args, expectedReason, extraEnv = {}) {
 }
 
 try {
-  assert.equal(classifyRoleType({ title: 'Associate Product Manager (APM)', employment_type: 'Full-time' }), 'other');
+  // restart-apply-2（拍板人「3年以上的跳过」）: a non-senior full-time role is new_grad_FT
+  // now (was 'other'); an intern-only seeker is still never given one.
+  assert.equal(classifyRoleType({ title: 'Associate Product Manager (APM)', employment_type: 'Full-time' }), 'new_grad_FT');
+  assert.equal(passesAllowedRoleType({ title: 'Associate Product Manager (APM)', employment_type: 'Full-time' }, ['intern', 'part_time']), false);
   assert.equal(classifyRoleType({ title: 'APM Intern', employment_type: 'Internship' }), 'intern');
-  assert.equal(classifyRoleType({ title: 'Fellowship Operations Associate', employment_type: 'Full-time' }), 'other');
+  assert.equal(classifyRoleType({ title: 'Fellowship Operations Associate', employment_type: 'Full-time' }), 'new_grad_FT');
+  assert.equal(passesAllowedRoleType({ title: 'Fellowship Operations Associate', employment_type: 'Full-time' }, ['intern']), false);
   assert.equal(classifyRoleType({ title: 'Summer 2026 Fellowship Program' }), 'other');
   assert.equal(classifyRoleType({ title: 'Summer 2026 Associate Product Manager' }), 'other');
   assert.equal(classifyRoleType({ title: 'Summer 2026 Internship - Marketing' }), 'intern');
@@ -69,7 +73,7 @@ try {
   // (b) Pure full-time role (no intern title) → not intern, no conflict.
   {
     const ft = { title: 'Business Operations Associate', employment_type: 'FullTime' };
-    assert.equal(classifyRoleType(ft), 'other');
+    assert.equal(classifyRoleType(ft), 'new_grad_FT');
     const c = roleTypeConflict(ft);
     assert.notEqual(c.roleType, 'intern');
     assert.equal(c.conflict, false);
@@ -181,7 +185,10 @@ try {
   });
   assert.match(fullTimeQueue, /New Graduate Product Analyst/);
   assert.doesNotMatch(fullTimeQueue, /Marketing Intern/);
-  assert.doesNotMatch(fullTimeQueue, /Associate Product Manager/);
+  // restart-apply-2: an APM title (no employment field, not senior) is an entry
+  // full-time role now, so a new_grad_FT seeker gets it even though the scorer
+  // mislabeled it intern; the intern-only checks above still refuse it.
+  assert.match(fullTimeQueue, /Associate Product Manager/);
   runScript('shared/recompute_auto_apply_eligibility.mjs', ['--apply']);
   assert.equal(db.prepare('SELECT auto_apply_eligible FROM jobs WHERE id = 2').get().auto_apply_eligible, 0);
   assert.equal(db.prepare('SELECT auto_apply_eligible FROM jobs WHERE id = 3').get().auto_apply_eligible, 0);

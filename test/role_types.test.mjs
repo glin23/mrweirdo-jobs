@@ -44,13 +44,17 @@ test('classifyRoleType: title-driven, with employment cross-read', () => {
   assert.equal(classifyRoleType({ title: 'Campus Ambassador' }), 'part_time');
   assert.equal(classifyRoleType({ title: 'Part-Time Sales Associate' }), 'part_time');
   assert.equal(classifyRoleType({ title: 'New Grad Software Engineer' }), 'new_grad_FT');
-  assert.equal(classifyRoleType({ title: 'Business Operations Associate', employment_type: 'FullTime' }), 'other');
+  // restart-apply-2（拍板人「3年以上的跳过」）: a plain non-senior full-time role is
+  // now new_grad_FT (was 'other'); intern-only users still never get it (gate below).
+  assert.equal(classifyRoleType({ title: 'Business Operations Associate', employment_type: 'FullTime' }), 'new_grad_FT');
+  assert.equal(classifyRoleType({ title: 'Senior Business Operations Associate', employment_type: 'FullTime' }), 'other');
   // Acorns case: an intern title wins over a "FullTime" employment_type
   assert.equal(classifyRoleType({ title: 'Growth Product Management Intern', employment_type: 'FullTime' }), 'intern');
 });
 
 test('deriveRoleTypeFromJob: corrects a mislabeled stored intern via the title', () => {
-  assert.equal(deriveRoleTypeFromJob({ role_type_match: 'intern', title: 'Business Operations Associate', employment_type: 'Full Time' }), 'other');
+  // Still corrected away from intern; under restart-apply-2 it reads as entry full-time.
+  assert.equal(deriveRoleTypeFromJob({ role_type_match: 'intern', title: 'Business Operations Associate', employment_type: 'Full Time' }), 'new_grad_FT');
   assert.equal(deriveRoleTypeFromJob({ role_type_match: 'intern', title: 'Growth Intern' }), 'intern');
   assert.equal(deriveRoleTypeFromJob({ role_type_match: 'new_grad_FT', title: 'Anything' }), 'new_grad_FT');
 });

@@ -61,7 +61,7 @@ Return the whole batch as a JSON array `[ {...}, {...}, ... ]`.
 
 - `apply_url` — copy verbatim from input. Used to join scores back to the DB row.
 - `fit_score` — integer 0–10.
-- `role_type_match` — one of `"intern"`, `"part_time"`, `"new_grad_FT"`, `"other"`. Derive from job title + description versus `search_intent.role_type_targets` / `search_intent.seniority`.
+- `role_type_match` — one of `"intern"`, `"part_time"`, `"new_grad_FT"`, `"other"`. Derive from job title + description versus `search_intent.role_type_targets` / `search_intent.seniority`. `new_grad_FT` = a full-time role a new graduate can take: not a senior title (Senior / Sr. / Staff / Principal / Lead / Director / Head / VP / Chief), and the JD does not require 3 or more years of experience ("X Manager" titles such as Community / Field Marketing Manager can be `new_grad_FT`). The title does NOT need to say "New Grad". Contract / temporary roles are `other`.
 - `recommended` — boolean. **True iff every `dim_scores` value is ≥ 5 AND `fit_score` ≥ 5.** (Recall-first calibration; downstream dedupe/quota/platform guards still apply.)
 - `legitimacy` — one of `"high"`, `"caution"`, `"suspicious"`. This is a ghost-job / stale-posting signal, not a fit score. Do not adjust `fit_score` or `recommended` because of this field.
 - `legitimacy_signals` — 0-2 short factual signals from the provided batch data only. Use wording like `"title mentions 2025"`, `"description is specific about team/projects"`, `"salary range is transparent"`, or `"very generic description"`. Do not claim a job is fake.
