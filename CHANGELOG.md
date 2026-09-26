@@ -59,7 +59,34 @@ dirs ignored (`618cb04`).
 since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
+### Changed
+- **Onboard Steps 4-7 are one find-and-apply run** (2026-09-25, restart-apply
+  S5). The user saying "跑 N 个" starts it — no job list, no queue gate, no
+  prune; the report is the 3 lines from `finish`. The identity line and the
+  cover-letter statement moved to the Step 3 parse window. jobskill and the
+  two `-auto` engine docs follow; `daily_count.jsonl` is no longer mentioned.
+- **List (dream) companies are not applied to automatically** (2026-09-25,
+  restart-apply D10「梦想公司投前过目」第一版). An eligible job at a
+  `target_companies` company is held (`held_for_review`, not re-scored or
+  re-reported for 7 days) and listed with its link in report line 1;
+  `stream_run start --release <link>` applies to it.
+- **Dashboard counts from the ledger** (2026-09-25). 「今日已尝试 N/档位」
+  (maybe-submitted today vs `MRWEIRDO_DAILY_TIER`) and 「已投 N」 (submitted +
+  migrated history + hand-made); no hard-coded 50, no queue section.
+- **Preflight's ledger↔DB check covers only rows in the DB it runs on**
+  (2026-09-25). In a stream run that is exactly this run; before, every
+  history line failed it as `ledger_row_without_db_row`.
+
 ### Added
+- **`submission_ledger.mjs record-manual`** (2026-09-25). Hand-made
+  applications go into the ledger (`manual_submitted` / `reported_by_user`) so
+  no run applies to them again and they count toward the 60-day company cap.
+  Dry-run by default; refused while a run is active.
+- **`shared/retire_jobs_db.mjs`** (2026-09-25, ADR-S4 岗位库退役). Moves the legacy
+  jobs.db (and its -wal/-shm) to `archive/jobs-legacy-<date>.db` only after the
+  history count check passes. Dry-run by default; never overwrites, never deletes.
+- **`shared/install_watchlist.mjs`** (2026-09-25). Merges the AI-video preset
+  into `search_intent.target_companies` after the user agrees. Dry-run by default.
 - **Find-and-apply runs: `node shared/stream_run.mjs`** (2026-09-25,
   restart-apply S3). `start --target N` → (`next` → the agent scores one batch
   of ≤50 → `submit-scores`)… → `finish`. Each run uses a one-off work DB under
@@ -86,6 +113,11 @@ since shipped and now lives in `docs/archive/`; the current one is
   `shared/sourcing/data/watchlist_ai_video.json` (not applied automatically).
 
 ### Fixed
+- **Two starts at once can no longer both run** (2026-09-25). A start creates
+  its run directory before its lock and takes the lock with O_EXCL; the loser
+  refuses cleanly. A batch lock whose pid now belongs to an unrelated process
+  (checked by command line) is taken over out loud; a refusal on a live batch
+  says how to stop it.
 - **Greenhouse driver no longer reads a hard-coded `~/.mrweirdo-jobs/jobs.db`**
   (2026-09-25). "Have you applied before?" is answered from the ledger; a
   company name missing from the URL is looked up in the current DB (the run's
