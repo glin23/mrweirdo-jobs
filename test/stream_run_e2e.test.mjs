@@ -382,6 +382,7 @@ test('D10 名单公司合格不自动投：第 1 行列出「公司·岗位·链
     assert.match(first.finish.lines[0], /^投出 1 个：Other·Growth Intern 3；名单公司 1 个合格、等你过目/);
     assert.ok(first.finish.lines[0].includes(`pika·Growth Intern 1·${dream.apply_url}`), first.finish.lines[0]);
     assert.deepEqual(first.finish.held, [{ company: 'pika', title: 'Growth Intern 1', apply_url: dream.apply_url }]);
+    assert.match(first.finish.lines[2], /合适的只有 2 个（其中 1 个是名单公司、等你过目），没凑到 5 个/, 'the held one is not hidden inside "not enough"');
     assert.equal(readSeen(rig.home).find((r) => r.apply_url === dream.apply_url).code, 'held_for_review');
     assert.ok(readAll(rig.home).every((e) => e.apply_url !== dream.apply_url), 'held is not an attempt');
 

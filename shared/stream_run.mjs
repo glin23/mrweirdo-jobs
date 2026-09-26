@@ -544,15 +544,17 @@ function report(st, rows, lines, unscored) {
   const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length;
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 
+  // Held list jobs are fit but not applied to: say so where the fit count is.
+  const fit = `${st.eligible_this_run} 个${st.held.length ? `（其中 ${st.held.length} 个是名单公司、等你过目）` : ''}`;
   let line3;
   if (st.scored_this_run === 0 && unscored > 0) {
     line3 = `这次没打分：还有 ${unscored} 个新岗没打分就收工了`;
   } else if (st.scored_this_run === 0) {
     line3 = '没有新岗：这次找到的都是投过或看过的';
   } else if (!st.no_submit && st.attempted_this_run < st.budget.max_attempts) {
-    line3 = `新岗不够：这次看了 ${st.scored_this_run} 个新岗，合适的只有 ${st.eligible_this_run} 个，没凑到 ${st.budget.max_attempts} 个`;
+    line3 = `新岗不够：这次看了 ${st.scored_this_run} 个新岗，合适的只有 ${fit}，没凑到 ${st.budget.max_attempts} 个`;
   } else {
-    line3 = `这次看了 ${st.scored_this_run} 个新岗，合适的 ${st.eligible_this_run} 个`;
+    line3 = `这次看了 ${st.scored_this_run} 个新岗，合适的 ${fit}`;
   }
   if (st.stop_reason === 'score_budget_reached') line3 += `（到了看的上限 ${st.budget.max_scored}）`;
   if (st.scored_this_run > 0 && unscored > 0) line3 += `；还有 ${unscored} 个新岗没打分就收工了`;
