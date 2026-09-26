@@ -324,19 +324,21 @@ export function backfillLegacy(home, db, { apply = false } = {}) {
     append(home, e);
     report.appended += 1;
   }
-  // 核数: every 已投 row in the DB has exactly one legacy_unverified line with
-  // the same fingerprint.
-  const legacy = readAll(home).filter((e) => e.era === 'legacy' && e.verdict === 'legacy_unverified');
-  const dbFps = rows.filter((r) => SUBMITTED_STATUSES.has(r.status)).map((r) => jobFingerprint(r.apply_url).fp).sort();
-  const ledgerFps = legacy.map((e) => jobFingerprint(e.apply_url).fp).sort();
-  report.verify = {
-    ok: dbFps.length === ledgerFps.length && dbFps.every((fp, i) => fp === ledgerFps[i]),
-    submitted_in_db: dbFps.length,
-    legacy_unverified_in_ledger: ledgerFps.length,
-    fingerprints_match: dbFps.length === ledgerFps.length && dbFps.every((fp, i) => fp === ledgerFps[i]),
-  };
+  report.verify = legacyCountCheck(home, db);
   if (!report.verify.ok) throw new Error(`backfill-legacy: count check failed ${JSON.stringify(report.verify)}`);
   return report;
+}
+
+// 核数 (ADR-S4 step 3): every 已投 row in the legacy DB has exactly one
+// legacy_unverified ledger line with the same fingerprint. The DB may only be
+// retired to archive/ once this holds.
+export function legacyCountCheck(home, db) {
+  const rows = db.prepare(`SELECT apply_url FROM jobs WHERE status IN (${[...SUBMITTED_STATUSES].map(() => '?').join(',')})`).all(...SUBMITTED_STATUSES);
+  const legacy = readAll(home).filter((e) => e.era === 'legacy' && e.verdict === 'legacy_unverified');
+  const dbFps = rows.map((r) => jobFingerprint(r.apply_url)?.fp ?? `unfingerprintable:${r.apply_url}`).sort();
+  const ledgerFps = legacy.map((e) => jobFingerprint(e.apply_url).fp).sort();
+  const match = dbFps.length === ledgerFps.length && dbFps.every((fp, i) => fp === ledgerFps[i]);
+  return { ok: match, submitted_in_db: dbFps.length, legacy_unverified_in_ledger: ledgerFps.length, fingerprints_match: match };
 }
 
 // 拍板人手投登记（restart-apply S5 派遣第 4 项）. The user applied to these by
