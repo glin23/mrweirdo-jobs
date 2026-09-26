@@ -57,3 +57,17 @@ test('易混：Latin America / "Bangalore, IN" / "La Paz" / Venice, Italy 不是
   assert.equal(v({ location: 'Portland, OR' }).ok, true);
   assert.equal(v({ location: 'Remote - US or Canada' }).ok, true);
 });
+
+test('verify 第 13 轮：标题点名外国城市（Remote + London，结构化国家含 US）→ 拦；标题点名美国的照放', () => {
+  assert.equal(v({ title: 'Consumer Support Specialist - London', location: 'Remote', locations: ['Remote', 'London'], location_countries: ['United States'] }).ok, false);
+  assert.equal(v({ title: 'Consumer Support Specialist - US', location: 'Remote', locations: ['Remote', 'Seattle, WA'] }).ok, true);
+  assert.equal(v({ title: 'Workplace Operations - New York', location: 'New York' }).ok, true);
+});
+
+test('verify 第 13 轮 P4：US hours 不算美国；Tbilisi, Georgia 是外国；Vancouver, WA 是美国', () => {
+  assert.equal(v({ location: 'Remote (EU, overlap with US hours)' }).ok, false);
+  assert.equal(v({ location: 'Tbilisi, Georgia' }).ok, false);
+  assert.equal(v({ location: 'Vancouver, WA' }).ok, true);
+  assert.equal(v({ location: 'Atlanta, Georgia' }).ok, true);
+  assert.equal(v({ location: 'Bangalore, IN' }).ok, false);
+});

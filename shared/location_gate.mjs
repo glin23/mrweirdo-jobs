@@ -55,7 +55,7 @@ const FOREIGN = [
   'cologne', 'freiburg', 'stuttgart', 'paris', 'lyon', 'amsterdam', 'rotterdam', 'brussels', 'zurich', 'zürich', 'geneva', 'vienna',
   'stockholm', 'copenhagen', 'oslo', 'helsinki', 'warsaw', 'krakow', 'kraków', 'prague', 'budapest', 'bucharest', 'lisbon', 'porto',
   'madrid', 'barcelona', 'valencia', 'rome', 'milan', 'athens', 'istanbul', 'kyiv', 'kiev', 'tallinn', 'riga', 'vilnius', 'belgrade',
-  'almaty', 'astana', 'tel aviv', 'jerusalem', 'haifa', 'dubai', 'abu dhabi', 'riyadh', 'doha', 'cairo', 'lagos', 'nairobi',
+  'almaty', 'astana', 'tbilisi', 'batumi', 'yerevan', 'tel aviv', 'jerusalem', 'haifa', 'dubai', 'abu dhabi', 'riyadh', 'doha', 'cairo', 'lagos', 'nairobi',
   'cape town', 'johannesburg', 'bangalore', 'bengaluru', 'mumbai', 'delhi', 'new delhi', 'gurgaon', 'gurugram', 'noida', 'hyderabad',
   'pune', 'chennai', 'beijing', 'shanghai', 'shenzhen', 'hong kong', 'guangzhou', 'hangzhou', 'taipei', 'tokyo', 'osaka', 'seoul',
   'singapore', 'kuala lumpur', 'jakarta', 'manila', 'bangkok', 'ho chi minh', 'hanoi', 'sydney', 'melbourne', 'brisbane', 'perth',
@@ -71,6 +71,13 @@ const US_RE = wordsRe([...US_WORDS, ...US_STATES, ...US_CITIES]);
 // ", CA" after a city; case-sensitive, and only after foreign names were ruled
 // out ("Bangalore, IN" is India, not Indiana).
 const US_CODE_RE = new RegExp(`,\\s*(${US_STATE_CODES.join('|')})(?=$|[\\s,)])`);
+// ", WA" etc. that no country shares — "Vancouver, WA" is US; "Bangalore, IN" /
+// "Toronto, CA" are not decided by the code (IN = India, CA = Canada too).
+const US_CODE_UNAMBIGUOUS_RE = new RegExp(`,\\s*(${US_STATE_CODES.filter((c) => !['IN', 'CA', 'DE', 'GA', 'AL', 'AR', 'CO', 'ID', 'MA', 'MD', 'ME', 'MN', 'MT', 'NE', 'PA', 'SC', 'VA'].includes(c)).join('|')})\\s*$`);
+const US_STATE_RE = wordsRe(US_STATES);
+const US_NOT_STATE_RE = wordsRe([...US_WORDS, ...US_CITIES]);
+// "overlap with US hours" / "US time zones" says when, not where.
+const US_TIME_RE = /\b(u\.?s\.?|us)\s*(hours|business hours|time\s*zones?|timezones?)\b/gi;
 const CN_RE = wordsRe(CN_PLACES);
 const FOREIGN_RE = wordsRe(FOREIGN);
 const REMOTE_RE = wordsRe(REMOTE_WORDS);
@@ -78,8 +85,12 @@ const REMOTE_RE = wordsRe(REMOTE_WORDS);
 // One place → 'us' | 'cn' | 'foreign' | 'remote' | 'unknown'. A place naming both
 // a US place and a foreign one ("Remote - US or Canada") counts as US.
 export function classifyPlace(text) {
-  const t = String(text || '').trim();
+  const t = String(text || '').replace(US_TIME_RE, ' ').trim();
   if (!t) return 'unknown';
+  if (US_CODE_UNAMBIGUOUS_RE.test(t)) return 'us';
+  // A foreign city with only a US *state* name is the foreign one
+  // ("Tbilisi, Georgia"); a US city or "United States" still wins.
+  if (US_STATE_RE.test(t) && !US_NOT_STATE_RE.test(t) && FOREIGN_RE.test(t)) return 'foreign';
   if (US_RE.test(t)) return 'us';
   if (CN_RE.test(t)) return 'cn';
   if (FOREIGN_RE.test(t)) return 'foreign';
@@ -95,8 +106,22 @@ function classifyCountry(country) {
   return CN_RE.test(c) ? 'cn' : 'foreign';
 }
 
+// A place the title itself names ("Consumer Support Specialist - London",
+// "… (Berlin)"): the job is there, whatever the location fields add (verify
+// 第 13 轮: Remote + London with a US country slipped through).
+function titlePlace(title) {
+  const t = String(title || '');
+  const m = t.match(/(?:\s[-–—|]\s*|[([])([^-–—|()[\]]{2,40})[)\]]?\s*$/);
+  return m ? m[1].trim() : null;
+}
+
 export function locationVerdict(job = {}, intent = {}) {
   const geo = intent.geographic_preference || {};
+  const named = titlePlace(job.title);
+  const namedKind = named ? classifyPlace(named) : 'unknown';
+  if (namedKind === 'foreign' || (namedKind === 'cn' && !(geo.countries_open_to || []).map((c) => String(c).toUpperCase()).includes('CN'))) {
+    return { ok: false, reason: `location_mismatch:${named}` };
+  }
   const openTo = new Set((geo.countries_open_to || [geo.primary_country || 'US']).map((s) => String(s).toUpperCase()));
   const remoteOK = geo.remote_acceptable !== false;
   const places = [...new Set([job.location, ...(Array.isArray(job.locations) ? job.locations : [])].map((p) => String(p || '').trim()).filter(Boolean))];
