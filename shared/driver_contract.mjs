@@ -130,9 +130,14 @@ export function recordFill(answers, entry) {
 // Lever's pre-click needs_user / captcha_blocked exits are deliberately NOT
 // listed: the key has no ATS, and the same keys (e.g. needs_user:
 // cover_letter_required_not_generated) are emitted by greenhouse AFTER a click.
+//   not_submitted:submit_click_not_registered   ashby + greenhouse main(): Submit
+//     WAS clicked (twice), but no request followed either click and the page
+//     stayed put — the page never received it, nothing left the browser
+//     (真投 2026-09-27, BUG_REPORT 第 2 章). Emitted without a page verdict.
 // A driver adding a pre-click exit must add its row here plus a test; a
 // missing row costs one retry, never a re-application.
 export const PRE_SUBMIT_EXITS = new Set([
+  'not_submitted:submit_click_not_registered',
   'crashed:ashby_form_not_loaded',
   'crashed:resume_upload_failed',
   'not_submitted:job_unavailable',

@@ -52,6 +52,14 @@ async function evalInTab(tab, js) {
 }
 // emitOutcome is the driver's ONLY exit (ADR-15). Under test it validates via
 // the real contract, records, and throws instead of process.exit-ing.
+import { writeFileSync as __writeFileSync } from 'node:fs';
+function captureEvidence(tab, opts) {
+  return __real_captureEvidence(tab, opts, async (...args) => {
+    (globalThis.__MRW_EVIDENCE ||= []).push({ args, opts });
+    if (args[0] === 'screenshot') __writeFileSync(args[2], 'png-under-test');
+    return '';
+  });
+}
 import { validateOutcome as __validateOutcome } from '${SHARED}/driver_contract.mjs';
 function emitOutcome(obj) {
   __validateOutcome(obj);
@@ -96,6 +104,12 @@ export async function loadDriver(profile, opts = {}) {
   }
   // The shipped emitOutcome import would collide with the stub declaration; the
   // stub validates through the same real contract module, so nothing is faked.
+  // Evidence goes through the REAL captureEvidence (naming, verdict check, lock);
+  // only its screenshot call — the browser boundary — is stubbed: it writes a
+  // placeholder file and records the call on __MRW_EVIDENCE.
+  const EVIDENCE_IMPORT = 'import { submissionVerdict, captureEvidence, isSpamFlagged } from';
+  assert.ok(src.includes(EVIDENCE_IMPORT), 'harness stale: submission_evidence import not found in the driver');
+  src = src.replace(EVIDENCE_IMPORT, 'import { submissionVerdict, captureEvidence as __real_captureEvidence, isSpamFlagged } from');
   const CONTRACT_IMPORT = "import { emitOutcome, recordFill } from";
   assert.ok(src.includes(CONTRACT_IMPORT), 'harness stale: driver_contract import not found in the driver');
   src = src.replace(CONTRACT_IMPORT, "import { emitOutcome as __shipped_emitOutcome, recordFill } from");

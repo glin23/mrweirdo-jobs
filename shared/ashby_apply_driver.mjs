@@ -42,6 +42,7 @@ import {
 import { matchAnswerBucket } from './answer_buckets.mjs';
 import { submissionVerdict, captureEvidence, isSpamFlagged } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
+import { uploadSettled, clickReceived, pageCall } from './page_signals.mjs';
 import { dbPath } from './local_db.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -338,8 +339,36 @@ async function waitForAshbyForm(tab, timeoutMs = 25000) {
   return { ok: false, note: 'ashby_form_not_loaded', state: last };
 }
 
+// ---------- step: wait until an upload has really finished ----------
+// 真投 2026-09-27 (BUG_REPORT 第 2 章): a click made while the resume upload was
+// still in flight was dropped by Ashby without a trace. Before anything else is
+// clicked, the upload must be observably done (page_signals.uploadSettled).
+// Not confirmed within the window = the upload did not happen as far as we can
+// tell: the caller fails loudly, it does not click and hope.
+const UPLOAD_SETTLE_POLLS = 30; // × 1s
+
+async function uploadMark(tab) {
+  const m = await evalInTab(tab, '/*mrw_upload_mark*/ ({ since: performance.now() })');
+  return typeof m?.since === 'number' ? m.since : null;
+}
+
+async function waitUploadSettled(tab, since) {
+  let prev = -1;
+  let last = null;
+  for (let poll = 1; poll <= UPLOAD_SETTLE_POLLS; poll += 1) {
+    await sleep(1000);
+    last = await evalInTab(tab, pageCall(uploadSettled, since, prev));
+    if (last?.settled === true) return { ok: true, polls: poll, last };
+    if (last?.settled === null) break; // resource list full: cannot be confirmed
+    prev = typeof last?.count === 'number' ? last.count : -1;
+  }
+  return { ok: false, last };
+}
+
 // ---------- step: upload resume + dispatch React change ----------
 async function uploadResume(tab) {
+  const since = await uploadMark(tab);
+  if (since === null) return { ok: false, note: 'upload_mark_unreadable' };
   const u = cdp('upload', tab, '#_systemfield_resume', RESUME);
   if (!u.stdout.includes('"ok":true')) {
     return { ok: false, note: 'upload_failed', detail: u.stdout || u.stderr || `exit_code=${u.code}` };
@@ -359,7 +388,10 @@ async function uploadResume(tab) {
       return { ok: r.files.length > 0, files: r.files.length, name: r.files[0]?.name };
     })()
   `);
-  return r;
+  if (!r?.ok) return r;
+  const settled = await waitUploadSettled(tab, since);
+  if (!settled.ok) return { ok: false, note: 'resume_upload_not_confirmed', attached: r, upload: settled.last };
+  return { ...r, upload_polls: settled.polls };
 }
 
 async function uploadCoverLetter(tab, missingLabel = '') {
@@ -400,8 +432,12 @@ async function uploadCoverLetter(tab, missingLabel = '') {
     })()
   `);
   if (!found.ok) return { ok: false, note: 'cover_letter_input_not_found', manual_required: true, detail: found, question: missingLabel };
+  const since = await uploadMark(tab);
+  if (since === null) return { ok: false, note: 'upload_mark_unreadable', manual_required: true, question: missingLabel };
   const upload = cdp('upload', tab, found.sel, COVER_LETTER);
   if (!upload.stdout.includes('"ok":true')) return { ok: false, note: 'cover_letter_upload_failed', manual_required: true, detail: upload.stdout || upload.stderr, question: missingLabel };
+  const settled = await waitUploadSettled(tab, since);
+  if (!settled.ok) return { ok: false, note: 'cover_letter_upload_not_confirmed', manual_required: true, detail: settled.last, question: missingLabel };
   coverLetterUploaded = true;
   return { ok: true, mode: 'cover_letter_upload', value: COVER_LETTER, selector: found.sel };
 }
@@ -431,16 +467,28 @@ async function fillStandard(tab) {
 }
 
 // ---------- step: submit + read errors ----------
+// The click and its time mark are taken in one eval, so clickReceived can later
+// tell whether ANY request followed this click (page_signals.mjs).
 async function submitAndCheck(tab) {
-  await evalInTab(tab, `
+  const click = await evalInTab(tab, `
     (() => {
       const btn = [...document.querySelectorAll("button")].find(b => /submit/i.test(b.innerText));
-      if (btn) btn.click();
-      return !!btn;
+      if (!btn) return { ok: false, note: 'no_submit_btn' };
+      const mark = { t: performance.now(), origin: performance.timeOrigin };
+      btn.click();
+      return { ok: true, mark };
     })()
   `);
+  if (!click?.ok || !click.mark) return { clicked: false, click };
   await sleep(7000);
-  return readSubmitPage(tab);
+  return { clicked: true, mark: click.mark, ...(await readSubmitPage(tab)) };
+}
+
+// Full-page evidence for a terminal outcome (DESIGN §13.7). A failed shot is
+// logged and the outcome still goes out — the outcome is the record; evidence
+// that silently did not happen is visible as evidence: null.
+async function pageEvidence(tab, phase, verdict) {
+  return captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase, verdict }).catch((e) => { log('evidence capture failed:', e.message); return null; });
 }
 
 // Reads the page after a submit click — never clicks.
@@ -1077,26 +1125,50 @@ async function main() {
   log('Upload resume…');
   const u = await uploadResume(tab);
   if (!u.ok) {
+    const ev = await pageEvidence(tab, 'before_submit');
     await closeTab(tab);
-    emitOutcome({ outcome: 'crashed', reason: 'resume_upload_failed', detail: u, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
+    emitOutcome({ outcome: 'crashed', reason: 'resume_upload_failed', detail: u, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
   }
 
   log('Fill name/email…');
   await fillStandard(tab);
 
   let lastMissing = [];
+  let lastVerdict = 'unknown';
   let pendingForMainClaude = [];
+  let reclicked = false;
+  // One submit click, then read. No required-field errors and nothing readable:
+  // the page may still be settling — re-READ it, never click again on a form the
+  // page answered (首次真投 2026-09-26: a second click on Tavus met the spam
+  // banner; a blind re-click can also send a duplicate). Still silent: ask the
+  // page whether the click was received at all.
+  const submitOnce = async (attempt) => {
+    const sent = await submitAndCheck(tab);
+    if (!sent.clicked) {
+      const ev = await pageEvidence(tab, attempt === 1 ? 'before_submit' : 'after_submit', 'unknown');
+      emitOutcome({ outcome: 'crashed', reason: 'submit_button_not_found', detail: sent.click, attempt, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+    }
+    let page = sent;
+    for (let look = 0; page.missing.length === 0 && page.verdict.verdict === 'unknown' && look < 4; look += 1) {
+      await sleep(3000);
+      page = await readSubmitPage(tab);
+    }
+    const silent = page.missing.length === 0 && page.verdict.verdict === 'unknown';
+    const received = silent ? await evalInTab(tab, pageCall(clickReceived, sent.mark)) : { registered: true, via: 'page_answered' };
+    return { ...page, received };
+  };
   for (let attempt = 1; attempt <= 5; attempt++) {
     log(`Submit attempt ${attempt}…`);
-    let res = await submitAndCheck(tab);
-    // No required-field errors and nothing readable yet: the page may still be
-    // settling. Re-READ it — never click Submit again on a form the page did
-    // not reject (首次真投 2026-09-26: a second click on Tavus met the spam
-    // banner; a blind re-click can also send a duplicate).
-    for (let look = 0; res.missing.length === 0 && res.verdict.verdict === 'unknown' && look < 4; look += 1) {
-      await sleep(3000);
-      res = await readSubmitPage(tab);
+    let res = await submitOnce(attempt);
+    // Nothing followed the click: the page never got it and nothing was sent,
+    // so one more click cannot duplicate anything (BUG_REPORT 第 2 章). Once per
+    // run. Only an explicit `false` counts — `null` (cannot tell) never does.
+    if (res.received?.registered === false && !reclicked) {
+      reclicked = true;
+      log('  the page did not receive the submit click (no request after it) — clicking once more');
+      res = await submitOnce(attempt);
     }
+    lastVerdict = res.verdict.verdict;
     if (isSpamFlagged(res.verdict)) {
       // The platform's anti-spam check refused it and the page says so: terminal.
       // Nothing is changed to get past the check; no retry.
@@ -1120,8 +1192,17 @@ async function main() {
         await closeTab(tab);
         emitOutcome({ outcome: 'not_submitted', reason: 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
       }
-      // Still unreadable after re-reading: say so; do not submit again.
-      emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, snippet: res.snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
+      if (res.received?.registered === false) {
+        // Clicked twice, no request either time: nothing reached the company.
+        // No page verdict is attached — the page was never asked (driver_contract
+        // PRE_SUBMIT_EXITS: not an attempt, the row may be tried again).
+        const ev = await pageEvidence(tab, 'after_submit', 'not_submitted');
+        await closeTab(tab);
+        emitOutcome({ outcome: 'not_submitted', reason: 'submit_click_not_registered', detail: res.received, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
+      }
+      // Received but still unreadable after re-reading: say so; do not submit again.
+      const ev = await pageEvidence(tab, 'after_submit', 'unknown');
+      emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, received: res.received, snippet: res.snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }
     if (JSON.stringify(res.missing) === JSON.stringify(lastMissing)) {
       // Same errors as last round — we're stuck. If pending essays exist, surface them for main agent.
@@ -1132,19 +1213,22 @@ async function main() {
           still_missing: res.missing, company: COMPANY, url: APPLY_URL, answers: ANSWERS,
           hint: 'main agent: write answer for each pending question, then call: node cdp.mjs typetext <tab> <sel> "<answer>", then re-run this driver to retry submit',
         };
+        rec.evidence = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
         logEssayPending(rec);
         emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
       }
+      const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
       await closeTab(tab);
-      emitOutcome({ outcome: 'needs_user', reason: 'stuck_on_same_missing', missing: res.missing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
+      emitOutcome({ outcome: 'needs_user', reason: 'stuck_on_same_missing', missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }
     lastMissing = res.missing;
     for (const m of res.missing) {
       const a = await answerMissing(tab, m);
       if (a?.ok) recordFill(ANSWERS, { label: m, value: a.value ?? a.picked ?? '', source: a.source || 'derived', widget: a.mode || 'unknown' });
       if (a?.manual_required) {
+        const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
         await closeTab(tab);
-        emitOutcome({ outcome: 'needs_user', reason: a.note || 'manual_required', detail: a, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
+        emitOutcome({ outcome: 'needs_user', reason: a.note || 'manual_required', detail: a, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
       }
       if (a?.pending_for_main_claude) {
         // Try to locate the field to give main agent a CSS selector
@@ -1177,11 +1261,13 @@ async function main() {
       pending: dedupePendingQuestions(pendingForMainClaude),
       still_missing: lastMissing, company: COMPANY, url: APPLY_URL, answers: ANSWERS,
     };
+    rec.evidence = await pageEvidence(tab, 'after_submit', lastVerdict);
     logEssayPending(rec);
     emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
   }
+  const ev = await pageEvidence(tab, 'after_submit', lastVerdict);
   await closeTab(tab);
-  emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
+  emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
 }
 
 main().catch(async (e) => {

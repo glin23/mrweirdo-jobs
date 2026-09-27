@@ -60,10 +60,19 @@ function clearStubs() {
 const ASHBY_PAGE = (bodyText, { missing = [], url = 'https://jobs.ashbyhq.com/testco/x' } = {}) =>
   ({ bodyText, missing, error_count: missing.length, url, snippet: bodyText.slice(0, 200) });
 
+// The page-side signals added for 真投 2026-09-27 (upload settled, click
+// received) answer "yes" here; their "no" paths are covered in
+// test/submit_click_received.test.mjs. A test that counts clicks puts its own
+// 'btn.click()' rule FIRST (first match wins).
+const CLICK_OK = { ok: true, mark: { t: 0, origin: 0 } };
 const ashbyBaseRules = () => ([
   { match: 'has_resume', result: { ready: 'complete', has_resume: true, input_count: 9, url: 'x', title: 't', body_text: '' } },
+  { match: 'mrw_upload_mark', result: { since: 0 } },
   { match: 'react_unmounted', result: { ok: true, files: 1, name: 'resume.pdf' } },
+  { match: 'function uploadSettled', result: { settled: true, why: 'quiet', count: 3 } },
   { match: 'mrw_phone_temp', result: { found: false } },
+  { match: 'btn.click()', result: CLICK_OK },
+  { match: 'function clickReceived', result: { registered: true, via: 'request_after_click' } },
 ]);
 
 test('Ashby 出货 main()：真成功 → submitted / exit 0，verdict 与 answers 同行', async () => {
@@ -167,13 +176,13 @@ test('Ashby 出货 main()：读不懂的页面 → unknown（绝不默认成功�
 // 反垃圾拦截 = 终局：记 not_submitted / platform_spam_flagged，不重点提交。不为绕过做任何事。
 function clickCounter() {
   const counter = { n: 0 };
-  return { counter, rule: { match: 'btn.click()', result: () => { counter.n += 1; return true; } } };
+  return { counter, rule: { match: 'btn.click()', result: () => { counter.n += 1; return CLICK_OK; } } };
 }
 
 test('Ashby 出货 main()：反垃圾拦截横幅 → not_submitted / platform_spam_flagged，只点过一次提交', async () => {
   const driver = await loadAshby(ASHBY_BASE);
   const { counter, rule } = clickCounter();
-  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: ASHBY_PAGE(fixture('deny_tavus_spam_flagged.txt')) }]);
+  setEvalRules([rule, ...ashbyBaseRules(), { match: 'error_count', result: ASHBY_PAGE(fixture('deny_tavus_spam_flagged.txt')) }]);
   try {
     const emitted = await runToEmit(driver.main);
     assert.equal(emitted.outcome, 'not_submitted');
@@ -188,7 +197,7 @@ test('Ashby 出货 main()：提交后页面先是空白、稍后才出反垃圾�
   const driver = await loadAshby(ASHBY_BASE);
   const { counter, rule } = clickCounter();
   let reads = 0;
-  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: () => ASHBY_PAGE(reads++ === 0 ? 'Application' : fixture('deny_tavus_spam_flagged.txt')) }]);
+  setEvalRules([rule, ...ashbyBaseRules(), { match: 'error_count', result: () => ASHBY_PAGE(reads++ === 0 ? 'Application' : fixture('deny_tavus_spam_flagged.txt')) }]);
   try {
     const emitted = await runToEmit(driver.main);
     assert.equal(emitted.reason, 'platform_spam_flagged');
@@ -201,7 +210,7 @@ test('Ashby 出货 main()：提交后页面先是空白、稍后才出反垃圾�
 test('Ashby 出货 main()：没有缺字段、页面一直读不懂 → unknown，全程只点一次提交（不盲目重交）', async () => {
   const driver = await loadAshby(ASHBY_BASE);
   const { counter, rule } = clickCounter();
-  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: ASHBY_PAGE('nothing recognizable on this page') }]);
+  setEvalRules([rule, ...ashbyBaseRules(), { match: 'error_count', result: ASHBY_PAGE('nothing recognizable on this page') }]);
   try {
     const emitted = await runToEmit(driver.main);
     assert.equal(emitted.outcome, 'unknown');
@@ -236,10 +245,12 @@ test('Ashby 出货 main()：答得上但换着法子缺字段 → 步数超限 r
 // ----------------------------------------------------------- Greenhouse -----
 
 const ghBaseRules = () => ([
+  { match: 'function clickReceived', result: { registered: true, via: 'request_after_click' } },
   { match: 'has_file_input', result: { url: 'https://job-boards.greenhouse.io/testco/jobs/1', has_file_input: true, has_submit: true, has_form: true, body_snippet: '' } },
   { match: 'grnhse_iframe', result: { ok: false } },
   { match: 'dispatched: true', result: { dispatched: true, files: 1, name: 'resume.pdf' } },
   { match: 'has_resume_text', result: { has_resume_text: true, has_replace_btn: true } },
+  { match: 'btn.click()', result: { ok: true, text: 'Submit application', mark: { t: 0, origin: 0 } } },
 ]);
 
 const GH_PAGE = (bodyText, { missing = [], url = 'https://job-boards.greenhouse.io/testco/jobs/1' } = {}) =>
@@ -271,8 +282,8 @@ test('Greenhouse 出货 main()：没有缺字段、页面一直读不懂 → unk
   const { main } = await loadGreenhouse(GH_BASE);
   let clicks = 0;
   setEvalRules([
+    { match: 'btn.click()', result: () => { clicks += 1; return { ok: true, text: 'Submit application', mark: { t: 0, origin: 0 } }; } },
     ...ghBaseRules(),
-    { match: 'btn.click()', result: () => { clicks += 1; return { ok: true, text: 'Submit application' }; } },
     { match: 'helper-text--error', result: GH_PAGE('nothing recognizable on this page') },
   ]);
   globalThis.__MRW_FILLS = [];
@@ -291,8 +302,8 @@ test('Greenhouse 出货 main()：先空白、再出确认页 → submitted，只
   let clicks = 0;
   let reads = 0;
   setEvalRules([
+    { match: 'btn.click()', result: () => { clicks += 1; return { ok: true, text: 'Submit application', mark: { t: 0, origin: 0 } }; } },
     ...ghBaseRules(),
-    { match: 'btn.click()', result: () => { clicks += 1; return { ok: true, text: 'Submit application' }; } },
     { match: 'helper-text--error', result: () => (reads++ === 0 ? GH_PAGE('Application') : GH_PAGE(fixture('confirm_greenhouse_thank_you.txt'), { url: 'https://job-boards.greenhouse.io/testco/confirmation' })) },
   ]);
   globalThis.__MRW_FILLS = [];
@@ -311,7 +322,7 @@ test('Ashby 出货 main()：成功 + spam 双命中 → 不记 platform_spam_fla
   const driver = await loadAshby(ASHBY_BASE);
   const { counter, rule } = clickCounter();
   const both = `${fixture('confirm_ashby_success.txt')}\n${fixture('deny_tavus_spam_flagged.txt')}`;
-  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: ASHBY_PAGE(both) }]);
+  setEvalRules([rule, ...ashbyBaseRules(), { match: 'error_count', result: ASHBY_PAGE(both) }]);
   try {
     const emitted = await runToEmit(driver.main);
     assert.notEqual(emitted.reason, 'platform_spam_flagged');
