@@ -13,10 +13,11 @@
 //   5. Read validation errors. For each "Missing entry for required field: X",
 //      match a keyword bucket (work-auth, RTO, gender, race, veteran, disability,
 //      sponsorship, location combobox, LinkedIn) → answer from profile.
-//   6. Click Submit again. Up to 5 attempts.
+//   6. Click Submit again — ONCE, and only if every listed field was answered.
+//      Never a third click (verify 第 20-21 轮: re-clicks risk duplicates).
 //   7. Submit result judged NODE-SIDE by submissionVerdict (shared/submission_evidence.mjs, the single implementation) — no default success; a deny hit can never become 'submitted'.
 //   8. Final result leaves ONLY through emitOutcome (driver_contract.mjs, ADR-15 统一退出契约):
-//      submitted 0 / crashed 1 / needs_user·not_submitted·unknown 2 / rate_limited 4.
+//      submitted 0 / crashed 1 / needs_user·not_submitted·unknown 2.
 //   9. On essay-pending → {outcome:'needs_user', reason:'essay_pending'}, KEEP tab open.
 //
 // Notes for the new maintainer:
@@ -1240,8 +1241,6 @@ async function main() {
   log('Fill name/email…');
   await fillStandard(tab);
 
-  let lastMissing = [];
-  let lastVerdict = 'unknown';
   let pendingForMainClaude = [];
   // One submit click, then read. No required-field errors and nothing readable:
   // the page may still be settling — re-READ it, never click again on a form the
@@ -1273,10 +1272,74 @@ async function main() {
     const received = silent ? clickVerdict(sent.watch, await evalInTab(tab, pageCall(clickReceived, sent.mark))) : { registered: true, via: 'page_answered' };
     return { ...page, received };
   };
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  // Fields this run has answered (normalized labels) — the only evidence that a
+  // page listing "missing" fields after a resubmit is a real rejection and not
+  // the previous round's errors still on screen (verify 第 21 轮).
+  const filled = new Set();
+  const normLabel = (l) => String(l || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // Answers every listed field; never clicks. True when all were answered.
+  const answerAll = async (res) => {
+    let allOk = true;
+    for (const m of res.missing) {
+      const a = await answerMissing(tab, m);
+      if (a?.ok) {
+        filled.add(normLabel(m));
+        recordFill(ANSWERS, { label: m, value: a.value ?? a.picked ?? '', source: a.source || 'derived', widget: a.mode || 'unknown' });
+      } else {
+        allOk = false;
+      }
+      if (a?.manual_required) {
+        const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
+        await closeTab(tab);
+        emitOutcome({ outcome: 'needs_user', reason: a.note || 'manual_required', detail: a, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+      }
+      if (a?.pending_for_main_claude) {
+        // Try to locate the field to give main agent a CSS selector
+        const sel = await evalInTab(tab, `
+          (() => {
+            const targetQ = ${JSON.stringify(m.toLowerCase().slice(0, 40))};
+            const cands = [...document.querySelectorAll("textarea, input[type=text]")].filter(el => el.offsetParent !== null);
+            for (const inp of cands) {
+              const wrap = inp.closest("fieldset, div");
+              const txt = wrap ? (wrap.innerText || '').toLowerCase() : '';
+              if (txt.includes(targetQ)) {
+                if (!inp.id) inp.id = 'mrw_pending_' + Math.random().toString(36).slice(2,8);
+                const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id;
+                return { sel, tag: inp.tagName.toLowerCase() };
+              }
+            }
+            return null;
+          })()
+        `);
+        addPendingQuestion(pendingForMainClaude, { question: m, selector: sel?.sel || null, tag: sel?.tag || null, note: a.note || null }); // no text box (dropdown/radio) still gets asked
+      }
+      log('  answer', m.slice(0, 50), '→', JSON.stringify(a).slice(0, 100));
+    }
+    return allOk;
+  };
+  // The page listed fields we could not (all) fill: it rejected the form and
+  // nothing was sent. Stop here — a resubmit would only re-list the gap.
+  const stopUnanswered = async (res) => {
+    const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
+    if (pendingForMainClaude.length > 0) {
+      const rec = {
+        outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID,
+        pending: dedupePendingQuestions(pendingForMainClaude),
+        still_missing: res.missing, company: COMPANY, url: APPLY_URL, evidence: ev, answers: ANSWERS,
+        hint: 'main agent: open-text questions → draft under shared/references/truthfulness.md and store with node shared/agent_drafts.mjs add --url <url> --question "<question>" --answer "<draft>" (the next run types it); facts → ask the user and record with shared/record_profile_answers.mjs',
+      };
+      logEssayPending(rec);
+      emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
+    }
+    await closeTab(tab);
+    emitOutcome({ outcome: 'needs_user', reason: 'stuck_on_same_missing', missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+  };
+  // At most two clicks (lead 裁决, verify 第 21 轮): the first, and one resubmit
+  // only after the page explicitly listed missing fields AND every one of them
+  // was answered.
+  for (let attempt = 1; attempt <= 2; attempt++) {
     log(`Submit attempt ${attempt}…`);
-    let res = await submitOnce(attempt);
-    lastVerdict = res.verdict.verdict;
+    const res = await submitOnce(attempt);
     if (isSpamFlagged(res.verdict)) {
       // The platform's anti-spam check refused it and the page says so: terminal.
       // Nothing is changed to get past the check; no retry.
@@ -1307,70 +1370,19 @@ async function main() {
       const ev = await pageEvidence(tab, 'after_submit', 'unknown');
       emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, received: res.received, snippet: res.snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }
-    if (JSON.stringify(res.missing) === JSON.stringify(lastMissing)) {
-      // Same errors as last round — we're stuck. If pending essays exist, surface them for main agent.
-      if (pendingForMainClaude.length > 0) {
-        const rec = {
-          outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID,
-          pending: dedupePendingQuestions(pendingForMainClaude),
-          still_missing: res.missing, company: COMPANY, url: APPLY_URL, answers: ANSWERS,
-          hint: 'main agent: open-text questions → draft under shared/references/truthfulness.md and store with node shared/agent_drafts.mjs add --url <url> --question "<question>" --answer "<draft>" (the next run types it); facts → ask the user and record with shared/record_profile_answers.mjs',
-        };
-        rec.evidence = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
-        logEssayPending(rec);
-        emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
-      }
-      const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
-      await closeTab(tab);
-      emitOutcome({ outcome: 'needs_user', reason: 'stuck_on_same_missing', missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+    if (attempt === 2 && res.missing.every((m) => filled.has(normLabel(m)))) {
+      // Every field still listed is one we answered before this click: either
+      // the page rejected our answers again, or the resubmit is still in flight
+      // and the previous errors are still on screen. Cannot tell → may have
+      // submitted; never clicked a third time.
+      const ev = await pageEvidence(tab, 'after_submit', 'unknown');
+      emitOutcome({ outcome: 'unknown', reason: 'resubmit_page_lists_only_answered_fields', verdict: res.verdict, stale_missing: res.missing, received: res.received, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }
-    lastMissing = res.missing;
-    for (const m of res.missing) {
-      const a = await answerMissing(tab, m);
-      if (a?.ok) recordFill(ANSWERS, { label: m, value: a.value ?? a.picked ?? '', source: a.source || 'derived', widget: a.mode || 'unknown' });
-      if (a?.manual_required) {
-        const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
-        await closeTab(tab);
-        emitOutcome({ outcome: 'needs_user', reason: a.note || 'manual_required', detail: a, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
-      }
-      if (a?.pending_for_main_claude) {
-        // Try to locate the field to give main agent a CSS selector
-        const sel = await evalInTab(tab, `
-          (() => {
-            const targetQ = ${JSON.stringify(m.toLowerCase().slice(0, 40))};
-            const cands = [...document.querySelectorAll("textarea, input[type=text]")].filter(el => el.offsetParent !== null);
-            for (const inp of cands) {
-              const wrap = inp.closest("fieldset, div");
-              const txt = wrap ? (wrap.innerText || '').toLowerCase() : '';
-              if (txt.includes(targetQ)) {
-                if (!inp.id) inp.id = 'mrw_pending_' + Math.random().toString(36).slice(2,8);
-                const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id;
-                return { sel, tag: inp.tagName.toLowerCase() };
-              }
-            }
-            return null;
-          })()
-        `);
-        addPendingQuestion(pendingForMainClaude, { question: m, selector: sel?.sel || null, tag: sel?.tag || null, note: a.note || null }); // no text box (dropdown/radio) still gets asked
-      }
-      log('  answer', m.slice(0, 50), '→', JSON.stringify(a).slice(0, 100));
-    }
+    const allAnswered = await answerAll(res);
+    if (attempt === 2 || !allAnswered) await stopUnanswered(res);
     await sleep(1200);
   }
-  // Hit max attempts. If pending essays exist, surface them for main agent.
-  if (pendingForMainClaude.length > 0) {
-    const rec = {
-      outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID,
-      pending: dedupePendingQuestions(pendingForMainClaude),
-      still_missing: lastMissing, company: COMPANY, url: APPLY_URL, answers: ANSWERS,
-    };
-    rec.evidence = await pageEvidence(tab, 'after_submit', lastVerdict);
-    logEssayPending(rec);
-    emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
-  }
-  const ev = await pageEvidence(tab, 'after_submit', lastVerdict);
-  await closeTab(tab);
-  emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+  throw new Error('submit loop ended without an outcome'); // unreachable: each branch above emits
 }
 
 // A crash after a submit click is exactly the case a screenshot is for.

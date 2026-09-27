@@ -224,7 +224,7 @@ for (const [name, load, rig] of [
     const pageRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'error_count' || r.match === 'helper-text--error');
     pageRule.result = name === 'Ashby'
       ? { bodyText: 'errors', missing: ['LinkedIn Profile'], error_count: 1, url: 'https://jobs.ashbyhq.com/testco/x', snippet: '' }
-      : { bodyText: 'errors', missing: ['LinkedIn Profile'], url: 'https://job-boards.greenhouse.io/testco/jobs/1', body_snippet: '' };
+      : { bodyText: 'errors', missing: ['Gender'], url: 'https://job-boards.greenhouse.io/testco/jobs/1', body_snippet: '' };
     globalThis.__MRW_EVAL_RULES.unshift({ match: 'label_for', result: { ok: true, sel: '#li', via: 'label_for' } });
     const clickRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'btn.click()');
     let n = 0;
@@ -318,3 +318,104 @@ test('守卫（源码）：驱动里不再有「再点一次」的分支与 subm
     assert.ok(!/submit_click_not_registered/.test(src), `${f} still knows submit_click_not_registered`);
   }
 });
+
+// ------------------------------------------------ verify 第 21 轮 / lead 裁决 ----
+// 补字段再提交：服务端慢于 7 秒时页面残留上一轮的缺字段报错，看起来像「又被拒了」，其实第 2 次
+// 可能已经交上去了。规则：第 2 次提交之后，页面所列缺字段全是本轮已经补过的 → 判不出 → unknown
+// （算可能投过）、截图、停；有从没填过的新字段 → 页面确实拒了 → needs_user，也停。
+// 总点击 ≤ 2，第 2 次只在第 1 次被页面明确列出缺字段、且全部补上之后。
+// Fields each driver answers from BASE under its harness (Greenhouse's stub
+// renders custom questions as dropdowns, so it gets dropdown-shaped questions).
+const FIELDS = { Ashby: ['LinkedIn Profile', 'Website'], Greenhouse: ['Gender', 'Veteran status'] };
+const NEW = 'Favorite color zz9';
+
+function scripted(name, pagesFor) {
+  const [A, B] = FIELDS[name];
+  const pages = pagesFor(A, B);
+  // pages[i] = missing list the page shows after click i+1 (sticky on the last).
+  const rig = name === 'Ashby' ? ashbyRig : ghRig;
+  let clicks = 0;
+  const pageFor = (missing) => (name === 'Ashby'
+    ? { bodyText: 'Application', missing, error_count: missing.length, url: 'https://jobs.ashbyhq.com/testco/x', snippet: '' }
+    : { bodyText: 'Application', missing, url: 'https://job-boards.greenhouse.io/testco/jobs/1', body_snippet: '' });
+  rig({ page: () => pageFor(pages[Math.min(clicks, pages.length) - 1] || []) });
+  globalThis.__MRW_EVAL_RULES.unshift({ match: 'label_for', result: { ok: true, sel: '#f', via: 'label_for' } });
+  const clickRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'btn.click()');
+  const orig = clickRule.result;
+  clickRule.result = () => { clicks += 1; return orig(); };
+  return () => clicks;
+}
+
+for (const [name, load] of [['Ashby', () => loadAshby(ASHBY_BASE)], ['Greenhouse', () => loadGreenhouse(GH_BASE)]]) {
+  test(`第 21 轮（${name}）：慢服务端、页面原样残留已补过的缺字段 → unknown，算可能投过，点 2 次不点第 3 次`, async () => {
+    const d = await load();
+    const clicks = scripted(name, (A) => [[A], [A]]);
+    try {
+      const out = await runToEmit(d.main);
+      assert.equal(clicks(), 2);
+      assert.equal(out.outcome, 'unknown', JSON.stringify(out).slice(0, 300));
+      assert.equal(deriveMayHaveSubmitted(out), true);
+      assert.ok(out.evidence?.path && existsSync(out.evidence.path));
+    } finally {
+      reset();
+    }
+  });
+
+  test(`第 21 轮（${name}）：部分残留（两项补完、页面还挂一项）→ unknown，不点第 3 次`, async () => {
+    const d = await load();
+    const clicks = scripted(name, (A, B) => [[A, B], [A]]);
+    try {
+      const out = await runToEmit(d.main);
+      assert.equal(clicks(), 2, 'a third click after a partly stale page is the duplicate verify saw');
+      assert.equal(out.outcome, 'unknown');
+      assert.equal(deriveMayHaveSubmitted(out), true);
+    } finally {
+      reset();
+    }
+  });
+
+  test(`第 21 轮（${name}）：再提交后页面报出从没填过的新字段 → 页面确实拒了：needs_user、不算投过，不点第 3 次`, async () => {
+    const d = await load();
+    const clicks = scripted(name, (A) => [[A], [A, NEW]]);
+    try {
+      const out = await runToEmit(d.main);
+      assert.equal(clicks(), 2);
+      assert.equal(out.outcome, 'needs_user');
+      assert.equal(deriveMayHaveSubmitted(out), false);
+      assert.ok(out.evidence?.path && existsSync(out.evidence.path));
+    } finally {
+      reset();
+    }
+  });
+
+  test(`第 21 轮（${name}）：第 1 次被拒且有补不上的字段 → 直接 needs_user，不点第 2 次`, async () => {
+    const d = await load();
+    const clicks = scripted(name, (A) => [[A, NEW]]);
+    try {
+      const out = await runToEmit(d.main);
+      assert.equal(clicks(), 1, 'resubmitting a form we could not complete only re-lists the gap');
+      assert.equal(out.outcome, 'needs_user');
+      assert.equal(deriveMayHaveSubmitted(out), false);
+    } finally {
+      reset();
+    }
+  });
+
+  test(`第 21 轮守卫（${name}）：任何缺字段序列下总点击 ≤ 2`, async () => {
+    const [A, B] = FIELDS[name];
+    for (const pages of [[[A], [B]], [[A], [NEW]], [[A], [A]], [[A, B], [B]], [[A], [], []], [[A], [NEW], [NEW]], [[A, B], [A, B], [A]]]) {
+      const d = await load();
+      const clicks = scripted(name, () => pages);
+      try {
+        const out = await runToEmit(d.main);
+        assert.ok(clicks() <= 2, `${JSON.stringify(pages)}: ${clicks()} clicks`);
+        // "Not submitted" after the resubmit is only allowed when the page lists
+        // a field that was not answered before that click.
+        if (clicks() === 2 && out.outcome === 'needs_user') assert.ok((out.missing || out.still_missing || []).some((m) => !pages[0].includes(m)), `${JSON.stringify(pages)}: not-submitted after a resubmit needs a never-filled field`);
+        if (clicks() === 2 && pages[1] && pages[1].length && pages[1].every((m) => pages[0].includes(m))) assert.equal(out.outcome, 'unknown', JSON.stringify(pages));
+      } finally {
+        reset();
+      }
+    }
+  });
+}

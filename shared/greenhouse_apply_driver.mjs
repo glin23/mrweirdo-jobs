@@ -1839,8 +1839,6 @@ async function main() {
     await sleep(500);
   }
 
-  let lastMissing = [];
-  let lastVerdict = 'unknown';
   let pendingForMainClaude = [];
   let unanswerable = [];
   // One click, then read. No required-field errors and nothing readable yet:
@@ -1873,51 +1871,20 @@ async function main() {
     const received = silent ? clickVerdict(sent.watch, await evalInTab(tab, pageCall(clickReceived, sent.mark))) : { registered: true, via: 'page_answered' };
     return { ...page, received };
   };
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    await clickVisibleConsentCheckboxes(tab);
-    log(`Submit attempt ${attempt}…`);
-    let res = await submitOnce(attempt);
-    lastVerdict = res.verdict.verdict;
-    if (res.verdict.verdict === 'submitted') {
-      const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'submitted' }).catch((e) => { log('evidence capture failed (submission still recorded):', e.message); return null; });
-      await closeTab(tab);
-      emitOutcome({ outcome: 'submitted', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, cover_letter_uploaded: coverLetterUploaded, answers: ANSWERS });
-    }
-    res.missing = [...new Set(res.missing)];
-    log('  missing:', res.missing.join(' | ').slice(0, 200));
-    if (res.missing.length === 0) {
-      if (res.verdict.verdict === 'not_submitted') {
-        // Page states failure and nothing is fillable — terminal, no blind retries.
-        const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'not_submitted' }).catch((e) => { log('evidence capture failed:', e.message); return null; });
-        await closeTab(tab);
-        // An anti-spam refusal says the company never got it (driver_contract SPAM_FLAGGED_*).
-        emitOutcome({ outcome: 'not_submitted', reason: isSpamFlagged(res.verdict) ? 'platform_spam_flagged' : 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
-      }
-      // The page never answered this click. Whatever the network watch saw,
-      // it is never clicked again (lead 裁决, verify 第 20 轮: three rounds of
-      // re-click judgement each had a duplicate-submission hole). Unknown =
-      // may have submitted; lead checks the inbox and corrects the ledger.
-      const ev = await pageEvidence(tab, 'after_submit', 'unknown');
-      emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, received: res.received, snippet: res.body_snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
-    }
-    if (JSON.stringify(res.missing) === JSON.stringify(lastMissing)) {
-      const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
-      if (unanswerable.length > 0) {
-        await closeTab(tab);
-        emitOutcome({ outcome: 'needs_user', reason: classifyUnsubmitted(res.missing, unanswerable), blockers: unanswerable, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
-      }
-      if (pendingForMainClaude.length > 0) {
-        const rec = { outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID, pending: pendingForMainClaude, still_missing: res.missing, company: COMPANY, url: APPLY_URL, evidence: ev, answers: ANSWERS };
-        logEssayPending(rec);
-        emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
-      }
-      await closeTab(tab);
-      emitOutcome({ outcome: 'needs_user', reason: classifyUnsubmitted(res.missing, []), missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
-    }
-    lastMissing = res.missing;
+  // Fields this run has answered — see the Ashby driver (verify 第 21 轮).
+  const filled = new Set();
+  const normLabel = (l) => String(l || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // Answers every listed field; never clicks. True when all were answered.
+  const answerAll = async (res) => {
+    let allOk = true;
     for (const m of res.missing) {
       const a = await answerMissing(tab, m);
-      if (a?.ok) recordFill(ANSWERS, { label: m, value: a.value ?? a.picked ?? '', source: a.source || 'derived', widget: a.mode || a.via || 'unknown' });
+      if (a?.ok) {
+        filled.add(normLabel(m));
+        recordFill(ANSWERS, { label: m, value: a.value ?? a.picked ?? '', source: a.source || 'derived', widget: a.mode || a.via || 'unknown' });
+      } else {
+        allOk = false;
+      }
       if (a?.pending_for_main_claude) {
         const sel = await evalInTab(tab, `
           (() => {
@@ -1943,16 +1910,65 @@ async function main() {
       }
       log('  →', m.slice(0, 40), JSON.stringify(a).slice(0, 80));
     }
+    return allOk;
+  };
+  // The page listed fields we could not (all) fill: it rejected the form and
+  // nothing was sent. Stop — a resubmit would only re-list the gap.
+  const stopUnanswered = async (res) => {
+    const ev = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
+    if (unanswerable.length > 0) {
+      await closeTab(tab);
+      emitOutcome({ outcome: 'needs_user', reason: classifyUnsubmitted(res.missing, unanswerable), blockers: unanswerable, missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+    }
+    if (pendingForMainClaude.length > 0) {
+      const rec = { outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID, pending: pendingForMainClaude, still_missing: res.missing, company: COMPANY, url: APPLY_URL, evidence: ev, answers: ANSWERS };
+      logEssayPending(rec);
+      emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
+    }
+    await closeTab(tab);
+    emitOutcome({ outcome: 'needs_user', reason: classifyUnsubmitted(res.missing, []), missing: res.missing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+  };
+  // At most two clicks (lead 裁决, verify 第 21 轮): the first, and one resubmit
+  // only after the page explicitly listed missing fields AND every one of them
+  // was answered.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await clickVisibleConsentCheckboxes(tab);
+    log(`Submit attempt ${attempt}…`);
+    const res = await submitOnce(attempt);
+    if (res.verdict.verdict === 'submitted') {
+      const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'submitted' }).catch((e) => { log('evidence capture failed (submission still recorded):', e.message); return null; });
+      await closeTab(tab);
+      emitOutcome({ outcome: 'submitted', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, cover_letter_uploaded: coverLetterUploaded, answers: ANSWERS });
+    }
+    res.missing = [...new Set(res.missing)];
+    log('  missing:', res.missing.join(' | ').slice(0, 200));
+    if (res.missing.length === 0) {
+      if (res.verdict.verdict === 'not_submitted') {
+        // Page states failure and nothing is fillable — terminal, no blind retries.
+        const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'not_submitted' }).catch((e) => { log('evidence capture failed:', e.message); return null; });
+        await closeTab(tab);
+        // An anti-spam refusal says the company never got it (driver_contract SPAM_FLAGGED_*).
+        emitOutcome({ outcome: 'not_submitted', reason: isSpamFlagged(res.verdict) ? 'platform_spam_flagged' : 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
+      }
+      // The page never answered this click. Whatever the network watch saw,
+      // it is never clicked again (lead 裁决, verify 第 20 轮: three rounds of
+      // re-click judgement each had a duplicate-submission hole). Unknown =
+      // may have submitted; lead checks the inbox and corrects the ledger.
+      const ev = await pageEvidence(tab, 'after_submit', 'unknown');
+      emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, received: res.received, snippet: res.body_snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+    }
+    if (attempt === 2 && res.missing.every((m) => filled.has(normLabel(m)))) {
+      // Only fields we already answered are listed: a re-rejection, or the
+      // resubmit still in flight with the old errors on screen. Cannot tell →
+      // may have submitted; never clicked a third time.
+      const ev = await pageEvidence(tab, 'after_submit', 'unknown');
+      emitOutcome({ outcome: 'unknown', reason: 'resubmit_page_lists_only_answered_fields', verdict: res.verdict, stale_missing: res.missing, received: res.received, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+    }
+    const allAnswered = await answerAll(res);
+    if (attempt === 2 || !allAnswered) await stopUnanswered(res);
     await sleep(1500);
   }
-  const ev = await pageEvidence(tab, 'after_submit', lastVerdict);
-  if (pendingForMainClaude.length > 0) {
-    const rec = { outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID, pending: pendingForMainClaude, still_missing: lastMissing, company: COMPANY, url: APPLY_URL, evidence: ev, answers: ANSWERS };
-    logEssayPending(rec);
-    emitOutcome(rec); // KEEP tab open — user/main-Claude needs to follow up
-  }
-  await closeTab(tab);
-  emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+  throw new Error('submit loop ended without an outcome'); // unreachable: each branch above emits
 }
 
 // A crash after a submit click is exactly the case a screenshot is for.

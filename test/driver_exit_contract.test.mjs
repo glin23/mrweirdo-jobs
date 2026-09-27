@@ -221,22 +221,24 @@ test('Ashby 出货 main()：没有缺字段、页面一直读不懂 → unknown�
   }
 });
 
-test('Ashby 出货 main()：答得上但换着法子缺字段 → 步数超限 rate_limited / exit 4 + 全问答落盘', async () => {
+test('Ashby 出货 main()：补完再提交后页面又报新缺字段 → needs_user（不点第 3 次）+ 全问答落盘', async () => {
   // The source comes from the profile (真投 2026-09-27), not an answer-bank "LinkedIn".
   const driver = await loadAshby({ ...ASHBY_BASE, standard_qa: { how_did_you_hear: 'Company website' } });
   let round = 0;
+  const { counter, rule } = clickCounter();
   setEvalRules([
+    rule,
     ...ashbyBaseRules(),
     { match: 'label_for', result: { ok: true, sel: '#q_txt', via: 'label_for' } },
     { match: 'error_count', result: () => ASHBY_PAGE('errors remain', { missing: [`How did you hear about Acme (round ${round++})`] }) },
   ]);
   try {
     const emitted = await runToEmit(driver.main);
-    assert.equal(emitted.outcome, 'rate_limited');
-    assert.equal(emitted.reason, 'max_attempts_exceeded');
-    assert.equal(EXIT_CODES[emitted.outcome], 4);
+    assert.equal(emitted.outcome, 'needs_user');
+    assert.equal(EXIT_CODES[emitted.outcome], 2);
+    assert.equal(counter.n, 2, 'never a third click (verify 第 21 轮)');
     const heard = emitted.answers.filter((a) => /how did you hear/i.test(a.label));
-    assert.ok(heard.length >= 4, `each round's fill is logged, got ${heard.length}`);
+    assert.ok(heard.length >= 2, `each round's fill is logged, got ${heard.length}`);
     assert.ok(heard.every((a) => a.value.length > 0), 'answers carry the actual typed value');
   } finally {
     clearStubs();
