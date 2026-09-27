@@ -70,7 +70,7 @@
   "cover_letter_template": "",
 
   "standard_qa": {
-    "how_did_you_hear": "LinkedIn",
+    "how_did_you_hear": "",
     "referral_name": "",
     "why_company": "Short default answer about why you want to work here. The skill may overwrite this per company.",
     "why_role": "Short default answer about why this role fits you.",

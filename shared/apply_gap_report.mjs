@@ -113,7 +113,14 @@ function collectFields(obj) {
     for (const item of pass.still_missing || []) push(item, 'still_missing');
   }
 
-  return fields;
+  // The same question usually arrives twice: bare in still_missing / missing and
+  // again on the pending list carrying the driver's note. Classifying the bare
+  // copy too filed it by guesswork next to the noted one — e.g. "What type of
+  // content should we be doing more of?" (note agent_draft_required) was ALSO
+  // asked of the user as unknown_user_fact (真投 2026-09-27). The noted copy is
+  // the driver's own reason, so it wins.
+  const noted = new Set(fields.filter((f) => f.note).map((f) => f.label));
+  return fields.filter((f) => f.note || !noted.has(f.label));
 }
 
 // Note -> category. The driver already knows exactly why it stopped; matching
@@ -147,6 +154,12 @@ const NOTE_CATEGORY = {
   part_time_availability_answer_required: 'user_earliest_start_date',
   location_not_in_profile_preferences: 'user_work_location_commitment',
   relocation_commitment_policy_unset: 'user_work_location_commitment',
+  how_did_you_hear_unset: 'user_how_did_you_hear',
+  years_experience_unset: 'user_years_experience',
+  social_accounts_managed_unset: 'user_social_accounts_managed',
+  // An opinion about the company's own channels: nothing in the profile answers
+  // it, the main agent drafts it (shared/agent_drafts.mjs) — never asked first.
+  agent_draft_required: 'agent_open_text',
 };
 
 // Dynamic notes. When a driver stops on one specific field it appends that
@@ -240,6 +253,9 @@ function classifyField(field, outcome = {}) {
     // for every question the user has never been asked. Same shape as the
     // per-city location rule right above: ask about THIS fact, not the bucket.
     unknown_user_fact: () => customFactAnswered(label, standard.custom_facts),
+    user_how_did_you_hear: () => !!String(standard.how_did_you_hear ?? '').trim(),
+    user_years_experience: () => /^\s*\d+(?:\.\d+)?\s*$/.test(String(standard.years_social_media_experience ?? '')),
+    user_social_accounts_managed: () => Array.isArray(standard.social_accounts_managed) && standard.social_accounts_managed.length > 0,
   };
   const categoryAnswered = (category) => Boolean(CATEGORY_ANSWERED[category]?.());
 
@@ -371,6 +387,9 @@ const RETRYABLE_CATEGORIES = new Set([
   'user_work_authorization',
   'user_work_authorization_self_serve',
   'user_work_location_commitment',
+  'user_how_did_you_hear',
+  'user_years_experience',
+  'user_social_accounts_managed',
   'unknown_user_fact',
 ]);
 

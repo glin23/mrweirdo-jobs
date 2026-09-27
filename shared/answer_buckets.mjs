@@ -94,6 +94,9 @@ export function buildAnswerBuckets(missingLabel, ctx = {}) {
     // residence/transport fact (those are intercepted by the specific-city-fact
     // guard above). They are tagged `relocationCommitment` so they only auto-Yes
     // when the user's policy permits; otherwise they fall through to pending.
+    // 「Are you willing to work 5 days/week from our NYC office?」(真投 2026-09-27 Suno):
+    // no pattern here matched it, so it never reached the relocation policy at all.
+    { match: /(willing|able|open|prepared|comfortable).{0,40}\bwork\b.{0,60}\b(from|at|in|out of) (our|the)\b.{0,40}\boffice|\d+\s*days?\s*(\/|a|per|each)\s*week.{0,60}\boffice/i, action: 'click_radio_in_question', q: missingLabel, choice: rtoAns, fallback: pna, relocationCommitment: true },
     { match: /requires working.{0,120}offices?.{0,80}(days?|week)|offices?.{0,80}(three|3)\s+days?.{0,40}week/i, action: 'click_radio_in_question', q: missingLabel, choice: rtoAns, fallback: pna, relocationCommitment: true },
     { match: /available to work.{0,80}\d+\s*days?.{0,80}(headquarters|hq|office|on[- ]?site|onsite)|headquarters/i, action: 'click_radio_in_question', q: missingLabel, choice: rtoAns, fallback: pna, relocationCommitment: true },
     { match: /prepared to work.{0,25}\d\+?.{0,25}days.{0,40}office|san francisco office/i, action: 'click_radio_in_question', q: missingLabel, choice: 'Yes', fallback: pna, relocationCommitment: true },

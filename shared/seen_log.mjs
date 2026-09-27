@@ -196,6 +196,9 @@ export function fillBasisVersion(home) {
   return version([
     jsonPart(join(home, 'profile.json')),
     jsonPart(join(home, 'essay_profile.json')),
+    // The main agent's per-job drafts (agent_drafts.mjs): a new draft is new
+    // fill material, so the row stuck on that question is looked at again.
+    jsonPart(join(home, 'agent_drafts.json')),
     jsonPart(join(REPO_SHARED, 'answer_bank.json')),
   ]);
 }

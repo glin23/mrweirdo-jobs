@@ -222,7 +222,8 @@ test('Ashby 出货 main()：没有缺字段、页面一直读不懂 → unknown�
 });
 
 test('Ashby 出货 main()：答得上但换着法子缺字段 → 步数超限 rate_limited / exit 4 + 全问答落盘', async () => {
-  const driver = await loadAshby(ASHBY_BASE);
+  // The source comes from the profile (真投 2026-09-27), not an answer-bank "LinkedIn".
+  const driver = await loadAshby({ ...ASHBY_BASE, standard_qa: { how_did_you_hear: 'Company website' } });
   let round = 0;
   setEvalRules([
     ...ashbyBaseRules(),

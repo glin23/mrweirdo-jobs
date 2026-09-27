@@ -32,6 +32,7 @@ export const PII_TARGETS = [
   'profile.json',
   'search_intent.json',
   'essay_profile.json',
+  'agent_drafts.json',
   'answer_provenance.json',
   'profile.json.bak',
   'resume.pdf',

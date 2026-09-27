@@ -86,3 +86,20 @@ export function renderAnswerTemplate(template, { profile = {}, companyPretty = '
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
+
+// 「Which brand(s) have you done social media community management for?」 /
+// 「Share links to the social accounts you have managed and your role on each」
+// (真投 2026-09-27 Suno / ElevenLabs). Word for word from the profile's
+// standard_qa.social_accounts_managed — [{ brand, platform, url, role }] — and
+// nothing else: no entry, no answer (the question stays asked).
+export function socialAccountsAnswer(accounts, kind) {
+  const list = (Array.isArray(accounts) ? accounts : []).filter((a) => a && typeof a === 'object' && String(a.brand || '').trim());
+  if (kind === 'brands') return [...new Set(list.map((a) => String(a.brand).trim()))].join('; ');
+  if (kind === 'links') {
+    return list
+      .filter((a) => String(a.url || '').trim() && String(a.role || '').trim())
+      .map((a) => `${String(a.brand).trim()}${a.platform ? ` (${String(a.platform).trim()})` : ''}: ${String(a.url).trim()} — ${String(a.role).trim()}`)
+      .join('\n');
+  }
+  throw new Error(`socialAccountsAnswer: unknown kind "${kind}"`);
+}

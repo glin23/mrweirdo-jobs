@@ -255,6 +255,33 @@ export const QUESTION_TEMPLATES = {
     value_type: 'string',
     enum_values: null,
   },
+  // 真投 2026-09-27（ElevenLabs Social / Suno）: three small facts every social /
+  // growth form asks. Each has its own profile field so the driver can type it
+  // and the question is asked once, not per application.
+  user_how_did_you_hear: {
+    priority: 11,
+    profile_paths: ['standard_qa.how_did_you_hear'],
+    question: '表单问「你是从哪里知道这个岗位的？」。请给一个真实来源（例如 Company website / job board）。多个说法用「 / 」隔开，会按顺序去匹配表单选项，都对不上时选 Other。',
+    answer_type: 'short_text',
+    value_type: 'string',
+    enum_values: null,
+  },
+  user_years_experience: {
+    priority: 12,
+    profile_paths: ['standard_qa.years_social_media_experience'],
+    question: '表单问「你做社交媒体 / 社群运营有几年经验？」。请给一个真实的数字（例如 1 或 0.5），会按这个数去选表单里的区间。',
+    answer_type: 'short_text',
+    value_type: 'string',
+    enum_values: null,
+  },
+  user_social_accounts_managed: {
+    priority: 13,
+    profile_paths: ['standard_qa.social_accounts_managed'],
+    question: '表单问「你给哪些品牌做过社媒 / 社群运营？请附账号链接和你的具体角色」。请逐个列出：品牌、平台、账号链接、你的角色（一两句）。只写真实做过的，会原样填进表单。',
+    answer_type: 'short_text',
+    value_type: 'array',
+    enum_values: null,
+  },
   unknown_user_fact: {
     priority: 20,
     profile_paths: ['standard_qa.custom_facts'],

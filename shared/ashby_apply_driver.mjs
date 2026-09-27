@@ -38,7 +38,10 @@ import {
   relocationPolicyOpen as routingRelocationPolicyOpen,
   confirmedCitiesFrom as routingConfirmedCities, mentionsConfirmedCity as routingMentionsConfirmedCity,
   deriveWorkAuthAnswers, withoutSponsorshipAnswer, workAuthBlockNote, workAuthGapFor,
+  pickYearsOption, isCompanyCritiqueQuestion,
 } from './answer_routing.mjs';
+import { socialAccountsAnswer } from './answer_templates.mjs';
+import { readDrafts, draftFor } from './agent_drafts.mjs';
 import { matchAnswerBucket } from './answer_buckets.mjs';
 import { submissionVerdict, captureEvidence, isSpamFlagged } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
@@ -70,6 +73,9 @@ const COVER_LETTER = process.env.MRWEIRDO_COVER_LETTER_PATH ||
 const SEARCH_INTENT = readJsonOptional(SEARCH_INTENT_PATH, {});
 // Open-text answers drafted from the user's own stories (answer_templates.mjs aiExperimentStory).
 const ESSAY_PROFILE = readJsonOptional(join(HOME, 'essay_profile.json'), {});
+// The main agent's drafts for this job's open-text questions (agent_drafts.mjs).
+// A malformed file throws here, loudly — never read as "no drafts".
+const AGENT_DRAFTS = readDrafts(HOME);
 let coverLetterUploaded = false;
 
 const APPLY_URL = process.argv[2];
@@ -238,8 +244,13 @@ function essayAnswerFor(questionText) {
   return null;
 }
 
-async function pickComboboxInQuestion(tab, questionText, value) {
+// opts.cityState = { city, state, stateFull }: also accept an option naming the
+// city AND its state ("Waltham, MA, USA"), whatever the widget's own format.
+async function pickComboboxInQuestion(tab, questionText, value, opts = {}) {
   const searchTerms = Array.isArray(value) ? value.filter(Boolean) : [value].filter(Boolean);
+  const cityState = opts.cityState && opts.cityState.city
+    ? { city: String(opts.cityState.city).toLowerCase(), state: String(opts.cityState.state || '').toLowerCase(), stateFull: String(opts.cityState.stateFull || '').toLowerCase() }
+    : null;
   const found = await evalInTab(tab, `
     (() => {
       const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
@@ -280,9 +291,13 @@ async function pickComboboxInQuestion(tab, questionText, value) {
     last = await evalInTab(tab, `
       (() => {
         const wanted = ${JSON.stringify(term.toLowerCase())};
+        const cityState = ${JSON.stringify(cityState)};
         const opts = [...document.querySelectorAll("[role=option]")];
+        const cityStateOk = (t) => !!cityState && t.includes(cityState.city)
+          && ((cityState.stateFull && t.includes(cityState.stateFull)) || (cityState.state && new RegExp('\\b' + cityState.state + '\\b').test(t)));
         const match = opts.find(o => (o.innerText || '').trim().toLowerCase() === wanted)
-          || (wanted.length >= 5 ? opts.find(o => (o.innerText || '').toLowerCase().includes(wanted)) : null);
+          || (wanted.length >= 5 ? opts.find(o => (o.innerText || '').toLowerCase().includes(wanted)) : null)
+          || opts.find(o => cityStateOk((o.innerText || '').toLowerCase()));
         if (match) {
           ['mousedown', 'mouseup', 'click'].forEach(t => match.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window, button: 0 })));
           return { ok:true, picked: (match.innerText || '').trim().slice(0,120), mode:'combobox_in_question', term: wanted };
@@ -516,10 +531,14 @@ async function fillTextInQuestion(tab, question, value) {
     (() => {
       const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
       const targetQ = ${JSON.stringify(question.toLowerCase().replace(/\s+/g, ' ').slice(0, 60))};
-      const selector = "input[type=text], input[type=url], input[type=email], textarea";
+      // A type-less <input> is a text box too; a combobox is NOT — typing into one
+      // without picking an option leaves the question unanswered (真投 2026-09-27:
+      // "How did you hear" typed "LinkedIn" into a dropdown and stayed missing).
+      const selector = "input:not([type]), input[type=text], input[type=number], input[type=url], input[type=email], textarea";
+      const plain = (el) => !el.matches('[role=combobox], [aria-autocomplete]');
 
       // First prefer explicit label[for=id] matches.
-      for (const inp of [...document.querySelectorAll(selector)]) {
+      for (const inp of [...document.querySelectorAll(selector)].filter(plain)) {
         const lbl = inp.id ? document.querySelector('label[for="' + CSS.escape(inp.id) + '"]') : null;
         if (lbl && norm(lbl.innerText).includes(targetQ)) {
           const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id;
@@ -532,11 +551,11 @@ async function fillTextInQuestion(tab, question, value) {
       const containers = [...document.querySelectorAll("fieldset, div")].filter(c => {
         const t = norm(c.innerText);
         if (!t.includes(targetQ)) return false;
-        return !![...c.querySelectorAll(selector)].find(inp => inp.offsetParent !== null);
+        return !![...c.querySelectorAll(selector)].filter(plain).find(inp => inp.offsetParent !== null);
       });
       containers.sort((a, b) => norm(a.innerText).length - norm(b.innerText).length);
       for (const c of containers.slice(0, 8)) {
-        const inp = [...c.querySelectorAll(selector)].find(el => el.offsetParent !== null);
+        const inp = [...c.querySelectorAll(selector)].filter(plain).find(el => el.offsetParent !== null);
         if (!inp) continue;
         if (!inp.id) inp.id = 'mrw_txt_' + Math.random().toString(36).slice(2,8);
         const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id;
@@ -642,6 +661,55 @@ async function answerMissing(tab, missingLabel) {
     if (combo.ok) return combo;
   }
 
+  // The main agent's draft for THIS job's THIS question wins over any generic
+  // template: it was written for exactly this form (agent_drafts.mjs).
+  const draft = draftFor(AGENT_DRAFTS, APPLY_URL, missingLabel);
+  if (draft) {
+    const filled = await typeIntoQuestion(tab, missingLabel, draft);
+    return filled.ok ? { ...filled, mode: 'agent_draft', value: draft } : { ...filled, note: 'agent_draft_field_not_found' };
+  }
+  // An opinion about the company's own channels: no profile field answers it.
+  // Pend it for the main agent to draft — never a template, never the user first.
+  if (isCompanyCritiqueQuestion(missingLabel)) {
+    return { ok: false, note: 'agent_draft_required', pending_for_main_claude: true, question: missingLabel };
+  }
+
+  // Brands / accounts the user ran social for — word for word from the profile.
+  const socialKind = /which brands?|brand\(s\)/i.test(ml) && /social|community/i.test(ml) ? 'brands'
+    : /links?\b.{0,80}\b(social|accounts?)\b/i.test(ml) && /managed|\brole\b|\brun\b/i.test(ml) ? 'links' : null;
+  if (socialKind) {
+    const value = socialAccountsAnswer(PROFILE.standard_qa?.social_accounts_managed, socialKind);
+    if (!value) return { ok: false, note: 'social_accounts_managed_unset', pending_for_main_claude: true, question: missingLabel };
+    const filled = await fillTextInQuestion(tab, missingLabel, value);
+    return filled.ok ? { ...filled, source: 'profile' } : { ...filled, note: 'social_accounts_field_not_found' };
+  }
+
+  // Years of social-media / community experience — the profile's own number.
+  if (/years/i.test(ml) && /experience/i.test(ml) && /social|community/i.test(ml)) {
+    const years = String(PROFILE.standard_qa?.years_social_media_experience ?? '').trim();
+    if (!/^\d+(?:\.\d+)?$/.test(years)) return { ok: false, note: 'years_experience_unset', pending_for_main_claude: true, question: missingLabel };
+    const filled = await fillTextInQuestion(tab, missingLabel, years);
+    if (filled.ok) return { ...filled, source: 'profile' };
+    const choices = await evalInTab(tab, `
+      (() => { /* mrw_choice_labels */
+        const targetQ = ${JSON.stringify(missingLabel.toLowerCase().replace(/\s+/g, ' ').slice(0, 40))};
+        const cs = [...document.querySelectorAll("fieldset, div")].filter(c => (c.innerText || '').replace(/\\s+/g, ' ').toLowerCase().includes(targetQ)
+          && c.querySelectorAll("input[type=radio], input[type=checkbox]").length >= 2);
+        cs.sort((a, b) => a.innerText.length - b.innerText.length);
+        const c = cs[0];
+        if (!c) return { ok: false, note: 'no_choice_container' };
+        const labelOf = (r) => (r.closest('label')?.innerText || (r.id ? c.querySelector('label[for="' + CSS.escape(r.id) + '"]')?.innerText : '') || r.value || '').trim();
+        return { ok: true, labels: [...c.querySelectorAll("input[type=radio], input[type=checkbox]")].map(labelOf).filter(Boolean) };
+      })()
+    `);
+    const pick = choices?.ok ? pickYearsOption(choices.labels, years) : null;
+    if (pick) {
+      const clicked = await answerRadioMultichoice(tab, missingLabel, [pick]);
+      if (clicked?.ok) return { ...clicked, value: pick, source: 'profile' };
+    }
+    return { ok: false, note: 'years_experience_widget_unhandled', detail: { choices, pick } };
+  }
+
   // PHASE 0: Essay templates (long-form Qs) take priority. Short date fields
   // also match availability templates, so let the normal field buckets handle them.
   if (essayAnswerFor(missingLabel) && !/(start date|earliest start|availability|when can you start|when could you start)/i.test(ml)) {
@@ -652,14 +720,19 @@ async function answerMissing(tab, missingLabel) {
   // radio group, OR a react-select combobox depending on the tenant. Try them in that
   // order with the first preferred value ("LinkedIn"). Other multichoice questions
   // (years of experience / seniority / work term) go straight to the radio handler.
+  // The source is the profile's own answer (standard_qa.how_did_you_hear; "A / B"
+  // = alternatives tried in order); "Other" only when the form lists none of
+  // them. Dropdown first: typing into a dropdown answers nothing (真投 2026-09-27).
   if (/how did you hear|hear about/i.test(ml)) {
-    const preferred = (BANK.multichoice_preferences?.how_did_you_hear || ['LinkedIn', 'Online', 'Other'])[0];
-    const textRes = await fillTextInQuestion(tab, missingLabel, preferred);
-    if (textRes && textRes.ok) return textRes;
-    const radioRes = await answerRadioMultichoice(tab, missingLabel);
-    if (radioRes && radioRes.ok) return radioRes;
-    const combo = await pickComboboxInQuestion(tab, missingLabel, preferred);
-    if (combo && combo.ok) return combo;
+    const heard = String(PROFILE.standard_qa?.how_did_you_hear ?? '').trim();
+    if (!heard) return { ok: false, note: 'how_did_you_hear_unset', pending_for_main_claude: true, question: missingLabel };
+    const terms = [...new Set([heard, ...heard.split(/\s+\/\s+/)].map((t) => t.trim()).filter(Boolean))];
+    const combo = await pickComboboxInQuestion(tab, missingLabel, [...terms, 'Other']);
+    if (combo?.ok) return { ...combo, value: combo.picked, source: 'profile' };
+    const radioRes = await answerRadioMultichoice(tab, missingLabel, [...terms, 'Other']);
+    if (radioRes?.ok) return { ...radioRes, value: radioRes.picked, source: 'profile' };
+    const textRes = await fillTextInQuestion(tab, missingLabel, heard);
+    if (textRes?.ok) return { ...textRes, source: 'profile' };
     return { ok: false, note: 'hear_about_unresolved', text: textRes, radio: radioRes, combo };
   }
   if (/years?.{0,5}(of )?experience|seniority|level|work term|term availability/i.test(ml)) {
@@ -877,15 +950,17 @@ async function answerMissing(tab, missingLabel) {
   if (bucket.action === 'fill_location_combobox') {
     if (bucket.q) {
       const cityOnly = bucket.value.split(',')[0].trim();
-      const locationTerms = [
+      // The profile's city only — a school is not where someone lives (真投
+      // 2026-09-27: ElevenLabs "Location" got "Babson College" Enter-committed
+      // and stayed missing). The bare city is typed last and matched on
+      // city + state, since widgets list "Waltham, MA, USA"-style options.
+      const locationTerms = [...new Set([
         bucket.value,
         locationStateFull ? `${cityOnly}, ${locationStateFull}, United States` : '',
         locationState ? `${cityOnly}, ${locationState}, United States` : '',
-        PROFILE.education?.school && locationStateFull ? `${PROFILE.education.school}, ${locationStateFull}, United States` : '',
-        PROFILE.education?.school || '',
-        locationState ? '' : cityOnly,
-      ].filter(Boolean);
-      const scoped = await pickComboboxInQuestion(tab, bucket.q, locationTerms);
+        cityOnly,
+      ].filter(Boolean))];
+      const scoped = await pickComboboxInQuestion(tab, bucket.q, locationTerms, { cityState: { city: cityOnly, state: locationState, stateFull: locationStateFull } });
       if (scoped.ok || scoped.note !== 'no_combobox_in_question') return scoped;
     }
 
@@ -937,10 +1012,14 @@ async function answerMissing(tab, missingLabel) {
 
 // ---------- radio multichoice handler ----------
 // Patterns: "How did you hear about X" → pick LinkedIn; "Years of experience" → < 1
-async function answerRadioMultichoice(tab, questionText) {
+// `choices`, when given, are the only options to pick (a value already decided
+// from the profile); otherwise the per-question preference lists below apply.
+async function answerRadioMultichoice(tab, questionText, choices = null) {
   const qLower = questionText.toLowerCase();
   let preferred = [];
-  if (/how did you hear|how.{0,8}find.{0,5}us|hear about/i.test(qLower)) {
+  if (Array.isArray(choices) && choices.length) {
+    preferred = choices;
+  } else if (/how did you hear|how.{0,8}find.{0,5}us|hear about/i.test(qLower)) {
     preferred = BANK.multichoice_preferences?.how_did_you_hear || ['LinkedIn', 'Online', 'Other', 'Google'];
   } else if (/years?.{0,5}(of )?experience|how (many|long).{0,5}years/i.test(qLower)) {
     preferred = BANK.multichoice_preferences?.years_of_experience || ['< 1', '<1', '0-1', '1', '0', 'Less than 1'];
@@ -996,8 +1075,12 @@ async function answerRadioMultichoice(tab, questionText) {
 async function answerEssay(tab, questionText) {
   const ans = essayAnswerFor(questionText);
   if (!ans) return { ok: false, note: 'no_essay_template_for:' + questionText.slice(0, 60), pending_for_main_claude: true };
+  const typed = await typeIntoQuestion(tab, questionText, ans);
+  return typed.ok ? { ok: true, mode: 'essay_template', value: ans, answer_len: ans.length } : typed;
+}
 
-  // Find the textarea/input via question text
+// Types long text into the textarea / text input under a question.
+async function typeIntoQuestion(tab, questionText, text) {
   const f = await evalInTab(tab, `
     (() => {
       const targetQ = ${JSON.stringify(questionText.toLowerCase().slice(0, 40))};
@@ -1017,8 +1100,8 @@ async function answerEssay(tab, questionText) {
     })()
   `);
   if (!f.ok) return f;
-  cdp('typetext', tab, f.sel, ans);
-  return { ok: true, mode: 'essay_template', value: ans, answer_len: ans.length };
+  cdp('typetext', tab, f.sel, text);
+  return { ok: true, mode: 'long_text', value: text, answer_len: text.length };
 }
 
 // ============================================================
@@ -1211,7 +1294,7 @@ async function main() {
           outcome: 'needs_user', reason: 'essay_pending', tab_id: tab, job_id: JOB_ID,
           pending: dedupePendingQuestions(pendingForMainClaude),
           still_missing: res.missing, company: COMPANY, url: APPLY_URL, answers: ANSWERS,
-          hint: 'main agent: write answer for each pending question, then call: node cdp.mjs typetext <tab> <sel> "<answer>", then re-run this driver to retry submit',
+          hint: 'main agent: open-text questions → draft under shared/references/truthfulness.md and store with node shared/agent_drafts.mjs add --url <url> --question "<question>" --answer "<draft>" (the next run types it); facts → ask the user and record with shared/record_profile_answers.mjs',
         };
         rec.evidence = await pageEvidence(tab, 'after_submit', res.verdict.verdict);
         logEssayPending(rec);

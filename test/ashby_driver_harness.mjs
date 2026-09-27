@@ -90,6 +90,7 @@ export async function loadDriver(profile, opts = {}) {
   writeFileSync(join(home, 'profile.json'), JSON.stringify(profile, null, 2));
   if (opts.searchIntent) writeFileSync(join(home, 'search_intent.json'), JSON.stringify(opts.searchIntent));
   if (opts.essayProfile) writeFileSync(join(home, 'essay_profile.json'), JSON.stringify(opts.essayProfile));
+  if (opts.agentDrafts) writeFileSync(join(home, 'agent_drafts.json'), opts.agentDrafts);
   let src = DRIVER_SRC.replace(/\nmain\(\)\.catch\([\s\S]*$/, '\n');
   // No real waits under test: submitAndCheck alone sleeps 7s per call in the
   // shipped code. Guarded like PENDING_LINE — if the declaration drifts, this

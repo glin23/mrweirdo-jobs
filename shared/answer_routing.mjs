@@ -294,3 +294,43 @@ export function workAuthGapFor(label = '', profile = {}) {
   }
   return null;
 }
+
+// --- Years-of-experience choice -----------------------------------------------
+// "How many years of X experience do you have?" as a radio list: pick the option
+// whose range holds the user's own number (profile standard_qa field). No
+// number, or no option that holds it → null and the question stays asked; the
+// answer bank's "< 1" default is not a fact about anyone (真投 2026-09-27 Suno).
+function yearsRange(label) {
+  const t = String(label || '').toLowerCase().replace(/[–—]/g, '-');
+  let m;
+  if ((m = t.match(/(?:less than|under|fewer than|<)\s*(\d+(?:\.\d+)?)/))) return { min: 0, max: Number(m[1]), inclusive: false };
+  if ((m = t.match(/(\d+(?:\.\d+)?)\s*(?:\+|or more|and (?:up|above)|or above)/)) || (m = t.match(/(?:more than|over|above)\s*(\d+(?:\.\d+)?)/))) return { min: Number(m[1]), max: Infinity, inclusive: false };
+  if ((m = t.match(/(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)/))) return { min: Number(m[1]), max: Number(m[2]), inclusive: true };
+  if (/^\s*(?:none|no experience)\b/.test(t)) return { min: 0, max: 0, inclusive: true };
+  if ((m = t.match(/^\s*(\d+(?:\.\d+)?)\s*(?:years?|yrs?)?\s*$/))) return { min: Number(m[1]), max: Number(m[1]), inclusive: true };
+  return null;
+}
+
+export function pickYearsOption(options = [], years) {
+  if (!/^\s*\d+(?:\.\d+)?\s*$/.test(String(years ?? ''))) return null;
+  const y = Number(years);
+  const ranged = (options || []).map((label) => ({ label, r: yearsRange(label) })).filter((o) => o.r);
+  // Half-open first, so a boundary value lands in the range that STARTS there
+  // ("1" → "1-3", not "0-1"); a closed range only when nothing else holds it.
+  const open = ranged.find(({ r }) => y >= r.min && y < r.max);
+  if (open) return open.label;
+  const closed = ranged.find(({ r }) => r.inclusive && y >= r.min && y <= r.max);
+  return closed ? closed.label : null;
+}
+
+// --- Questions that ask for an opinion about the company's own channels --------
+// "Look at our social accounts … what is working and what is not", "What type of
+// content should we be doing more of", "What other brands … do social really
+// well". Nothing in the profile answers these; the main agent drafts them from
+// the company's public accounts (shared/agent_drafts.mjs) under
+// shared/references/truthfulness.md — no invented facts about the candidate.
+const COMPANY_CRITIQUE_RE = /what(?:'s| is) working and what(?:'s| is)? not|what (?:type|kind)s? of content should we|should we be doing more of|what other (?:brands|accounts|companies)\b.{0,80}\bwell|\bdo social (?:really )?well|look at our (?:social|accounts|channels|content)/i;
+
+export function isCompanyCritiqueQuestion(label = '') {
+  return COMPANY_CRITIQUE_RE.test(String(label));
+}
