@@ -12,8 +12,8 @@ Reads:
   - （第 3 次召唤）DESIGN 第 2 轮 §3/§4/§7/§10、VERIFY_REPORT 第 2-3 轮挂账（规则 6、P3 slug/锁、P4 跨午夜）
   - （第 4 次召唤 S5）DESIGN §10 S5 行 / §3 / §4 / §7、定稿 docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮、VERIFY_REPORT 第 5 轮（RACE / PID 复用）
 Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
-Updated: 2026-09-26
-Iterations: 6
+Updated: 2026-09-27
+Iterations: 7
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -602,3 +602,110 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 > TDD：①②③ 的驱动级、判定、闸、报告测试先红后绿；③ 中判定器与投过口径两条单测写在实现之后（未见红）。全量连跑 3 次 570/570，CI 另三步 exit 0；真实家目录零写入（截图只读）。
 
 > **第 6 次召唤追加（verify 第 17 轮回炉）**：`0b93ac2`，未推。**① 题目点名地点优先**：`relocationPolicyOpen` 新增 `questionText`，经新 `location_gate.namedPlaces`（读句子：小写「us」不算美国，「US / U.S. / USA / United States」与美国城市州名才算）判断——题目点名美国以外的城市/国家 → 一律照问（对 anywhere_legal_work 也适用，更严）；点名美国地点 → 按全美可搬答；不点名才按岗位的美国地点。Ashby 驱动把题面传入。红测试：伦敦 / 柏林 HQ / 多伦多 / 「relocate to the UK … Join us」@ 岗位纽约 → 照问；纽约办公室 @ 岗位伦敦 → 答；不点名 @ 纽约 → 答、@ 伦敦 → 照问。影响马上要投的两岗：ElevenLabs Social Growth（库里主地点 United Kingdom）与 Synthesia（主地点 London）——题目不点名时按主地点（国外）照问、点名纽约时答 Yes、点名伦敦时照问。**② spam 双命中**：`isSpamFlagged` 与 `deriveMayHaveSubmitted` 的免名额只在判定器 verdict = not_submitted 时成立；成功文案与 spam 横幅同现 → unknown（可能已提交、占名额），驱动不记 platform_spam_flagged，按无缺字段读不懂路径走到 unknown。**③ Greenhouse 盲点提交**：同 Ashby，拆出 `readSubmitPage`，无缺字段且读不懂时最多重读 4 次、不再点提交；仍读不懂 → unknown。未做任何绕过平台检测的改动。红测试 6 条先红后绿。全量连跑 3 次 575/575，CI 另三步 exit 0；真实家目录零写入。
+
+---
+
+# 第 7 次召唤：真投 7 个 Ashby 岗后的三处——点击没被接住 / unknown 不截图 / 缺信息小题（2026-09-27）
+
+读：`docs/active/2026-09-26_restart-apply-2_TASK.md`（Round 6）、`docs/active/2026-09-26_restart-apply-2_BUG_REPORT.md` 第 2 章、`.claude/arnold/roles/builder.md`、`shared/references/truthfulness.md`、两个驱动、`driver_contract.mjs`、`submission_evidence.mjs`、`apply_gap_report.mjs`、`missing_field_questions.mjs`、真实家目录 `essay_pending.jsonl` / 账本末行（只读，用来拿原题和当时填了什么）。Chrome 调试端口本轮不在线，没有看活页面。
+
+## 实现摘要
+
+提交（未推）：`fa9c012`（上传等待 + 点击核对 + 终局留证）、`1c6f071`（一处测试替身跟上）、`9e469f1`（缺信息小题）、`d9fc5bf`（CHANGELOG + 说明书）。23 个文件 +1269/−74（含测试）。
+
+1. **简历上传竞态**（Ashby）：新 `shared/page_signals.mjs`，两段页面内只读判断（读浏览器自带的请求时间表，不点不改）。`uploadResume` 先记时间点再传文件，之后每秒问一次 `uploadSettled`：S3（loaded-files）上传已回来、其后有 graphql 回来、请求数与上一轮相同，才算传完；30 秒内确认不了 → `crashed / resume_upload_failed`（note `resume_upload_not_confirmed`，点提交之前，不算投过，带 before_submit 截图）。附件（cover letter）上传同样等。
+2. **点击是否被接住**（Ashby + Greenhouse）：点击和时间标记在同一段里做；页面既没报缺字段也读不出结果时，问 `clickReceived`：点之后有任何请求或换了页面 = 接住；0 条请求 = 没接住；时间表满 250 条 = 判不出（按接住处理，绝不当「没接住」）。没接住 → 同一次运行内再点 1 次（上一下什么都没发出去，不会重复）；仍没接住 → `not_submitted / submit_click_not_registered`，不带页面判定，已登记进 `PRE_SUBMIT_EXITS` → `may_have_submitted=false`、可再试。接住了但读不懂 → 仍 unknown、仍只点一次（守住 7ef0ac3）。找不到按钮 → `crashed / submit_button_not_found`（原先返回值被丢掉）。3 行报告第 2 行单列「N 个点了提交但页面没收到（没发出去，下次还能再试；截图：…）」。
+3. **终局留证**：两个驱动里点过提交之后的所有终局——unknown、click_not_registered、needs_user（卡同样缺字段 / 作文待写 / 需人工）、rate_limited——都经 `captureEvidence` 整页截图，文件名按页面判定，写入即 600（沿用既有上锁）。
+4. **缺信息小题**（Ashby 驱动；答案只来自档案字段，没值就挂起并带自己的 note）：
+   - 「How did you hear about X?」→ `standard_qa.how_did_you_hear`（「A / B」= 依次试的说法，都对不上选 Other）；**先试下拉**，再单选，最后文本框。ElevenLabs 那次是把「LinkedIn」打进了下拉框的输入框，没选中选项，所以一直缺。文本填写函数不再往下拉框里打字，也认无 type 的 input 和数字框。答案库默认值「LinkedIn」不再用；模板 `profile.template.json` 的默认值也清空。
+   - 「willing to work 5 days/week from our NYC office」→ 原因是**根本没有答案桶匹配**（`no_bucket_for`），所以 0b93ac2 的「点名美国城市按全美可搬答」从没被走到；新增桶（到岗承诺类），NYC → 按全美可搬答 Yes，伦敦照问。
+   - 「How many years of social media / community … experience」→ `standard_qa.years_social_media_experience`（数字字符串）：文本/数字框填数；单选则读选项、按数落区间（`pickYearsOption`）；落不进去不乱选。
+   - 「Which brand(s) …」「Share links … your role on each」→ 逐字取 `standard_qa.social_accounts_managed`（`[{brand, platform, url, role}]`）。
+   - 「Look at our social accounts … what is working / what content should we do more of / what other brands do social well」→ 驱动内无法起草，挂 `agent_draft_required`；缺口报告归 `agent_open_text`（「不先问用户，agent 起草」）。**起草通道机制**：main agent 按 truthfulness 起草后执行 `node shared/agent_drafts.mjs add --url <岗位链接> --question "<原题>" --answer "<草稿>"` → 写 `~/.mrweirdo-jobs/agent_drafts.json`（600，按岗位指纹 + 原题存，一题一稿、新稿覆盖）→ 该文件计入填表依据版本，卡在缺信息的岗下次运行会被重新拿出来 → 驱动遇到这岗这题时原文填入（优先于通用模板）。说明书 run-and-database.md 已写明；驱动挂起记录里的旧提示（「往留着的标签页打字再重跑」，重跑会开新标签页、字就丢了）一并改掉。
+   - 「Location」→ 只用档案城市（`current_location_for_ats` / 城市 + 州），不再退到学校名（ElevenLabs 那次按 Enter 提交了「Babson College」，没被接受）；下拉选项按「城市 + 州（缩写或全名）」认，适配「Waltham, MA, USA」这种写法。
+   - 新增三个问题模板（`user_how_did_you_hear` / `user_years_experience` / `user_social_accounts_managed`），三条路径经 `record_profile_answers.mjs` 可写，类型写死；缺口报告的 note 表、「档案已有答案」判断、可重试类别同步。
+   - 缺口报告顺带修一处：同一道题常出现两份（缺字段清单里一份不带 note，挂起清单里一份带 note），以前两份都分类，不带 note 的那份按题面瞎猜，「What type of content should we be doing more of」因此**同时**被列成「问用户」。现在以带 note 的那份为准。
+
+## TDD 落地证据
+
+- `test/page_signals.test.mjs` 10 条：模块不存在时整文件红 → 绿。最后一条把注入串放进只有 `performance` 的沙盒里真跑，证明页面里执行的就是被测的那份源码。
+- `test/submit_click_received.test.mjs` 12 条（跑的是出货驱动自己的 main，只有浏览器边界是替身）：先红 10 条，有 1 条「上传没走完不点」一开始没见红，原因是断言写空了（没轮询时也能过）；补上「轮询序列必须是 false, false, true」后变红，再转绿。3 行报告那条先红后绿。
+- `test/missing_info_autofill.test.mjs` 16 条：模块/导出不存在时整文件红 → 绿；缺口报告那条在实现 note 表之后仍红（暴露了上面的两份问题），修 collectFields 后转绿。
+- 改动的旧测试（接口变化，不是放宽断言）：两个驱动替身把 `captureEvidence` 接到真函数，只替换截图那一步（写占位文件）；`driver_exit_contract` 基础规则补「上传完成 / 点击接住」的肯定回答，数点击的规则改放在最前（先匹配先用）；`submission_verdict` 的单次替身补点击时间标记；「换着法子缺字段 → rate_limited」那条给档案补 `how_did_you_hear`（来源题现在从档案取，档案没有就挂起）。
+- 全量 `npm test` 串行连跑 3 次：**613/613、613/613、613/613**（基线 575）。CI 另三步：role_guard_smoke exit 0、public_alpha_gate exit 0、shared+scripts 全部 `node --check` exit 0。
+- 覆盖率：本项目没接覆盖率工具，没有数字可贴；新代码的每个分支（上传未完成/完成/判不出、点击接住/没接住/判不出/找不到按钮、各小题有值/无值/控件形态）都有对应用例。
+
+## 自审记录
+
+- 反垃圾红线：只读 Resource Timing 与 DOM；没有延时伪装、没有改指纹、没有碰 cookie。「再点一次」只在页面**确认 0 条请求**时发生、每次运行最多 1 次，被接住的点击绝不重复。
+- 判不出的一律往保守方向：时间表满 → 当作接住（不重点）；上传确认不了 → 响亮 crashed，不点。
+- 真实性：新答案全部取自档案字段，没值就挂起；「Other」只在档案给的说法都不在选项里时才选；年限落不进任何区间就不选；点评题不在代码里生成任何文字。
+- 真实家目录：未写。`agent_drafts.json` 不存在；profile.json / essay_profile.json 修改时间停在 09-26。账本末行 `cor_1790524739885_100001_…`（11:58）不是我写的，看起来是 lead 按第 2 章建议做的更正。
+- `grep "except.*pass"` 不适用（JS）；新代码没有吞异常的 catch；`captureEvidence(...).catch(→ null)` 沿用既有写法：截图失败会记日志、结局照常出，证据栏显示 null。
+
+## 偏离 DESIGN
+
+1. **社媒账号放在 profile.json 的 `standard_qa.social_accounts_managed`，没有放 essay_profile**（派遣单写的是「由 essay_profile 起草、逐字取自故事/经历字段」）。原因：essay_profile 里没有「给哪些品牌做过社媒、链接、角色」这种结构化事实，从 proof_points 推算属于 truthfulness 里「Flag」级的拼接；同条派遣单要求新字段走 `record_profile_answers.mjs` 的问题模板，而那个命令只写 profile.json。逐字取值的原则没变。需要回改的话告诉我。
+2. 社媒年限只收一个字段（社媒 / 社群运营），其他「N 年 X 经验」题保持原样（答案库的区间偏好），没有推广成「按话题查年限」。
+
+## 发现的旧 bug
+
+- 缺口报告同一道题两份、各自分类（见实现摘要最后一条）——本轮已修，因为它直接导致点评题被转给拍板人。
+- 驱动挂起记录里的提示让 main agent「往留着的标签页打字再重跑驱动」，重跑会开新标签页，字就丢了——本轮已改（起草通道）。
+- **没修，列出待决**：Greenhouse（`greenhouse_apply_driver.mjs:1630/1670`）和 Lever（`lever_apply_driver.mjs:160/243`）的「How did you hear」仍默认填答案库的 `LinkedIn`，属于同一类「不是用户说的事实」。派遣单只点了 Ashby，要不要一起改请 lead 定。
+
+## 遗留事项
+
+- **上传完成信号的依据只有 5 个页面的现场记录**（BUG_REPORT 第 2 章：S3 loaded-files → graphql）。如果某个 Ashby 租户不走这条路，那家每次都会 `crashed / resume_upload_failed`（响亮、不算投过、连续 3 次触发点提交前失败上限就停批），不会悄悄点提交。建议首跑盯一下日志里的 `resume_upload_not_confirmed`。
+- Greenhouse 有没有「上传没完就点」的竞态**仍未查证**（没有现场网络记录）；本轮只给 Greenhouse 加了「点击接住没有」的核对（没接住会再点 1 次），没有加上传等待。
+- 年限题如果是**下拉框**（不是文本框或单选），现在会停在 `years_experience_widget_unhandled`（不挂起、不乱选）。Suno 那道题当时的控件类型没看到（挂起记录里 selector 为空，只能说明不是普通文本框）。
+- Suno「Which brand(s)」当时 selector 也为空；文本填写函数已放宽到无 type 的 input，如果它其实是别的控件，会停在 `social_accounts_field_not_found`。
+- ElevenLabs Location 当时到底是什么选项格式没看到；按「城市 + 州」认选项是针对常见写法的推断。
+- 取舍：选了「消除根因（等上传 + 核对点击）」，没有恢复「读不懂就再点」——后者简单，但会把「接住了只是页面慢」也再点一次，有重复投递风险。代价是多了一个依赖网络记录格式的判断。
+
+### 需要 lead 在拍板人知情下写入的字段
+
+| 字段（profile.json） | 类型 | 建议值来源 |
+|---|---|---|
+| `standard_qa.how_did_you_hear` | 字符串 | 现档案里已有旧键 `standard_qa.how_did_you_hear_about_us = "Company website / job board"`（来历未登记）——请拍板人确认后写同值。驱动只读新键。 |
+| `standard_qa.years_social_media_experience` | 数字字符串，如 `"1"` | 必须拍板人给数。简历可对照：COR Senior Friends 小红书内容 2025-05～2026-03、One2X TikTok 增长 2026-07 至今、X 个人号 2026-07 至今。 |
+| `standard_qa.social_accounts_managed` | 数组 `[{brand, platform, url, role}]` | 候选（来自 experience_summary）：One2X（Medeo.AI）TikTok、X @LeeLinAI123（个人号）、COR Senior Friends 小红书。**链接和角色要拍板人给**；另请拍板人决定要不要在投竞品时写现雇主的账号。 |
+
+写法（每条一次，`--dry-run` 先看）：
+`node shared/record_profile_answers.mjs --json '{"standard_qa.how_did_you_hear":"Company website / job board"}' --source user_answer --category user_how_did_you_hear --asked-by queue_gate`
+（另两条把 category 换成 `user_years_experience` / `user_social_accounts_managed`。）
+
+另外，ElevenLabs Social Growth 的 3 道点评题（Look at our social accounts… / What other brands… / What type of content…）由 main agent 起草后用 `node shared/agent_drafts.mjs add --url https://jobs.ashbyhq.com/elevenlabs/<岗位id>/application --question "<原题>" --answer "<草稿>"` 存入；只评论对方公开账号能看到的做法，不写候选人没有的事实。Location / NYC 到岗题不需要写任何东西。
+
+## 性能硬指标自查
+
+不涉及接口。驱动耗时：上传后多等约 1-3 秒（每秒问一次，两次读数一致即走；最长 30 秒后报错）；没接住的点击会多一轮（7 秒 + 最多 12 秒重读）。页面内判断只读几十条时间表记录，开销可以忽略。
+
+## API 接口 8 契约自查
+
+不涉及 HTTP 接口。新命令 `agent_drafts.mjs`：参数缺失或值以 `--` 开头就拒绝（与账本 CLI 同一规则），空答案拒收，认不出的岗位链接拒收，文件损坏时响亮报错、不当成「没有草稿」。
+
+## 本项目铁律对照
+
+- 测试串行：`npm test` 自带 `--test-concurrency=1`，连跑 3 次都是串行。
+- CI 四步全跑：npm test ×3 + role_guard_smoke + public_alpha_gate + 全部 `node --check`，都是 exit 0。
+- 主流程冒烟（ci_smoke.main_chain「……大批量一键投递 → 投递报告……」）：投递这一段由驱动 main 级测试 + stream_run 报告测试覆盖；没有做真投（Chrome 不在线，真投也需要拍板人批准）。
+
+## 交付自查清单
+
+- [x] 先写红测试再写代码（3 个新测试文件；「没见红」的 1 条已说明并补强）
+- [x] 全量串行连跑 3 次 613/613，CI 另三步 exit 0
+- [x] 没有绕过平台反垃圾 / 机器人检测的改动
+- [x] 答案只来自档案字段；没值就挂起并带 note
+- [x] 偏离派遣单的 2 处已标注（社媒账号放在哪、年限字段范围）
+- [x] 未顺手改 Greenhouse / Lever 的 LinkedIn 默认值（列进待决）
+- [x] 真实 `~/.mrweirdo-jobs/` 零写入
+- [x] CHANGELOG 已记；说明书已补起草通道
+- [x] 未推送
+
+## 试过的错误方向
+
+1. **用 DOM 判断上传完成（简历框出现文件名 / Replace 按钮）**：否决——React 在上传开始时就换成「已附」样子，BUG_REPORT 里没接住的三页看起来和正常页一样；只有网络记录能区分。
+2. **「点击没被接住」只看专用的三条请求（seon / recaptcha clr / non-user-graphql）**：否决——换一家租户或平台就失效，而且会把「接住了、但只发了别的请求」误判成「没接住」，再点一次就可能重复投。改成「点之后有任何请求或换了页面就算接住」，只在确认 0 条时才再点。
+3. **不管有没有缺字段，只要没接住就再点**：否决——Greenhouse 有浏览器端校验，缺字段时本来就 0 条请求，那样会把正常的「补字段」流程变成 click_not_registered。现在只在页面既没报缺字段、也读不出结果时才核对。
+4. **把社媒账号放进 essay_profile**：否决，原因见「偏离 DESIGN」第 1 条。
