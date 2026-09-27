@@ -8,6 +8,17 @@ const ashbyBoards = {
     { id: 'p2', title: 'Senior ML Engineer', employmentType: 'FullTime', location: 'Remote', descriptionPlain: 'Train models.',
       jobUrl: 'https://jobs.ashbyhq.com/pika/00000000-0000-0000-0000-000000000002', applyUrl: 'https://jobs.ashbyhq.com/pika/00000000-0000-0000-0000-000000000002' },
   ],
+  // 方向预筛（restart-apply-3）：两个对口、两个不对口的应届岗。
+  dirco: [
+    { id: 'd1', title: 'Founder Associate (NYC)', employmentType: 'FullTime', location: 'New York', descriptionPlain: 'Work with the founders.',
+      jobUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d1', applyUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d1' },
+    { id: 'd2', title: 'GTM Associate', employmentType: 'FullTime', location: 'Remote', descriptionPlain: 'Go to market. 1-3 years of experience.',
+      jobUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d2', applyUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d2' },
+    { id: 'd3', title: 'Account Executive', employmentType: 'FullTime', location: 'Remote', descriptionPlain: 'Close deals.',
+      jobUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d3', applyUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d3' },
+    { id: 'd4', title: 'Customer Support Associate', employmentType: 'FullTime', location: 'Remote', descriptionPlain: 'Help customers.',
+      jobUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d4', applyUrl: 'https://jobs.ashbyhq.com/dirco/00000000-0000-0000-0000-0000000000d4' },
+  ],
 };
 const ghBoards = {
   heygen: [{ id: 5, title: 'Marketing Intern', absolute_url: 'https://job-boards.greenhouse.io/heygen/jobs/5', location: { name: 'Remote' }, content: '&lt;p&gt;Market HeyGen.&lt;/p&gt;' }],

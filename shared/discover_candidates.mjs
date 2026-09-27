@@ -8,6 +8,7 @@ import { hasUsableApplyUrl } from './sourcing/usable_apply_url.mjs';
 import { roleTypeBlockReason, roleTypesFromSearchIntent, roleTypeConflict } from './role_types.mjs';
 import { locationVerdict } from './location_gate.mjs';
 import { excludeKeywordMatch, functionExcludeKeywords } from './title_excludes.mjs';
+import { functionMismatchReason } from './function_prefilter.mjs';
 import { atsHome } from './paths.mjs';
 import { unusableAutoApplyReason } from './eligibility.mjs';
 import { progress } from './progress.mjs';
@@ -261,8 +262,12 @@ function filterWithReasons(jobs, intent, roleTypes, intentDoc = {}) {
     } else {
       const unusableReason = unusableAutoApplyReason(job);
       const excludedKeyword = excludeKeywordMatch(job.title, excludes);
+      // Direction before location / role type: a job of another profession is
+      // not worth scoring wherever it is (restart-apply-3 方向预筛).
+      const offDirection = functionMismatchReason(job.title, intentDoc);
       if (unusableReason) reason = unusableReason;
       else if (excludedKeyword) reason = `excluded_title_keyword:${excludedKeyword}`;
+      else if (offDirection) reason = offDirection;
       else {
         // Reasons carry their detail after ':' (location_mismatch:London,
         // requires_3plus_years:5); by_reason_kind in the funnel groups them.
