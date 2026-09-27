@@ -20,8 +20,8 @@ test('不合格 → 看过记录 not_fit（原因代码）/ visa_blocked；合�
   const jobs = [1, 2, 3].map((n) => ({ company: 'Acme', title: `Marketing Intern ${n}`, apply_url: gh(n), location: 'Remote', description: `SECRET-JD-TEXT job ${n}` }));
   const scores = [
     { apply_url: gh(1), fit_score: 8, recommended: true, role_type_match: 'intern', dim_scores: dims(8) },
-    { apply_url: gh(2), fit_score: 3, recommended: false, role_type_match: 'intern', dim_scores: dims(8) },
-    { apply_url: gh(3), fit_score: 4, recommended: false, role_type_match: 'intern', dim_scores: dims(1) },
+    { apply_url: gh(2), fit_score: 3, recommended: false, role_type_match: 'intern', dim_scores: dims(8), reject_reasons: ['direction'] },
+    { apply_url: gh(3), fit_score: 4, recommended: false, role_type_match: 'intern', dim_scores: dims(1), reject_reasons: ['visa'] },
   ];
   writeFileSync(join(home, 'to_score.json'), JSON.stringify(jobs));
   writeFileSync(join(home, 'scored.json'), JSON.stringify(scores));

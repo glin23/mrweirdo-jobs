@@ -196,5 +196,7 @@ function fakeScore(j) {
     key_alignment: ['x'],
     key_gaps: ['y'],
     honest_reason: 'fake scorer',
+    years_required_min: null,
+    reject_reasons: j.fit === true ? [] : ['direction'],
   };
 }

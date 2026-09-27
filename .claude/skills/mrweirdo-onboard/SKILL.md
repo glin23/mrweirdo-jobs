@@ -329,7 +329,11 @@ node shared/stream_run.mjs next --run "$RUN_ID"
 - `action: "score"` → read `batch_file` (at most 50 new jobs; anything
   applied to or already judged was dropped before you see it), score EVERY
   job with `shared/scoring/score_prompt.md`, and write the JSON array of
-  complete score objects to `scored_file`. Then:
+  complete score objects to `scored_file` (every `recommended: false` row
+  names its `reject_reasons`; JD years under 3 are never a reason). If
+  `submit-scores` refuses the batch (`reject_reasons` missing /
+  `years_misjudged`), re-score only the named rows, rewrite `scored_file`
+  and submit the same batch again — it stays pending. Then:
 
   ```bash
   node shared/stream_run.mjs submit-scores --run "$RUN_ID" --batch <batch> --scored "<scored_file>"

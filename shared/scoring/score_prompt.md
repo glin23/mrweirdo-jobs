@@ -49,7 +49,9 @@ For each job in the batch, output one object in this exact shape (no preamble, n
   },
   "key_alignment": ["..."],
   "key_gaps": ["..."],
-  "honest_reason": "1-2 sentence summary."
+  "honest_reason": "1-2 sentence summary.",
+  "years_required_min": 1,
+  "reject_reasons": []
 }
 ```
 
@@ -61,7 +63,7 @@ Return the whole batch as a JSON array `[ {...}, {...}, ... ]`.
 
 - `apply_url` — copy verbatim from input. Used to join scores back to the DB row.
 - `fit_score` — integer 0–10.
-- `role_type_match` — one of `"intern"`, `"part_time"`, `"new_grad_FT"`, `"other"`. Derive from job title + description versus `search_intent.role_type_targets` / `search_intent.seniority`. `new_grad_FT` = a full-time role a new graduate can take: not a senior title (Senior / Sr. / Staff / Principal / Lead / Director / Head / VP / Chief), and the JD does not require 3 or more years of experience ("X Manager" titles such as Community / Field Marketing Manager can be `new_grad_FT`). The title does NOT need to say "New Grad". Contract / temporary roles are `other`.
+- `role_type_match` — one of `"intern"`, `"part_time"`, `"new_grad_FT"`, `"other"`. Derive from job title + description versus `search_intent.role_type_targets` / `search_intent.seniority`. `new_grad_FT` = a full-time role a new graduate can take: not a senior title (Senior / Sr. / Staff / Principal / Lead / Director / Head / VP / Chief), and the JD does not require 3 or more years of experience — see **Years of experience** below ("X Manager" titles such as Community / Field Marketing Manager can be `new_grad_FT`). The title does NOT need to say "New Grad". Contract / temporary roles are `other`.
 - `recommended` — boolean. **True iff every `dim_scores` value is ≥ 5 AND `fit_score` ≥ 5.** (Recall-first calibration; downstream dedupe/quota/platform guards still apply.)
 - `legitimacy` — one of `"high"`, `"caution"`, `"suspicious"`. This is a ghost-job / stale-posting signal, not a fit score. Do not adjust `fit_score` or `recommended` because of this field.
 - `legitimacy_signals` — 0-2 short factual signals from the provided batch data only. Use wording like `"title mentions 2025"`, `"description is specific about team/projects"`, `"salary range is transparent"`, or `"very generic description"`. Do not claim a job is fake.
@@ -75,6 +77,16 @@ Return the whole batch as a JSON array `[ {...}, {...}, ... ]`.
 - `key_alignment` — 1–3 concrete short strings: specific reasons the user is well-matched. Reference actual things from resume/intent. ❌ "good fit"  ✅ "Marketing concentration + 2 prior brand internships align with brand-marketing intern title".
 - `key_gaps` — 1–3 concrete short strings: specific reasons it might not be a fit. ❌ "some skills missing"  ✅ "JD requires SQL + Tableau; user resume only mentions Excel".
 - `honest_reason` — 1–2 sentence overall summary. Match the score — don't be flattering when score is low.
+- `years_required_min` — integer or `null`. The smallest number of years of experience the JD **requires**: the lower end of a stated range, ignoring years marked preferred / a plus / nice to have. `null` when the JD states none.
+- `reject_reasons` — array, **required (non-empty) whenever `recommended` is `false`**, empty when `true`. Every reason that made you turn the job down, from: `"direction"` (function outside the target anchor), `"industry"` (not the kind of company the user targets), `"skills"`, `"location"`, `"visa"`, `"role_type"`, `"experience_years"`, `"seniority"` (senior title), `"exclude_keyword"`, `"legitimacy"`, `"other"`. A batch with a not-recommended row missing this field is refused at storage.
+
+### Years of experience (same rule as the discovery hard filter)
+
+Only a JD whose stated **minimum** is **3 or more years** is not entry level. Read the lower end of a range: "1-3 years" is 1, "2-4 years" is 2, "3-5 years" is 3.
+
+- "0-2 years", "1-2 years", "1-3 years", "2 years", "2+ years", "at least 2 years" → entry level. The job stays `new_grad_FT` (if full-time and not a senior title), and the years must **not** lower `seniority_match`, `role_fit`, `skills_match` or `fit_score`, must not appear as a key gap that lowers the score, and must not make `recommended` false.
+- "3+ years", "3-5 years", "minimum 4 years" (as a requirement, not preferred) → `role_type_match: "other"`, `reject_reasons` includes `"experience_years"`.
+- Storage checks this: a row turned down with `reject_reasons` only `["experience_years"]` (or `["experience_years", "role_type"]`) whose JD states a minimum under 3 years is refused as `years_misjudged`, and the batch must be re-scored.
 
 ---
 

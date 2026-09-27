@@ -145,6 +145,25 @@ export function requiredYears(description) {
   return max;
 }
 
+// restart-apply-3（拍板人 2026-09-27）: the scorer turned down JDs asking for
+// "1-3 years" on years alone, against the rule the hard filter uses (only a
+// stated minimum of 3+ years is not entry). A rejected row names its reasons
+// (score_prompt.md reject_reasons); when years are the only one, the years are
+// read the hard filter's way — requiredYears(JD), or the scorer's own
+// years_required_min when the JD gives the rule nothing to read. Under 3 →
+// the rejection contradicts the rule: returns { years, source }, else null.
+const YEARS_ONLY_REASONS = new Set(['experience_years', 'role_type']);
+export function yearsOnlyRejectionConflict(job = {}, score = {}) {
+  if (score.recommended !== false) return null;
+  const reasons = Array.isArray(score.reject_reasons) ? score.reject_reasons : [];
+  if (!reasons.includes('experience_years') || !reasons.every((r) => YEARS_ONLY_REASONS.has(r))) return null;
+  const ruled = requiredYears(job.description);
+  const scorer = Number.isInteger(score.years_required_min) ? score.years_required_min : null;
+  const years = ruled ?? scorer;
+  if (years != null && years > MAX_ENTRY_YEARS) return null;
+  return { years, source: ruled != null ? 'jd_rule' : scorer != null ? 'scorer' : 'none' };
+}
+
 // Why a job does not pass the role-type gate for these targets, or null. The
 // discovery funnel records the reason; passesAllowedRoleType is its boolean.
 export function roleTypeBlockReason(job = {}, allowedRoleTypes = ['intern', 'part_time']) {

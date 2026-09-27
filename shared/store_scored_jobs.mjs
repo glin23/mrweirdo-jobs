@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atsHome } from './paths.mjs';
 import { initDb, upsertJob } from './local_db.mjs';
-import { classifyRoleType, normalizeRoleType, roleTypesFromSearchIntent } from './role_types.mjs';
+import { classifyRoleType, normalizeRoleType, roleTypesFromSearchIntent, yearsOnlyRejectionConflict } from './role_types.mjs';
 import { SUPPORTED_AUTO_PLATFORMS, platformFromUrl } from './sourcing/apply_url_classification.mjs';
 import { hasUsableApplyUrl } from './sourcing/usable_apply_url.mjs';
 import { legitimacyBlockReason, unusableAutoApplyReason } from './eligibility.mjs';
@@ -124,6 +124,27 @@ if (scoreMissing.length > 0 && !allowPartialScores) {
     'For a deliberate debug-only run, pass --allow-partial-scores or set MRWEIRDO_ALLOW_PARTIAL_SCORES=1.',
   ].join(' ');
   console.error(JSON.stringify({ ok: false, error: message, ...summary }, null, 2));
+  process.exit(1);
+}
+
+// restart-apply-3 年限口径（硬规则层，score_prompt.md「Years of experience」）: a
+// rejected row must say why (reject_reasons), and a rejection on years alone
+// must agree with the hard filter's years rule — else the whole batch is
+// refused, like partial scores, and stays pending for a re-score of the named
+// rows. Nothing is stored or remembered from a refused batch.
+const scoredUsable = usableCandidates.map((job) => [job, byUrl.get(rowUrl(job))]);
+const noReasons = scoredUsable
+  .filter(([, s]) => s?.recommended === false && (!Array.isArray(s.reject_reasons) || s.reject_reasons.length === 0))
+  .map(([job]) => rowUrl(job));
+const yearsMisjudged = scoredUsable
+  .map(([job, s]) => [job, yearsOnlyRejectionConflict(job, s)])
+  .filter(([, c]) => c)
+  .map(([job, c]) => ({ apply_url: rowUrl(job), title: job.title || '', years_required_min: c.years, read_by: c.source }));
+if (noReasons.length > 0 || yearsMisjudged.length > 0) {
+  const parts = [];
+  if (noReasons.length) parts.push(`reject_reasons missing on ${noReasons.length} not-recommended row(s): ${noReasons.join(' ')} — every recommended:false row names its reasons (score_prompt.md).`);
+  if (yearsMisjudged.length) parts.push(`years_misjudged: ${yearsMisjudged.length} row(s) turned down on years alone, but the JD's stated minimum is under 3 years (1-2 / 1-3 / 2 years are entry level; only a minimum of 3+ is not): ${yearsMisjudged.map((y) => `${y.apply_url} (min ${y.years_required_min ?? 'none stated'})`).join(' ')} — re-score these rows without a years penalty.`);
+  console.error(JSON.stringify({ ok: false, error: `Refusing to store this batch. ${parts.join(' ')} Fix ${scoredPath} and store again.`, reject_reasons_missing: noReasons, years_misjudged: yearsMisjudged, ...summary }, null, 2));
   process.exit(1);
 }
 
