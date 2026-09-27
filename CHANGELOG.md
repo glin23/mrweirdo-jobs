@@ -155,18 +155,20 @@ since shipped and now lives in `docs/archive/`; the current one is
   `shared/sourcing/data/watchlist_ai_video.json` (not applied automatically).
 
 ### Fixed
-- **A submit click the page never received is no longer "may have submitted"**
-  (2026-09-27, 真投 BUG_REPORT 第 2 章: OpusClip / Creatify / ElevenLabs sent
-  nothing). Ashby waits until the resume upload is observably done (S3 upload +
-  the graphql after it, no new request for a poll) before clicking; an
-  unconfirmed upload is `crashed / resume_upload_failed`. After a click that
-  yields no page answer, both Ashby and Greenhouse check whether any request
-  followed it: none → one more click (nothing was sent, so nothing can be
-  duplicated), still none → `not_submitted / submit_click_not_registered`,
-  not an attempt. A click the page did receive is still never repeated.
-  Every terminal outcome after a click (unknown, needs_user, rate_limited, …)
-  now carries a full-page screenshot; the 3-line report names these rows
-  separately. Read-only Resource Timing only — nothing is done to look human.
+- **Ashby waits for the resume upload before clicking Submit; every driver clicks
+  a silent Submit only once** (2026-09-27, 真投 BUG_REPORT 第 2 章 + verify 第
+  19-20 轮). Ashby clicks only after the upload is observably done (S3 upload +
+  the graphql after it, no new request for a poll); an unconfirmed upload is
+  `crashed / resume_upload_failed`, never clicked. After a click the page does
+  not answer (no field errors, no readable result), Ashby and Greenhouse never
+  click again — it is `unknown` (may have submitted), with a full-page
+  screenshot; the lead checks the inbox and corrects the ledger. Re-submitting
+  after the page lists missing fields is unchanged. A missing button or an
+  unreadable click after any click in the run is `unknown`, not "before
+  submit". Every terminal outcome after a click, crashes included, carries a
+  screenshot. `cdp.mjs clickwatch` records requests sent after the click (a
+  hint in the outcome, never a decision); a dropped connection reports "cannot
+  tell". Read-only — nothing is done to look human.
 - **Small form questions answered from the profile** (2026-09-27, ElevenLabs /
   Suno). "How did you hear" from `standard_qa.how_did_you_hear` (dropdown
   first; no more answer-bank "LinkedIn"); years of social-media experience from
