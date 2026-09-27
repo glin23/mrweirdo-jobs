@@ -1,4 +1,4 @@
-import { classifyPlace } from './location_gate.mjs';
+import { classifyPlace, namedPlaces } from './location_gate.mjs';
 // Pure answer-routing helpers extracted from ashby_apply_driver.mjs so the
 // safety-critical decisions can be unit-tested WITHOUT a live browser tab.
 // Behavior here is verbatim with the driver's prior inline logic — these are
@@ -39,14 +39,23 @@ export function isOpenEndedResidenceQuestion(label = '') {
 // country — the first real run asked the user about OpusClip's Mountain View
 // office although he had said "anywhere in the US" (2026-09-26). A job whose
 // location is unknown or abroad is not covered: ask.
-export function relocationPolicyOpen(searchIntent = {}, { jobLocation = '' } = {}) {
+//
+// The place the QUESTION names comes first (verify 第 17 轮: a job listed in
+// London + New York asked about the London office and got Yes): a question
+// naming a place outside the US is always asked; one naming a US place is
+// covered by 「全美可搬」; only a question naming no place falls back to the
+// job's own location.
+export function relocationPolicyOpen(searchIntent = {}, { jobLocation = '', questionText = '' } = {}) {
   const geo = searchIntent?.search_intent?.geographic_preference
     || searchIntent?.geographic_preference
     || {};
   if (geo.willing_to_relocate_for_internship !== true) return false;
+  const named = namedPlaces(questionText);
+  if (named.foreign) return false;
   if (geo.relocation_policy === 'anywhere_legal_work') return true;
   if (geo.relocation_policy === 'anywhere_primary_country') {
-    return String(geo.primary_country || 'US').toUpperCase() === 'US' && classifyPlace(jobLocation) === 'us';
+    if (String(geo.primary_country || 'US').toUpperCase() !== 'US') return false;
+    return named.us || classifyPlace(jobLocation) === 'us';
   }
   return false;
 }

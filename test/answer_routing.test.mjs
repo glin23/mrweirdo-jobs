@@ -299,3 +299,15 @@ test('relocationPolicyOpen：全美可搬（真实拷贝的 geographic_preferenc
   assert.equal(relocationPolicyOpen({ search_intent: { geographic_preference: { ...REAL_GEO, willing_to_relocate_for_internship: false } } }, { jobLocation: 'Mountain View' }), false);
   assert.equal(relocationPolicyOpen({ search_intent: { geographic_preference: { ...REAL_GEO, relocation_policy: 'selected_metros' } } }, { jobLocation: 'Mountain View' }), false);
 });
+
+// verify 第 17 轮 P2：岗位地点含纽约、题目却问伦敦办公室 → 曾自动答 Yes。题目点名的城市/国家
+// 在美国以外 → 一律照问；点名美国城市 → 按全美可搬答；不点名 → 按岗位的美国地点答。
+test('relocationPolicyOpen：题目点名地点优先于岗位地点', () => {
+  const intent = { search_intent: { geographic_preference: REAL_GEO } };
+  for (const q of ['Are you able to work from our London office 3 days a week?', 'Can you commit to our Berlin HQ on-site schedule?', 'Is working in-person at our Toronto office OK for you?', 'Would you relocate to the UK for this role? Join us!']) {
+    assert.equal(relocationPolicyOpen(intent, { jobLocation: 'New York', questionText: q }), false, q);
+  }
+  assert.equal(relocationPolicyOpen(intent, { jobLocation: 'London', questionText: 'Can you work from our New York office 3 days a week?' }), true);
+  assert.equal(relocationPolicyOpen(intent, { jobLocation: 'New York', questionText: 'Do the office location and RTO requirements work for you? Join us!' }), true);
+  assert.equal(relocationPolicyOpen(intent, { jobLocation: 'London', questionText: 'Do the office location and RTO requirements work for you?' }), false);
+});

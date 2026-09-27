@@ -539,7 +539,7 @@ async function answerMissing(tab, missingLabel) {
   //    but if the phrasing asserts a residence/transport FACT (handled by the
   //    specific-city-fact guard below, which runs first), we ask-or-skip instead.
   // Decisions extracted to shared/answer_routing.mjs (pure, unit-tested).
-  const relocationPolicyOpen = routingRelocationPolicyOpen(SEARCH_INTENT, { jobLocation: JOB_LOCATION });
+  const relocationPolicyOpen = routingRelocationPolicyOpen(SEARCH_INTENT, { jobLocation: JOB_LOCATION, questionText: missingLabel });
   const confirmedCities = routingConfirmedCities(PROFILE);
   const mentionsConfirmedCity = routingMentionsConfirmedCity(ml, confirmedCities);
   const isSpecificCityLogisticsFact = routingIsSpecificCityFact(ml);

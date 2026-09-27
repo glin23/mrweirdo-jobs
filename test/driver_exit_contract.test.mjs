@@ -266,6 +266,62 @@ test('Greenhouse 出货 main()：确认页 URL + 文案 → submitted / exit 0�
   }
 });
 
+// verify 第 17 轮：Greenhouse 页面读不出结果时仍盲点提交最多 5 次 → 同 Ashby：只重读、不再点。
+test('Greenhouse 出货 main()：没有缺字段、页面一直读不懂 → unknown，全程只点一次提交', async () => {
+  const { main } = await loadGreenhouse(GH_BASE);
+  let clicks = 0;
+  setEvalRules([
+    ...ghBaseRules(),
+    { match: 'btn.click()', result: () => { clicks += 1; return { ok: true, text: 'Submit application' }; } },
+    { match: 'helper-text--error', result: GH_PAGE('nothing recognizable on this page') },
+  ]);
+  globalThis.__MRW_FILLS = [];
+  try {
+    const emitted = await runToEmit(main);
+    assert.equal(emitted.outcome, 'unknown');
+    assert.equal(emitted.reason, 'no_errors_no_success');
+    assert.equal(clicks, 1, 'no blind re-submit');
+  } finally {
+    clearStubs();
+  }
+});
+
+test('Greenhouse 出货 main()：先空白、再出确认页 → submitted，只点一次', async () => {
+  const { main } = await loadGreenhouse(GH_BASE);
+  let clicks = 0;
+  let reads = 0;
+  setEvalRules([
+    ...ghBaseRules(),
+    { match: 'btn.click()', result: () => { clicks += 1; return { ok: true, text: 'Submit application' }; } },
+    { match: 'helper-text--error', result: () => (reads++ === 0 ? GH_PAGE('Application') : GH_PAGE(fixture('confirm_greenhouse_thank_you.txt'), { url: 'https://job-boards.greenhouse.io/testco/confirmation' })) },
+  ]);
+  globalThis.__MRW_FILLS = [];
+  try {
+    const emitted = await runToEmit(main);
+    assert.equal(emitted.outcome, 'submitted');
+    assert.equal(clicks, 1);
+  } finally {
+    clearStubs();
+  }
+});
+
+// verify 第 17 轮 P2：成功文案与 spam 横幅同时出现 → 判定器双命中 = unknown（可能已提交），
+// 不得记成「没收到」、不得免名额。
+test('Ashby 出货 main()：成功 + spam 双命中 → 不记 platform_spam_flagged（按判定器 unknown 走）', async () => {
+  const driver = await loadAshby(ASHBY_BASE);
+  const { counter, rule } = clickCounter();
+  const both = `${fixture('confirm_ashby_success.txt')}\n${fixture('deny_tavus_spam_flagged.txt')}`;
+  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: ASHBY_PAGE(both) }]);
+  try {
+    const emitted = await runToEmit(driver.main);
+    assert.notEqual(emitted.reason, 'platform_spam_flagged');
+    assert.equal(emitted.outcome, 'unknown');
+    assert.equal(counter.n, 1);
+  } finally {
+    clearStubs();
+  }
+});
+
 test('Greenhouse 出货 main()：Directive 式失败页 → not_submitted，第 1 次尝试就短路', async () => {
   const { main } = await loadGreenhouse(GH_BASE);
   setEvalRules([

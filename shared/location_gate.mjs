@@ -100,6 +100,16 @@ export function classifyPlace(text) {
   return 'unknown';
 }
 
+// Places a sentence (a form question) names. Unlike classifyPlace this reads
+// prose, so a bare lowercase "us" ("join us") is not the United States; "US",
+// "U.S.", "USA", "United States" and US cities / states are.
+const US_PROSE_RE = wordsRe([...US_WORDS.filter((w) => w !== 'us'), ...US_STATES, ...US_CITIES]);
+const US_UPPER_RE = /(^|[^A-Za-z])US(?=$|[^A-Za-z])/;
+export function namedPlaces(text) {
+  const t = String(text || '').replace(US_TIME_RE, ' ');
+  return { us: US_PROSE_RE.test(t) || US_UPPER_RE.test(t), foreign: FOREIGN_RE.test(t) || CN_RE.test(t) };
+}
+
 function classifyCountry(country) {
   const c = String(country || '').trim();
   if (!c) return null;

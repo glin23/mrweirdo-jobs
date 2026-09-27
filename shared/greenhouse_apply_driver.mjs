@@ -1254,6 +1254,11 @@ async function submitAndCheck(tab) {
     })()
   `);
   await sleep(5000);
+  return readSubmitPage(tab);
+}
+
+// Reads the page after a submit click — never clicks.
+async function readSubmitPage(tab) {
   // No local success regex any more: the page returns raw material and the
   // single shared submissionVerdict judges it node-side (ADR-14 判定器唯一实现).
   // The /confirmation URL signal lives in the shared confirm table.
@@ -1806,7 +1811,14 @@ async function main() {
   for (let attempt = 1; attempt <= 5; attempt++) {
     await clickVisibleConsentCheckboxes(tab);
     log(`Submit attempt ${attempt}…`);
-    const res = await submitAndCheck(tab);
+    let res = await submitAndCheck(tab);
+    // No required-field errors and nothing readable yet: re-READ the page, never
+    // click Submit again on a form the page did not reject (verify 第 17 轮; same
+    // as the Ashby driver — a blind re-click can send a duplicate).
+    for (let look = 0; [...new Set(res.missing)].length === 0 && res.verdict.verdict === 'unknown' && look < 4; look += 1) {
+      await sleep(3000);
+      res = await readSubmitPage(tab);
+    }
     if (res.verdict.verdict === 'submitted') {
       const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'submitted' }).catch((e) => { log('evidence capture failed (submission still recorded):', e.message); return null; });
       await closeTab(tab);
@@ -1822,7 +1834,7 @@ async function main() {
         // An anti-spam refusal says the company never got it (driver_contract SPAM_FLAGGED_*).
         emitOutcome({ outcome: 'not_submitted', reason: isSpamFlagged(res.verdict) ? 'platform_spam_flagged' : 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
       }
-      if (attempt < 5) { await sleep(3000); continue; }
+      // Still unreadable after re-reading: say so; do not submit again.
       emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, snippet: res.body_snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
     }
     if (JSON.stringify(res.missing) === JSON.stringify(lastMissing)) {

@@ -58,3 +58,10 @@ test('3 行报告第 2 行：「被平台当成垃圾申请拦下，没收到」
     await rig.close();
   }
 });
+
+test('verify 第 17 轮 P2：成功 + spam 双命中 → 判定器 unknown，投过口径 true（占名额）', () => {
+  const ok = readFileSync(new URL('./fixtures/submission_pages/confirm_ashby_success.txt', import.meta.url), 'utf8');
+  const v = submissionVerdict({ bodyText: `${ok}\n${PAGE}`, url: TAVUS });
+  assert.equal(v.verdict, 'unknown');
+  assert.equal(deriveMayHaveSubmitted({ outcome: 'not_submitted', reason: 'platform_spam_flagged', verdict: v }), true, 'only a verdict of "not submitted" earns the exemption');
+});

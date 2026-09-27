@@ -169,7 +169,10 @@ export const SPAM_FLAGGED_MAY_HAVE_SUBMITTED = false;
 export function deriveMayHaveSubmitted(o) {
   const valid = validateOutcome(o);
   if (valid.stage === PRE_DISPATCH_STAGE) return false;
-  if (valid.outcome === 'not_submitted' && valid.reason === SPAM_FLAGGED_REASON) return SPAM_FLAGGED_MAY_HAVE_SUBMITTED;
+  // Exempt only when the verdict itself says "not submitted"; a two-way hit
+  // (success text too) is unknown and counts as maybe submitted (verify 第 17 轮 P2).
+  if (valid.outcome === 'not_submitted' && valid.reason === SPAM_FLAGGED_REASON
+    && (valid.verdict?.verdict ?? valid.verdict) === 'not_submitted') return SPAM_FLAGGED_MAY_HAVE_SUBMITTED;
   if (valid.verdict != null) return true;
   if (PRE_SUBMIT_EXITS.has(`${valid.outcome}:${valid.reason ?? ''}`)) return false;
   // Submit was clicked, but the page stayed on the form listing required-field

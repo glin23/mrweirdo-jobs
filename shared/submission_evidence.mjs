@@ -61,7 +61,9 @@ export const DENY_PATTERNS = [
   { id: 'platform_spam_flagged', re: /flagged as (?:possible |potential |likely )?spam|marked as (?:possible )?spam/i, fixture: 'deny_tavus_spam_flagged.txt' },
 ];
 
-export const isSpamFlagged = (verdict) => Boolean(verdict?.denyHits?.includes('platform_spam_flagged'));
+// Only a page judged "not submitted" counts: success text next to the banner is
+// a two-way hit = unknown = maybe submitted (verify 第 17 轮 P2).
+export const isSpamFlagged = (verdict) => verdict?.verdict === 'not_submitted' && Boolean(verdict?.denyHits?.includes('platform_spam_flagged'));
 
 // Pure function. Missing/empty input is not an error — it is exactly the
 // "page said nothing readable" case, and the honest answer to it is 'unknown'.
