@@ -11,9 +11,10 @@ Reads:
   - （第 2 次召唤）docs/active/2026-09-25_restart-apply_DESIGN.md 第 2 轮全文、docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮 V1-V13、VERIFY_REPORT §5
   - （第 3 次召唤）DESIGN 第 2 轮 §3/§4/§7/§10、VERIFY_REPORT 第 2-3 轮挂账（规则 6、P3 slug/锁、P4 跨午夜）
   - （第 4 次召唤 S5）DESIGN §10 S5 行 / §3 / §4 / §7、定稿 docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮、VERIFY_REPORT 第 5 轮（RACE / PID 复用）
-Blocks: restart-apply-3 方向预筛 / 年限口径 / release 任意链接的 verify 验收；restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
+  - （第 9 次召唤）docs/active/2026-09-27_restart-apply-3_BUG_REPORT.md、restart-apply-3_TASK.md、shared/page_signals.mjs、shared/ashby_apply_driver.mjs、shared/cdp.mjs
+Blocks: restart-apply-3 Ashby 页面空闲闸 / 只认提交请求 / Reevo 三项的 verify 验收；restart-apply-3 方向预筛 / 年限口径 / release 任意链接的 verify 验收；restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
 Updated: 2026-09-27
-Iterations: 9
+Iterations: 10
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -781,3 +782,84 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 > 红测试（先红后绿）：Round 3 复现（两条非名单放行 + 20 个名单岗待重打 → 只打两条、两条都投、名单不 held）；--target 1 放行 12 条 → 12 条都打；第 2 行分类文案。旧测试文案同步为「类别：代码」。
 > 取舍：release 运行不再顺带重打名单岗——名单的新合格岗要等下一次普通运行才报，换来放行必定先打分。
 
+
+## 第 9 次召唤（restart-apply-3：Ashby 页面空闲闸 / 只认提交请求 / Reevo 三项）
+
+> 派遣依据：`docs/active/2026-09-27_restart-apply-3_TASK.md` Round 5 + `2026-09-27_restart-apply-3_BUG_REPORT.md`。代码提交 `5622208`（未推）。标注：[实测] / [读码] / [猜]。
+
+### 实现摘要
+
+1. **页面空闲闸**（上传闸合并进来）：`page_signals.formSettled`（只数表单请求 graphql / S3，可带「必须有上传」条件）取代 `uploadSettled`；新 `cdp.mjs netidle <tab> <quietMs> <timeoutMs> [urlRegex]`（只读 Network 事件，跟踪在途请求，`netIdleTracker` 在 page_signals 里可单测）。驱动 `waitPageIdle`：每轮先 netidle（1.5 秒无表单请求在途，> Ashby 500ms 防抖），再读 formSettled，两者都过且请求数与上一轮相同才算空闲；30 秒不空闲 → 失败。用在：简历上传后、求职信上传后、**每次点提交前**（第 1、2 次都过）。点前不空闲 → `crashed / form_saves_not_settled`，已进 `PRE_SUBMIT_EXITS`（不算尝试）。
+2. **只认提交请求**：`clickwatch` 加 `--only <urlRegex>`，自动保存不再让观察窗口提前结束（所有请求仍列出）；`clickReceived` / `clickVerdict` 加可选 `submitPattern`，Ashby 传 `ApiSubmit(?:SingleApplicationForm|MultipleForms)Action`，Greenhouse 不传、行为不变。新页面内函数 `emptyRequiredFields`（可见 required 文本框 / 文本域 / 下拉为空、required 单选组没选）。点击后「确定没发出提交请求」+「必填仍空」两条同时成立 → `not_submitted / submit_request_not_sent`（带 `submit_request_seen:false`、`required_empty`，`deriveMayHaveSubmitted` 专条判 false）；任何一条读不出 → 仍 unknown。两个 unknown 出口（第 1 次沉默、第 2 次页面只挂旧报错）都先过这道判断。点击次数 ≤2 守卫一行未改，没有新增任何「再点」。
+3. **Reevo**：
+   - 缺项字段统一：`driver_contract.pageMissingOf`（missing / still_missing / last_missing 取第一个非空），`deriveMayHaveSubmitted` 改用它；`record_apply_outcome` 账本行新增 `missing`（needs_user 等有缺项时）；`stream_run` 第 2 行「N 个卡在缺信息（公司·岗位 缺：A / B / C）」。缺口报告本来就两个键都读 [读码]，新增 Reevo 形状测试确认 stuck 出口的缺项进报告。
+   - 城市勾选题：`answer_routing.isWorkLocationChoiceQuestion` / `pickWorkLocations`，驱动 `answerWorkLocationChoices`（读选项 → 决策 → 只勾决定的项 → 回读勾上）。规则：每个地点选项都要被覆盖（档案确认过的城市，或可搬迁政策覆盖——外国地点永不覆盖；既不是已知美国地名、也不在岗位地点里的名字不覆盖），有一个不覆盖整题挂起问用户；全覆盖且有 Both / All 类选项 → 只勾它，否则勾全部地点；单选框只勾第一个。挂起 note `work_location_needs_user` → 缺口报告 `user_work_location_commitment`。
+   - 数字薪资框：`answer_routing.salaryNumberFor`（来源顺序同 Lever：custom_facts[本题键] → work_authorization.salary_expectation_usd → standard_qa → essay_profile），解析数值与单位（时薪 / 年薪）；题目单位（hour/rate → 时薪，salary/annual → 年薪）与档案不一致 → `salary_unit_mismatch` 挂起，不换算。`fillTextInQuestion` 认出 `type=number` 框：非数字值不打，只打数字。所有 `fillTextInQuestion` / `typeIntoQuestion` 打完按 typetext 回读值核对（电话类只比数字），没进去 → `value_not_accepted`，不报成功。
+   - 用户在缺口报告里答了这道薪资题（写进 custom_facts，键 = 题目）→ 下次直接用，闭环。
+4. 改动量：9 个 shared 文件 +约 480 / -60 行；3 个新测试文件 + 7 个旧测试文件小改；CHANGELOG 顶部 Fixed 两条。
+
+### TDD 落地证据
+
+- 先红后绿 [实测]：新测试先写、跑红（import 不存在的导出 / 断言失败），再实现到绿。
+  - `test/ashby_submit_gate.test.mjs`（24 条）：formSettled 规则（只数表单请求、上传条件沿用、缓冲满判不出）、netIdleTracker 在途 / 失败 / 无关请求、只认提交请求（Rillet 时间线复现）、clickVerdict 三态、emptyRequiredFields（假 document）；出货 `main()` 替身：每次点击前都过闸、在途未回不点、一直不空闲 → crashed 不点不算投过、clickwatch 收到 `--only` 样式、只有自动保存 + 必填空 → not_submitted 不算投过有截图、必填都有值 → unknown、提交请求发出 → unknown、读不出 → unknown、第 2 次点击没发出 + 旧报错 → not_submitted 且不点第 3 次。
+  - `test/reevo_form_fixes.test.mjs`（23 条）：薪资单位真值表、城市勾选规则（Reevo Both、多城、外国、不搬家、认不出）、驱动里勾选 / 挂起 / 没勾上、数字框挂起不打英文、年薪只打数字、文字框照旧、回读失败、电话格式、pageMissingOf。
+  - 真 Chrome [实测]：`click_watch_chrome.test.mjs` 新增 netidle 等到 1.2 秒慢保存回来才返回、quiet 大于 timeout 报不空闲、`clickwatch --only` 遇自动保存不收窗、遇提交请求才收；`ashby_page_js_chrome.test.mjs` 把驱动真实注入的勾选 JS 在 Reevo 形状页面上跑：读出三项、只勾 Both、回读 [false,false,true]；emptyRequiredFields 列出薪资 / LinkedIn；typetext 往 number 框打英文 → `verified:false, value:''`（复现 Reevo 假成功）。
+  - 旧测试改动：harness 的 typetext 替身回显 verified、clickAndWatch 默认看到 ApiSubmit 请求并记录样式；`function uploadSettled` 匹配改 `function formSettled`；上传闸顺序测试只取前 3 个读数（点前闸新增读数）；stream_run 规则 6 加断言报告与账本列出 GPA；缺口报告加 Reevo 形状用例。
+- 全量 `npm test` 串行连跑 3 次 **715/715**（基线 663）；role_guard_smoke / public_alpha_gate / 全部 `node --check` exit 0 [实测]。覆盖率：项目无覆盖率工具，无数字。
+- 不真投、不写真实 `~/.mrweirdo-jobs/`：`find ~/.mrweirdo-jobs -newer <本轮第一个新文件>`（排除 chrome-profile）= 0 [实测]；只读了 profile / essay_profile / search_intent / 账本 / 截图。
+
+### 自审记录
+
+- 反面检查：① 自动保存在 netidle 挂上前已发出、观察期间回来 → 请求数变化，下一轮再等；挂上前发出、超过 3 秒才回来的极端情况看不见 [猜，罕见]，此时点击若被吞，第 2 道判断（无提交请求 + 必填空）仍会判 not_submitted 而不是假 unknown。② 提交请求在 19 秒观察窗口之后才发出 → CDP 说没看到，但此时要求必填还空才判没投；必填都有值一律 unknown，不冒重投风险。③ 资源记录满 250 条 → 闸判不出 → crashed（与原上传闸同口径，响亮失败）。
+- 无吞异常：两处 JSON.parse 失败都返回带原因的失败对象（netidle_output_unreadable / typetext_output_unreadable），不当成功。
+- 反自动化：netidle / clickwatch 只听网络事件，页面不改；没有改任何人机验证、指纹、时序伪装。
+
+### 偏离 DESIGN / 派遣单
+
+1. 派遣单「小步提交」：三项都改 `ashby_apply_driver.mjs` 同一批函数（submitOnce / answerMissing / fillTextInQuestion），非交互环境没法按块拆提交，合成一个代码提交 `5622208`，提交说明按三项分条。
+2. 「不再点击后任何请求都算接住」只对 Ashby 生效；Greenhouse 没有同款自动保存闸的证据（BUG_REPORT 未查证），`clickReceived` / `clickVerdict` 不传样式时行为不变。
+
+### 发现的旧 bug
+
+- `typeIntoQuestion`（长文 / 主 agent 草稿）原来同样打完不回读，本轮一并改为回读（同一根因「打完不回读」，BUG_REPORT 同模式风险扫描点名）。
+- 其他未核的「打完不回读」：`fill_location_combobox` 的 typetext、`fill_phone` 的第一条路、`fillStandard` 姓名 / 邮箱 / 电话，本轮未改（下拉 / 系统字段另有页面回应兜着）[读码]，列入遗留。
+
+### 遗留事项
+
+1. **stuck 出口原因名误导未改**：第 1 次就有题补不上时仍叫 `stuck_on_same_missing`（BUG_REPORT 建议拆名）。下游 apply_guard / 规则 6 等按原因名分支，改名需一起核，未在本轮做。
+2. **Reevo 薪资会挂起**：拍板人档案只有时薪 $20/hr，Reevo 问 base salary（年薪）→ 本轮按规则挂起问拍板人，不换算。拍板人答了之后（缺口报告写进 custom_facts）下次自动用。
+3. **Prior Labs「Are you an LLM?」**：按 lead 已定规则转手投，本轮未碰。
+4. 每次点提交前多等至少 3 秒（两轮 1.5 秒安静）；没发出提交请求时观察窗口满 19 秒才读页面（原 7 秒），单岗最多多约 12 秒。
+5. `fillStandard` 等其余不回读的填法未改（见上）。
+6. 需真 Ashby 页面验证：`ApiSubmit*Action` 名字取自 BUG_REPORT 读的前端源码；本轮只在本机假页面上验证，未碰真 Ashby。
+
+### 性能硬指标自查
+
+本轮无接口端点、无压测对象；新增耗时见遗留 4（每次点击前约 3 秒，都是等平台自己的保存请求落定，不是固定睡眠）。
+
+### API 接口 8 契约自查
+
+不涉及端点。结局契约新增 `crashed:form_saves_not_settled`（点前出口表）、`not_submitted:submit_request_not_sent`（证据齐才判不算尝试），均有测试。
+
+### 本项目铁律对照
+
+- 测试串行跑：3 次 `npm test`（--test-concurrency=1）全绿 715。
+- CI 每一步本地跑：Unit tests / role_guard_smoke / public_alpha_gate / node --check 全部 exit 0。
+- 主流程冒烟（ci_smoke.main_chain 投递段）：stream_run 端到端替身测试（找岗 → 打分 → 投 → 记账 → 3 行报告）随全量跑绿，规则 6 用例新增报告列缺项断言。
+
+### 交付自查清单
+
+- [x] TDD：新测试先红后绿；全量串行 3 次 715/715；CI 另三步 exit 0。
+- [x] 提交 ≤2 次守卫未削弱（源码守卫测试 + 新增「第 2 次没发出也不点第 3 次」）；无绕过平台检测的改动。
+- [x] 不真投、不写真实家目录（find 核对 0 个新文件）。
+- [x] 无吞异常、无假数据兜底；偏离已标（单提交、Greenhouse 不改）。
+- [x] CHANGELOG 顶部 Fixed 两条。
+- [ ] 覆盖率数字：项目无覆盖率工具。
+- [ ] 真 Ashby 页面端到端：未做（不真投），留给 verify / 下一次真跑。
+
+### 试过的错误方向
+
+1. **只用页面自己的资源时间表判断「保存走完」（原上传闸做法推广）**：否决——时间表只记走完的请求，两次读数之间开始、仍在途的保存两次都看不见，照样「安静」；改为 CDP 在途跟踪 + 请求数稳定两半合一。
+2. **clickwatch 不改、驱动事后在 watch.requests 里过滤提交请求**：否决——clickwatch 见到第一条请求就收窗，第一条常是自动保存，提交请求来不及被看见；改为 `--only` 让窗口等提交请求本身。
+3. **时薪 $20/hr 换算成年薪（×2080）填进 base salary**：否决——那个数拍板人从没说过，属于编事实；改为单位不一致就挂起问。
+4. **没发出提交请求就判 not_submitted（不看必填）**：否决——提交请求可能在观察窗口之后才发出，单凭「没看到」会把可能投出的判成没投、下次重投；加上「必填仍空」这条服务端必拒的证据才判。
