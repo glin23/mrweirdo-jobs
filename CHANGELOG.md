@@ -163,7 +163,11 @@ since shipped and now lives in `docs/archive/`; the current one is
   not answer (no field errors, no readable result), Ashby and Greenhouse never
   click again — it is `unknown` (may have submitted), with a full-page
   screenshot; the lead checks the inbox and corrects the ledger. Re-submitting
-  after the page lists missing fields is unchanged. A missing button or an
+  after the page lists missing fields happens at most once (two clicks in
+  all), and only when every listed field was answered; if the page then still
+  lists only fields already answered (a re-rejection, or the resubmit still in
+  flight with the old errors on screen — verify 第 21 轮), it is `unknown`,
+  never a third click; a never-answered field listed = `needs_user`. A missing button or an
   unreadable click after any click in the run is `unknown`, not "before
   submit". Every terminal outcome after a click, crashes included, carries a
   screenshot. `cdp.mjs clickwatch` records requests sent after the click (a

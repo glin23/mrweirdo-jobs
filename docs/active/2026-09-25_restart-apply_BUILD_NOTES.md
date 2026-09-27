@@ -726,3 +726,9 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 > ④ verify P4（窗口外才发的请求）：页面没回答的点击一律 unknown，不再有 not_submitted 出口，漏看只影响提示。
 > **遗留风险（未修，请 lead 定）**：第 2 次及以后的点击（补缺字段后的再提交），如果请求还在途、页面上仍是上一轮的缺字段报错，驱动会按「同样缺字段、卡住」记 needs_user，这类结局按规则记 may_have_submitted=false。这个情况从来没观察到过（Ashby 在点击后 0.1–0.3 秒发请求，驱动等 7 秒才读页面），但方向上属于「可能重投」。可选修法：点击后网络监听看到请求、且缺字段和上一轮完全相同时，改记 unknown。
 > 全量 `npm test` 串行连跑 3 次 **636/636**（含 2 条真 Chrome 用例），role_guard_smoke / public_alpha_gate / 全部 `node --check` exit 0；真实家目录零写入。
+
+> **第 7 次召唤回炉 3（verify 第 21 轮 3/5：补字段再提交的残留报错；TASK 改记 `docs/active/2026-09-27_restart-apply-3_TASK.md`）**：`5bb409c`，未推。
+> 两个驱动的提交循环改为**最多 2 次点击**：① 第 1 次后页面列出缺字段 → 全部补上才点第 2 次；有补不上的（挂起 / 需人工 / 填失败）→ 直接停（needs_user / essay_pending，页面已拒、没交上去），不再点——以前会再点一次去「确认卡住」。② 第 2 次后页面所列缺字段**全是本轮已补过的**（原样残留或部分残留，分不清是又被拒还是请求在途、旧报错没刷新）→ `unknown / resubmit_page_lists_only_answered_fields`，算可能投过，截图，停；列出**从没填过的新字段** → 页面确实拒了 → 把新字段也答一遍（为挂起清单收集原因）后 needs_user 停，不点第 3 次。「已补过」按规范化后的题面记在本次运行里。原 5 次尝试与 `rate_limited / max_attempts_exceeded` 出口在这两个驱动里不再存在（循环后抛错兜住「不可能走到」）。
+> 红测试（两驱动各 5 条，先红后绿）：原样残留 → unknown、点 2 次；部分残留 → unknown、不点第 3 次；新字段 → needs_user、不算投过；第 1 次有补不上的 → 只点 1 次；守卫 7 种缺字段序列总点击 ≤2，且「第 2 次后判没投过」必须有第 1 次没列过的字段、「第 2 次后只列旧字段」必须 unknown。改动旧测试：「换着法子缺字段 → rate_limited」改为「补完再提交又报新字段 → needs_user、只点 2 次」；Greenhouse 替身把自定义题渲染成下拉，测试题改用它答得上的 Gender / Veteran status。
+> **代价**：第 2 次后只要页面还挂着已补过的字段就记 unknown（例如我们填的值没被接受），这类岗需要 lead 查邮箱确认；以前会一直重试到 5 次。
+> 结果：全量 `npm test` 串行连跑 3 次 **646/646**，role_guard_smoke / public_alpha_gate / 全部 `node --check` exit 0；真实家目录零写入。
