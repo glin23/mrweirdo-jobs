@@ -709,3 +709,12 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 2. **「点击没被接住」只看专用的三条请求（seon / recaptcha clr / non-user-graphql）**：否决——换一家租户或平台就失效，而且会把「接住了、但只发了别的请求」误判成「没接住」，再点一次就可能重复投。改成「点之后有任何请求或换了页面就算接住」，只在确认 0 条时才再点。
 3. **不管有没有缺字段，只要没接住就再点**：否决——Greenhouse 有浏览器端校验，缺字段时本来就 0 条请求，那样会把正常的「补字段」流程变成 click_not_registered。现在只在页面既没报缺字段、也读不出结果时才核对。
 4. **把社媒账号放进 essay_profile**：否决，原因见「偏离 DESIGN」第 1 条。
+
+> **第 7 次召唤回炉（verify 第 19 轮 3/5：P2 会重复投递 + P3×3）**：`8eaf9c4`，未推。
+> **P2 ① 在途请求被当成「没接住」**：根因核实同 verify——浏览器的资源时间表只记走完的请求。新增 `cdp.mjs clickwatch <tab> <ms> <js>`：在点击的**同一个 CDP 会话**里开 Network，监听 `requestWillBeSent`（请求一发出就能看到，不管回没回来；页面感知不到，不改页面里任何东西），点击后看到第一条请求立即返回，否则看满整个判定窗口（Ashby 19 秒 = 7 秒等待 + 4 次×3 秒重读；Greenhouse 17 秒）。判定集中到 `page_signals.clickVerdict`：看到任何请求 / 页面信号说接住 → 接住；**只有**监听确实开起来、整个窗口 0 条请求、同一文档且时间表也 0 条，才算「没接住」；其余一律「判不出」→ 不再点、记 unknown（算可能投过）。
+> **P2 ② 再点时按钮没了被记成「点提交前」**：驱动记本次运行是否已点过提交；**从未点过且页面明确没有按钮**才是 `crashed:submit_button_not_found`（仍在点提交前出口表）；点过之后找不到按钮 → `unknown / submit_button_gone_after_click`，点击结果读不出（进程出错）→ `unknown / submit_click_result_unreadable`，都不在出口表里 → may_have_submitted=true，截图 after_unknown。契约注释已写明。
+> **P3**：① `driver_exception` 改由 `onDriverException` 发出，点过提交则补 after_submit 截图、没点过补 before_submit；② 州缩写正则在注入串里改为 `'\\\\b'`（到页面是 `\b`）；③ 起草答案来源记 `agent_draft`（FILL_SOURCES 新增一项）。
+> **红测试**：`test/click_watch_chrome.test.mjs` 复现 verify 的沙箱——真 headless Chrome（独立用户目录、随机端口，不碰 9222）、本地服务收到提交后一直不回：旧判断 `clickReceived` 返回「没接住」（复现），`clickwatch` 看到 `/submit` → 判接住（本机没有 Chrome 时跳过，CI 上会跳过；判定逻辑另有替身测试）。驱动替身 8 条（在途请求只点 1 次 / 监听失败不再点 / 两驱动 ×「再点时按钮没了」「点击结果读不出」「点后异常截图」）、`clickVerdict` 4 条、州缩写在假 DOM 里真跑注入串 1 条（用 4 个字母的城市 Troy，只有州缩写那一支能认出；验收指出原测试被「整串包含」那一支兜住、测不到这一支）、来源 1 条：先红后绿。
+> **影响**：没接住的情况下，一次提交最多多等约 19 秒；真正需要「再点一次」的场景变少了（必须 CDP 监听确实看了整个窗口且 0 条请求）。宁可漏投不可重投。
+> 全量连跑 3 次、CI 另三步结果见下一行。
+> 结果：全量 `npm test` 串行连跑 3 次 **628/628**（含真 Chrome 用例，本机未跳过），role_guard_smoke / public_alpha_gate / 全部 `node --check` exit 0；真实家目录零写入（profile 12:39、agent_drafts 12:43 为 lead 所写，本轮未动）。
