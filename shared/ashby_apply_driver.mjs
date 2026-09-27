@@ -1243,12 +1243,12 @@ async function main() {
   let lastMissing = [];
   let lastVerdict = 'unknown';
   let pendingForMainClaude = [];
-  let reclicked = false;
   // One submit click, then read. No required-field errors and nothing readable:
   // the page may still be settling — re-READ it, never click again on a form the
   // page answered (首次真投 2026-09-26: a second click on Tavus met the spam
-  // banner; a blind re-click can also send a duplicate). Still silent: ask the
-  // page whether the click was received at all.
+  // banner; a blind re-click can also send a duplicate). Still silent: note whether any
+  // request followed the click — a hint for the lead's inbox check only; no
+  // decision reads it and nothing is ever clicked again because of it.
   const submitOnce = async (attempt) => {
     const sent = await submitAndCheck(tab);
     if (!sent.clicked) {
@@ -1276,14 +1276,6 @@ async function main() {
   for (let attempt = 1; attempt <= 5; attempt++) {
     log(`Submit attempt ${attempt}…`);
     let res = await submitOnce(attempt);
-    // Nothing followed the click: the page never got it and nothing was sent,
-    // so one more click cannot duplicate anything (BUG_REPORT 第 2 章). Once per
-    // run. Only an explicit `false` counts — `null` (cannot tell) never does.
-    if (res.received?.registered === false && !reclicked) {
-      reclicked = true;
-      log('  the page did not receive the submit click (no request after it) — clicking once more');
-      res = await submitOnce(attempt);
-    }
     lastVerdict = res.verdict.verdict;
     if (isSpamFlagged(res.verdict)) {
       // The platform's anti-spam check refused it and the page says so: terminal.
@@ -1308,15 +1300,10 @@ async function main() {
         await closeTab(tab);
         emitOutcome({ outcome: 'not_submitted', reason: 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
       }
-      if (res.received?.registered === false) {
-        // Clicked twice, no request either time: nothing reached the company.
-        // No page verdict is attached — the page was never asked (driver_contract
-        // PRE_SUBMIT_EXITS: not an attempt, the row may be tried again).
-        const ev = await pageEvidence(tab, 'after_submit', 'not_submitted');
-        await closeTab(tab);
-        emitOutcome({ outcome: 'not_submitted', reason: 'submit_click_not_registered', detail: res.received, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
-      }
-      // Received but still unreadable after re-reading: say so; do not submit again.
+      // The page never answered this click. Whatever the network watch saw,
+      // it is never clicked again (lead 裁决, verify 第 20 轮: three rounds of
+      // re-click judgement each had a duplicate-submission hole). Unknown =
+      // may have submitted; lead checks the inbox and corrects the ledger.
       const ev = await pageEvidence(tab, 'after_submit', 'unknown');
       emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, received: res.received, snippet: res.snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }

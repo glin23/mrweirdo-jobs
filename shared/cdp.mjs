@@ -184,11 +184,17 @@ async function cmdEval(tabId, expr) {
 // finished requests). Read-only: nothing on the page changes, nothing is
 // delayed or disguised. Returns as soon as one request is seen, else after
 // windowMs. Output: { click, watch: { ok, requests:[{url,method,ms}], window_ms } }.
+// A connection that drops or errors inside the window is NOT "watched, 0
+// requests": watch.ok is false, i.e. cannot tell (verify 第 20 轮 P2).
 async function cmdClickwatch(tabId, windowMs, expr) {
   await withSession(tabId, async s => {
     const requests = [];
     let t0 = null;
     let wake = null;
+    let lost = null;
+    const onLost = (why) => { if (!lost) lost = why; if (wake) wake(); };
+    s.ws.addEventListener('close', () => onLost('connection closed during watch'));
+    s.ws.addEventListener('error', () => onLost('connection error during watch'));
     s.listeners.push(msg => {
       if (msg.method !== 'Network.requestWillBeSent' || t0 === null) return;
       const r = msg.params?.request || {};
@@ -202,17 +208,27 @@ async function cmdClickwatch(tabId, windowMs, expr) {
       watch = { ok: false, error: `Network.enable: ${e.message}` };
     }
     t0 = Date.now();
-    const r = await s.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true, userGesture: true });
+    let r;
+    try {
+      r = await s.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true, userGesture: true });
+    } catch (e) {
+      // The click may or may not have run: say exactly that.
+      process.stdout.write(JSON.stringify({ click: { ok: null, note: 'click_result_lost', detail: e.message }, watch: { ok: false, error: e.message } }) + '\n');
+      return;
+    }
     const click = r.exceptionDetails
       ? { ok: false, note: 'click_js_exception', detail: r.exceptionDetails.exception?.description || r.exceptionDetails.text }
       : (r.result?.value ?? null);
-    if (watch.ok && click?.ok && requests.length === 0) {
+    if (watch.ok && click?.ok && requests.length === 0 && !lost) {
       await new Promise(res => {
         const timer = setTimeout(res, windowMs);
         wake = () => { clearTimeout(timer); res(); };
       });
     }
-    const out = { click, watch: watch.ok ? { ok: true, requests, window_ms: Date.now() - t0 } : watch };
+    // Requests seen before a drop still prove the click went out; zero seen
+    // with a drop proves nothing.
+    if (lost && requests.length === 0 && watch.ok) watch = { ok: false, error: lost };
+    const out = { click, watch: watch.ok ? { ok: true, requests, window_ms: Date.now() - t0, ...(lost ? { lost } : {}) } : watch };
     process.stdout.write(JSON.stringify(out) + '\n');
   });
 }

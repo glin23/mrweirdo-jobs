@@ -91,45 +91,6 @@ test('Ashby ①：上传一直确认不了 → crashed / resume_upload_failed（
   }
 });
 
-test('Ashby ②：第一次点击页面没接住 → 再点一次；第二次接住并成功 → submitted，共点 2 次', async () => {
-  const d = await loadAshby(ASHBY_BASE);
-  globalThis.__MRW_WATCH = { ok: true, requests: [] };
-  const rec = [{ registered: false, via: 'no_request_after_click' }];
-  let clicks = 0;
-  const events = ashbyRig({
-    received: () => rec.shift() || { registered: true },
-    page: () => (clicks >= 2 ? ASHBY_PAGE(fixture('confirm_ashby_success.txt')) : ASHBY_PAGE('Application')),
-  });
-  const clickRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'btn.click()');
-  const orig = clickRule.result;
-  clickRule.result = () => { clicks += 1; return orig(); };
-  try {
-    const out = await runToEmit(d.main);
-    assert.equal(out.outcome, 'submitted');
-    assert.equal(events.filter((e) => e === 'click').length, 2);
-  } finally {
-    reset();
-  }
-});
-
-test('Ashby ②：两次都没接住 → not_submitted / submit_click_not_registered，不算投过，有截图，只点 2 次', async () => {
-  const d = await loadAshby(ASHBY_BASE);
-  globalThis.__MRW_WATCH = { ok: true, requests: [] };
-  const events = ashbyRig({ received: () => ({ registered: false, via: 'no_request_after_click' }) });
-  try {
-    const out = await runToEmit(d.main);
-    assert.equal(out.outcome, 'not_submitted');
-    assert.equal(out.reason, 'submit_click_not_registered');
-    assert.equal(events.filter((e) => e === 'click').length, 2, 'exactly one extra click, never more');
-    assert.equal(deriveMayHaveSubmitted(out), false, 'nothing left the browser: not an attempt');
-    assert.ok(out.evidence?.path && existsSync(out.evidence.path), `evidence missing: ${JSON.stringify(out.evidence)}`);
-    assert.match(out.evidence.path, /_after_not_submitted\.png$/);
-    assert.equal(statSync(out.evidence.path).mode & 0o777, 0o600, 'evidence is locked the moment it lands');
-  } finally {
-    reset();
-  }
-});
-
 test('Ashby ③：接住了但页面读不懂 → unknown，只点 1 次（守住 7ef0ac3），整页截图 after_unknown', async () => {
   const d = await loadAshby(ASHBY_BASE);
   const events = ashbyRig();
@@ -200,22 +161,6 @@ function ghRig({ received = () => ({ registered: true }), page = () => ({ bodyTe
   return events;
 }
 
-test('Greenhouse ②：两次都没接住 → not_submitted / submit_click_not_registered，点 2 次，有截图', async () => {
-  const { main } = await loadGreenhouse(GH_BASE);
-  globalThis.__MRW_WATCH = { ok: true, requests: [] };
-  const events = ghRig({ received: () => ({ registered: false, via: 'no_request_after_click' }) });
-  try {
-    const out = await runToEmit(main);
-    assert.equal(out.outcome, 'not_submitted');
-    assert.equal(out.reason, 'submit_click_not_registered');
-    assert.equal(events.filter((e) => e === 'click').length, 2);
-    assert.equal(deriveMayHaveSubmitted(out), false);
-    assert.ok(out.evidence?.path && existsSync(out.evidence.path));
-  } finally {
-    reset();
-  }
-});
-
 test('Greenhouse ③：接住了但读不懂 → unknown，只点 1 次，整页截图', async () => {
   const { main } = await loadGreenhouse(GH_BASE);
   const events = ghRig();
@@ -229,36 +174,14 @@ test('Greenhouse ③：接住了但读不懂 → unknown，只点 1 次，整页
   }
 });
 
-test('源码守卫：Ashby / Greenhouse 里每个 unknown 与 submit_click_not_registered 结局都带 evidence', () => {
+test('源码守卫：Ashby / Greenhouse 里每个 unknown 结局都带 evidence', () => {
   const offenders = [];
   for (const f of ['ashby_apply_driver.mjs', 'greenhouse_apply_driver.mjs']) {
     readFileSync(join(SHARED, f), 'utf8').split('\n').forEach((line, i) => {
-      if (/emitOutcome\(\{\s*outcome:\s*'unknown'|reason:\s*'submit_click_not_registered'/.test(line) && !/evidence/.test(line)) offenders.push(`${f}:${i + 1}`);
+      if (/emitOutcome\(\{\s*outcome:\s*'unknown'/.test(line) && !/evidence/.test(line)) offenders.push(`${f}:${i + 1}`);
     });
   }
   assert.deepEqual(offenders, []);
-});
-
-// 3 行报告：没接住的点击不是「表单没打开」，也不是「判不确定」——如实说。
-import { makeStreamRig, job } from './stream_run_harness.mjs';
-import { readAll } from '../shared/submission_ledger.mjs';
-
-test('3 行报告第 2 行：「点了提交但页面没收到，没发出去」+ 截图，不算投过', async () => {
-  const rig = await makeStreamRig('mrw-stream-click-');
-  try {
-    const j = job('Creatify', 1, { fit: true });
-    rig.board({ rotation: [j] });
-    rig.script({ [j.apply_url]: { outcome: 'not_submitted', reason: 'submit_click_not_registered', detail: { registered: false }, evidence: { path: '/tmp/creatify_after_not_submitted.png' } } });
-    const r = await rig.run(1);
-    assert.match(r.finish.lines[0], /^投出 0 个/);
-    assert.match(r.finish.lines[1], /1 个点了提交但页面没收到/);
-    assert.match(r.finish.lines[1], /creatify_after_not_submitted\.png/);
-    assert.doesNotMatch(r.finish.lines[1], /判不确定|表单没打开/);
-    const line = readAll(rig.home).find((e) => e.apply_url === j.apply_url);
-    assert.equal(line.may_have_submitted, false);
-  } finally {
-    await rig.close();
-  }
 });
 
 // ------------------------------------------------ verify 第 19 轮 P2 / P3 ----
@@ -294,18 +217,24 @@ for (const [name, load, rig] of [
   ['Ashby', () => loadAshby(ASHBY_BASE), () => ashbyRig({ received: () => ({ registered: false }) })],
   ['Greenhouse', async () => loadGreenhouse(GH_BASE), () => ghRig({ received: () => ({ registered: false }) })],
 ]) {
-  test(`P2②（${name}）：第一次点完被误判没接住，再点时按钮没了（已跳确认页）→ unknown，算可能投过，不进「点提交前」`, async () => {
+  test(`P2②（${name}）：页面列出缺字段（第一次被拒）、补完再点时按钮没了 → unknown，算可能投过，不进「点提交前」`, async () => {
     const d = await load();
-    globalThis.__MRW_WATCH = { ok: true, requests: [] };
     rig();
+    // First answer: the page rejects the form and lists a field the driver can fill.
+    const pageRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'error_count' || r.match === 'helper-text--error');
+    pageRule.result = name === 'Ashby'
+      ? { bodyText: 'errors', missing: ['LinkedIn Profile'], error_count: 1, url: 'https://jobs.ashbyhq.com/testco/x', snippet: '' }
+      : { bodyText: 'errors', missing: ['LinkedIn Profile'], url: 'https://job-boards.greenhouse.io/testco/jobs/1', body_snippet: '' };
+    globalThis.__MRW_EVAL_RULES.unshift({ match: 'label_for', result: { ok: true, sel: '#li', via: 'label_for' } });
     const clickRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'btn.click()');
     let n = 0;
     const first = clickRule.result;
     clickRule.result = () => (n++ === 0 ? first() : { ok: false, note: 'no_submit_btn' });
     try {
       const out = await runToEmit(d.main);
-      assert.notEqual(out.reason, 'submit_button_not_found');
+      assert.equal(n, 2, 'the second click is the ordinary fill-and-resubmit after a rejection');
       assert.equal(out.outcome, 'unknown');
+      assert.equal(out.reason, 'submit_button_gone_after_click');
       assert.equal(deriveMayHaveSubmitted(out), true, 'a click already happened: may have submitted');
       assert.match(out.evidence?.path || '', /_after_unknown\.png$/);
     } finally {
@@ -347,3 +276,45 @@ for (const [name, load, rig] of [
     }
   });
 }
+
+// ------------------------------------------------ verify 第 20 轮 / lead 裁决 ----
+// 砍掉自动再点：页面没回答（没报缺字段、读不出结果）的点击之后，任何路径都不许再点提交。
+// 只有页面明确列出缺字段（表单被拒、什么都没交上去）之后，才会补完再点——那是原本的填表流程。
+const SILENT_VARIANTS = [
+  ['CDP 看到请求', { ok: true, requests: [{ url: 'https://x/submit' }] }, { registered: true }],
+  ['CDP 0 条 + 时间表 0 条', { ok: true, requests: [] }, { registered: false }],
+  ['CDP 断开', { ok: false, error: 'WebSocket closed' }, { registered: false }],
+  ['CDP 输出读不出', undefined, { registered: false }],
+  ['时间表判不出', { ok: true, requests: [] }, { registered: null }],
+];
+
+for (const [label, watch, received] of SILENT_VARIANTS) {
+  for (const [name, load, rig] of [
+    ['Ashby', () => loadAshby(ASHBY_BASE), () => ashbyRig({ received: () => received })],
+    ['Greenhouse', () => loadGreenhouse(GH_BASE), () => ghRig({ received: () => received })],
+  ]) {
+    test(`守卫（${name}·${label}）：页面没回答 → 只点 1 次，unknown，算可能投过，有截图`, async () => {
+      const d = await load();
+      globalThis.__MRW_WATCH = watch === undefined ? () => undefined : watch;
+      const events = rig();
+      try {
+        const out = await runToEmit(d.main);
+        const clicks = name === 'Ashby' ? events.filter((e) => e === 'click').length : events.filter((e) => e === 'click').length;
+        assert.equal(clicks, 1, `clicked Submit ${clicks} times`);
+        assert.equal(out.outcome, 'unknown');
+        assert.equal(deriveMayHaveSubmitted(out), true);
+        assert.ok(out.evidence?.path && existsSync(out.evidence.path));
+      } finally {
+        reset();
+      }
+    });
+  }
+}
+
+test('守卫（源码）：驱动里不再有「再点一次」的分支与 submit_click_not_registered 结局', () => {
+  for (const f of ['ashby_apply_driver.mjs', 'greenhouse_apply_driver.mjs', 'driver_contract.mjs', 'stream_run.mjs']) {
+    const src = readFileSync(join(SHARED, f), 'utf8');
+    assert.ok(!/reclick/i.test(src), `${f} still has a re-click path`);
+    assert.ok(!/submit_click_not_registered/.test(src), `${f} still knows submit_click_not_registered`);
+  }
+});

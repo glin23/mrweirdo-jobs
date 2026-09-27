@@ -91,3 +91,44 @@ test('在途提交请求：旧判断说「没接住」，clickwatch 看得到 �
     rmSync(profile, { recursive: true, force: true });
   }
 });
+
+// verify 第 20 轮 P2：观察窗口内 CDP 连接断了，旧 clickwatch 仍报「正常、0 条请求」。
+// 断开 / 出错必须报「判不出」（watch.ok !== true），绝不能是「看过了、0 条」。
+const QUIET_PAGE = '<!doctype html><html><body><button id="b">Submit Application</button></body></html>';
+
+test('clickwatch：窗口内 Chrome 断开 → 判不出，不许报 ok + 0 条请求', { skip: !CHROME && 'no local Chrome' }, async () => {
+  const server = createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(QUIET_PAGE); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const site = `http://127.0.0.1:${server.address().port}/`;
+  const port = await freePort();
+  const profile = mkdtempSync(join(tmpdir(), 'mrw-chrome-cut-'));
+  const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
+  const env = { ...process.env, CDP_HOST: `127.0.0.1:${port}`, MRWEIRDO_HOME: profile };
+  const cdpSync = (...args) => spawnSync(process.execPath, [join(ROOT, 'shared/cdp.mjs'), ...args], { env, encoding: 'utf8' });
+  try {
+    let tab = null;
+    for (let i = 0; i < 50 && !tab; i += 1) {
+      await sleep(200);
+      const r = cdpSync('goto', site);
+      if (r.status === 0) tab = JSON.parse(r.stdout).id;
+    }
+    assert.ok(tab, 'headless Chrome did not come up');
+    await sleep(1000);
+    const clickJs = `(() => { const btn = document.querySelector('#b'); const mark = { t: performance.now(), origin: performance.timeOrigin }; btn.click(); return { ok: true, mark }; })()`;
+    const child = spawn(process.execPath, [join(ROOT, 'shared/cdp.mjs'), 'clickwatch', tab, '6000', clickJs], { env });
+    let stdout = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    const done = new Promise((r) => child.on('close', (code) => r(code)));
+    await sleep(1500); // the click has happened; the watch is waiting (no request on this page)
+    chrome.kill('SIGKILL'); // the connection drops inside the window
+    const code = await done;
+    const out = stdout.trim() ? JSON.parse(stdout) : null;
+    assert.ok(code !== 0 || out?.watch?.ok !== true, `a dropped connection was reported as a clean watch: exit ${code} ${stdout}`);
+  } finally {
+    chrome.kill('SIGKILL');
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+    await sleep(300);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});

@@ -640,10 +640,7 @@ function report(st, rows, lines, unscored) {
   const uncertain = lines.filter((e) => isAttempted(e) && e.verdict !== 'submitted');
   const needsInfo = lines.filter((e) => e.outcome === 'needs_user' && !isAttempted(e));
   const spamFlagged = lines.filter((e) => !isAttempted(e) && e.reason === 'platform_spam_flagged');
-  // Submit clicked, but no request followed (真投 2026-09-27): not "the form did
-  // not open", not "uncertain" — the page never received it.
-  const clickLost = lines.filter((e) => !isAttempted(e) && e.reason === 'submit_click_not_registered');
-  const preSubmit = lines.filter((e) => !isAttempted(e) && e.outcome !== 'needs_user' && e.reason !== 'platform_spam_flagged' && e.reason !== 'submit_click_not_registered');
+  const preSubmit = lines.filter((e) => !isAttempted(e) && e.outcome !== 'needs_user' && e.reason !== 'platform_spam_flagged');
   const failedBoards = st.source_errors.filter((e) => e.kind === 'watchlist').map((e) => e.label || e.slug);
 
   const line1 = st.no_submit
@@ -653,7 +650,6 @@ function report(st, rows, lines, unscored) {
   if (uncertain.length) parts.push(`${uncertain.length} 个判不确定（截图：${uncertain.map((e) => e.evidence?.path || '无截图').join('、')}，请你看一眼）`);
   if (needsInfo.length) parts.push(`${needsInfo.length} 个卡在缺信息`);
   if (preSubmit.length) parts.push(`${preSubmit.length} 个表单没打开（没点提交，下次还能再试）`);
-  if (clickLost.length) parts.push(`${clickLost.length} 个点了提交但页面没收到（没发出去，下次还能再试；截图：${clickLost.map((e) => ` ${e.evidence?.path || '无截图'} `).join('、')}）`);
   if (spamFlagged.length) parts.push(`${spamFlagged.length} 个被平台当成垃圾申请拦下，没收到（${spamFlagged.map((e) => `${name(e)} 截图： ${e.evidence?.path || '无截图'} `).join('、')}；不占这家的名额，但不会自动重投，你可以手投）`);
   const extras = [];
   const rec = st.recovered_inflight;
@@ -667,7 +663,7 @@ function report(st, rows, lines, unscored) {
   const releaseBlocked = st.release.filter((u) => why.get(u) && why.get(u) !== 'not_found');
   if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个没找到（可能已下架）：${releaseMissing.map((u) => ` ${u} `).join('、')}`);
   if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => ` ${u} （${why.get(u)}）`).join('、')}`);
-  const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length + clickLost.length + spamFlagged.length;
+  const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length + spamFlagged.length;
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 
   // Held list jobs are fit but not applied to: say so where the fit count is.
