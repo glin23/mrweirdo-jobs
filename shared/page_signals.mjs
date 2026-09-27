@@ -52,3 +52,22 @@ export function clickReceived(perf, mark) {
 }
 
 export const pageCall = (fn, ...args) => `(${fn.toString()})(performance, ${args.map((a) => JSON.stringify(a)).join(', ')})`;
+
+// ---- node side (NOT injected) ------------------------------------------------
+// verify 第 19 轮 P2: Resource Timing lists only FINISHED requests, so a
+// submission still in flight looked like "nothing was sent" and got a second
+// click. The decision therefore leans on the CDP watch taken in the same session
+// as the click (cdp.mjs clickwatch: Network.requestWillBeSent fires the moment a
+// request is sent, finished or not). "Not received" needs BOTH to be empty:
+// the watch ran and saw no request for its whole window, and the page's own list
+// shows none either on the same document. Anything short of that is null —
+// cannot tell — and the caller does not click again (宁可漏投不可重投).
+export function clickVerdict(watch, received) {
+  if (received?.registered === true) return { registered: true, via: received.via || 'page_signal' };
+  if (watch?.ok === true && Array.isArray(watch.requests) && watch.requests.length > 0) {
+    return { registered: true, via: 'request_sent_after_click', requests: watch.requests.slice(0, 8) };
+  }
+  if (watch?.ok !== true || !Array.isArray(watch.requests)) return { registered: null, via: 'click_watch_unavailable', watch_error: watch?.error || null };
+  if (received?.registered !== false) return { registered: null, via: received?.via || 'page_signal_unavailable' };
+  return { registered: false, via: 'no_request_sent_after_click', watched_ms: watch.window_ms ?? null };
+}

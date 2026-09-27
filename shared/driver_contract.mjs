@@ -44,7 +44,9 @@ export const EXIT_CODES = Object.freeze({
 // FillEntry.source vocabulary（§14.3 数据结构一节）. Distinct from
 // PROVENANCE_SOURCES on purpose: provenance records who put a value INTO the
 // profile; this records where the value typed onto ONE form came from at fill time.
-export const FILL_SOURCES = Object.freeze(['profile', 'bank_default', 'derived', 'user_confirmed', 'left_blank']);
+// agent_draft: typed from the main agent's per-job draft (agent_drafts.mjs) —
+// kept apart from `derived` so a reader can tell an agent wrote it (verify 第 19 轮 P3).
+export const FILL_SOURCES = Object.freeze(['profile', 'bank_default', 'derived', 'user_confirmed', 'left_blank', 'agent_draft']);
 
 // Funnel-side validation. Unknown outcome string = a producer bug, and the
 // contract's whole point is that bugs here are heard, not bucketed (ADR-15:
@@ -127,6 +129,11 @@ export function recordFill(answers, entry) {
 //   crashed:resume_upload_failed     ashby + greenhouse main(), before any submitAndCheck
 //   not_submitted:job_unavailable    greenhouse (page says closed) / lever, before submit
 //   crashed:cdp_goto_failed … submit_button_not_found   lever main() (Lever paused)
+//     ashby + greenhouse emit submit_button_not_found ONLY while no submit click
+//     has happened in the run; after any click a missing button is
+//     unknown:submit_button_gone_after_click (not listed here → may have
+//     submitted), because the page may have moved on after receiving it
+//     (verify 第 19 轮 P2 ②).
 // Lever's pre-click needs_user / captcha_blocked exits are deliberately NOT
 // listed: the key has no ATS, and the same keys (e.g. needs_user:
 // cover_letter_required_not_generated) are emitted by greenhouse AFTER a click.

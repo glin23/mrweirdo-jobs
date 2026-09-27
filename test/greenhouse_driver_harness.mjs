@@ -25,7 +25,7 @@ const SHARED = join(ROOT, 'shared');
 const DRIVER_SRC = readFileSync(join(SHARED, 'greenhouse_apply_driver.mjs'), 'utf8');
 
 // The only functions the harness replaces: the browser boundary.
-const BROWSER_FNS = ['findFieldByLabel', 'reactSelectOneOf', 'reactSelect', 'selectNativeOneOf', 'cdp', 'evalInTab'];
+const BROWSER_FNS = ['findFieldByLabel', 'reactSelectOneOf', 'reactSelect', 'selectNativeOneOf', 'cdp', 'evalInTab', 'clickAndWatch'];
 
 const STUBS = `
 // ---- test harness: browser boundary only ----------------------------------
@@ -65,6 +65,14 @@ async function evalInTab(tab, js) {
 }
 // emitOutcome under test: validates via the real contract, records, throws
 // instead of process.exit-ing.
+async function clickAndWatch(tab, js, windowMs) {
+  // The click JS goes to the eval rules as before; the network watch that rides
+  // along is __MRW_WATCH (default: one request seen after the click).
+  const click = await evalInTab(tab, js);
+  const w = globalThis.__MRW_WATCH;
+  const watch = typeof w === 'function' ? w(click) : (w ?? { ok: true, requests: [{ url: 'https://under-test/after-click', method: 'POST', ms: 5 }], window_ms: 5 });
+  return { click, watch };
+}
 import { writeFileSync as __writeFileSync } from 'node:fs';
 function captureEvidence(tab, opts) {
   return __real_captureEvidence(tab, opts, async (...args) => {
@@ -81,7 +89,7 @@ function emitOutcome(obj) {
   e.emitted = obj;
   throw e;
 }
-export { answerMissing, main, logEssayPending, ESSAY_PENDING_LOG, COMPANY };
+export { answerMissing, main, onDriverException, logEssayPending, ESSAY_PENDING_LOG, COMPANY };
 `;
 
 let seq = 0;

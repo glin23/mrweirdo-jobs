@@ -39,6 +39,7 @@ function reset() {
   delete globalThis.__MRW_CDP_RULES;
   delete globalThis.__MRW_EVIDENCE;
   delete globalThis.__MRW_FILLS;
+  delete globalThis.__MRW_WATCH;
 }
 
 const ASHBY_PAGE = (bodyText, { missing = [] } = {}) => ({ bodyText, missing, error_count: missing.length, url: 'https://jobs.ashbyhq.com/testco/x', snippet: bodyText.slice(0, 200) });
@@ -92,6 +93,7 @@ test('Ashby ①：上传一直确认不了 → crashed / resume_upload_failed（
 
 test('Ashby ②：第一次点击页面没接住 → 再点一次；第二次接住并成功 → submitted，共点 2 次', async () => {
   const d = await loadAshby(ASHBY_BASE);
+  globalThis.__MRW_WATCH = { ok: true, requests: [] };
   const rec = [{ registered: false, via: 'no_request_after_click' }];
   let clicks = 0;
   const events = ashbyRig({
@@ -112,6 +114,7 @@ test('Ashby ②：第一次点击页面没接住 → 再点一次；第二次接
 
 test('Ashby ②：两次都没接住 → not_submitted / submit_click_not_registered，不算投过，有截图，只点 2 次', async () => {
   const d = await loadAshby(ASHBY_BASE);
+  globalThis.__MRW_WATCH = { ok: true, requests: [] };
   const events = ashbyRig({ received: () => ({ registered: false, via: 'no_request_after_click' }) });
   try {
     const out = await runToEmit(d.main);
@@ -199,6 +202,7 @@ function ghRig({ received = () => ({ registered: true }), page = () => ({ bodyTe
 
 test('Greenhouse ②：两次都没接住 → not_submitted / submit_click_not_registered，点 2 次，有截图', async () => {
   const { main } = await loadGreenhouse(GH_BASE);
+  globalThis.__MRW_WATCH = { ok: true, requests: [] };
   const events = ghRig({ received: () => ({ registered: false, via: 'no_request_after_click' }) });
   try {
     const out = await runToEmit(main);
@@ -256,3 +260,90 @@ test('3 行报告第 2 行：「点了提交但页面没收到，没发出去」
     await rig.close();
   }
 });
+
+// ------------------------------------------------ verify 第 19 轮 P2 / P3 ----
+
+test('P2①：时间表说没接住、但 CDP 看到点击后发出的请求（在途）→ unknown，只点 1 次，算可能投过', async () => {
+  const d = await loadAshby(ASHBY_BASE);
+  globalThis.__MRW_WATCH = { ok: true, requests: [{ url: 'https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiSubmit' }] };
+  const events = ashbyRig({ received: () => ({ registered: false, via: 'no_request_after_click' }) });
+  try {
+    const out = await runToEmit(d.main);
+    assert.equal(out.outcome, 'unknown');
+    assert.equal(events.filter((e) => e === 'click').length, 1, 'an in-flight submission must never be clicked again');
+    assert.equal(deriveMayHaveSubmitted(out), true);
+  } finally {
+    reset();
+  }
+});
+
+test('P2①：CDP 没看成（watch 失败）→ 判不出 → unknown，不再点', async () => {
+  const d = await loadAshby(ASHBY_BASE);
+  globalThis.__MRW_WATCH = { ok: false, error: 'websocket closed' };
+  const events = ashbyRig({ received: () => ({ registered: false }) });
+  try {
+    const out = await runToEmit(d.main);
+    assert.equal(out.outcome, 'unknown');
+    assert.equal(events.filter((e) => e === 'click').length, 1);
+  } finally {
+    reset();
+  }
+});
+
+for (const [name, load, rig] of [
+  ['Ashby', () => loadAshby(ASHBY_BASE), () => ashbyRig({ received: () => ({ registered: false }) })],
+  ['Greenhouse', async () => loadGreenhouse(GH_BASE), () => ghRig({ received: () => ({ registered: false }) })],
+]) {
+  test(`P2②（${name}）：第一次点完被误判没接住，再点时按钮没了（已跳确认页）→ unknown，算可能投过，不进「点提交前」`, async () => {
+    const d = await load();
+    globalThis.__MRW_WATCH = { ok: true, requests: [] };
+    rig();
+    const clickRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'btn.click()');
+    let n = 0;
+    const first = clickRule.result;
+    clickRule.result = () => (n++ === 0 ? first() : { ok: false, note: 'no_submit_btn' });
+    try {
+      const out = await runToEmit(d.main);
+      assert.notEqual(out.reason, 'submit_button_not_found');
+      assert.equal(out.outcome, 'unknown');
+      assert.equal(deriveMayHaveSubmitted(out), true, 'a click already happened: may have submitted');
+      assert.match(out.evidence?.path || '', /_after_unknown\.png$/);
+    } finally {
+      reset();
+    }
+  });
+
+  test(`P2②（${name}）：点击结果读不出来（进程出错）→ 不当成「没点」，unknown 算可能投过`, async () => {
+    const d = await load();
+    rig();
+    globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'btn.click()').result = { _raw: '', _err: 'WebSocket closed' };
+    try {
+      const out = await runToEmit(d.main);
+      assert.equal(out.outcome, 'unknown');
+      assert.equal(deriveMayHaveSubmitted(out), true);
+    } finally {
+      reset();
+    }
+  });
+
+  test(`P3（${name}）：点过提交之后程序抛异常 → crashed / driver_exception 也带 after_submit 截图`, async () => {
+    const d = await load();
+    rig();
+    const pageRule = globalThis.__MRW_EVAL_RULES.find((r) => r.match === 'error_count' || r.match === 'helper-text--error');
+    pageRule.result = () => { throw new Error('boom after click'); };
+    const sandbox = mkdtempSync(join(tmpdir(), 'mrw-exc-'));
+    const prev = process.env.MRWEIRDO_HOME;
+    process.env.MRWEIRDO_HOME = sandbox;
+    try {
+      const err = await d.main().then(() => null, (e) => e);
+      assert.equal(err?.message, 'boom after click');
+      const out = await d.onDriverException(err).then(() => null, (e) => e.emitted);
+      assert.equal(out.outcome, 'crashed');
+      assert.equal(out.reason, 'driver_exception');
+      assert.match(out.evidence?.path || '', /_after_unknown\.png$/);
+    } finally {
+      if (prev === undefined) delete process.env.MRWEIRDO_HOME; else process.env.MRWEIRDO_HOME = prev;
+      reset();
+    }
+  });
+}

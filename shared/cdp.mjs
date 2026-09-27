@@ -32,6 +32,7 @@ Commands:
   tabs                                   List tabs as JSON [{id, url, title}]
   goto <url> [tabId]                     Navigate; opens new tab if tabId omitted
   eval <tabId> <js>                      Runtime.evaluate, print result.value (or stack)
+  clickwatch <tabId> <windowMs> <js>     Run click JS; report requests sent after it (Network.requestWillBeSent, in-flight included)
   upload <tabId> <selector> <file>       DOM.setFileInputFiles to <selector>
   screenshot <tabId> <out.png> [--full-page]   Page.captureScreenshot → write file (600); --full-page scrolls to bottom first, captures beyond viewport
   typetext <tabId> <selector> <text>     Focus + CLEAR (React-safe) + Input.insertText, read back value
@@ -74,6 +75,7 @@ class Session {
     this.ws = null;
     this.nextId = 1;
     this.pending = new Map();
+    this.listeners = [];
   }
 
   async connect() {
@@ -89,6 +91,7 @@ class Session {
     this.ws.addEventListener('message', ev => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.method) for (const fn of this.listeners) fn(msg);
       if (msg.id && this.pending.has(msg.id)) {
         const { resolve, reject, timer } = this.pending.get(msg.id);
         clearTimeout(timer);
@@ -172,6 +175,45 @@ async function cmdEval(tabId, expr) {
     if (v === undefined) process.stdout.write('');
     else if (typeof v === 'string') process.stdout.write(v + '\n');
     else process.stdout.write(JSON.stringify(v) + '\n');
+  });
+}
+
+// clickwatch: run the click JS and, in the SAME session, watch the network via
+// Network.requestWillBeSent — a request shows up the moment it is SENT, in
+// flight or not (verify 第 19 轮 P2: the page's Resource Timing list only holds
+// finished requests). Read-only: nothing on the page changes, nothing is
+// delayed or disguised. Returns as soon as one request is seen, else after
+// windowMs. Output: { click, watch: { ok, requests:[{url,method,ms}], window_ms } }.
+async function cmdClickwatch(tabId, windowMs, expr) {
+  await withSession(tabId, async s => {
+    const requests = [];
+    let t0 = null;
+    let wake = null;
+    s.listeners.push(msg => {
+      if (msg.method !== 'Network.requestWillBeSent' || t0 === null) return;
+      const r = msg.params?.request || {};
+      requests.push({ url: String(r.url || '').slice(0, 200), method: r.method || '', ms: Date.now() - t0 });
+      if (wake) wake();
+    });
+    let watch = { ok: true };
+    try {
+      await s.send('Network.enable');
+    } catch (e) {
+      watch = { ok: false, error: `Network.enable: ${e.message}` };
+    }
+    t0 = Date.now();
+    const r = await s.send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true, userGesture: true });
+    const click = r.exceptionDetails
+      ? { ok: false, note: 'click_js_exception', detail: r.exceptionDetails.exception?.description || r.exceptionDetails.text }
+      : (r.result?.value ?? null);
+    if (watch.ok && click?.ok && requests.length === 0) {
+      await new Promise(res => {
+        const timer = setTimeout(res, windowMs);
+        wake = () => { clearTimeout(timer); res(); };
+      });
+    }
+    const out = { click, watch: watch.ok ? { ok: true, requests, window_ms: Date.now() - t0 } : watch };
+    process.stdout.write(JSON.stringify(out) + '\n');
   });
 }
 
@@ -352,6 +394,13 @@ async function main() {
         const expr = rest.join(' ');
         if (!tabId || !expr) throw new Error('Usage: eval <tabId> <js>');
         await cmdEval(tabId, expr);
+        break;
+      }
+      case 'clickwatch': {
+        const [, tabId, ms, ...rest] = argv;
+        const expr = rest.join(' ');
+        if (!tabId || !/^\d+$/.test(ms || '') || !expr) throw new Error('Usage: clickwatch <tabId> <windowMs> <js>');
+        await cmdClickwatch(tabId, Number(ms), expr);
         break;
       }
       case 'upload': {

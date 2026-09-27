@@ -45,7 +45,7 @@ import { readDrafts, draftFor } from './agent_drafts.mjs';
 import { matchAnswerBucket } from './answer_buckets.mjs';
 import { submissionVerdict, captureEvidence, isSpamFlagged } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
-import { uploadSettled, clickReceived, pageCall } from './page_signals.mjs';
+import { uploadSettled, clickReceived, clickVerdict, pageCall } from './page_signals.mjs';
 import { dbPath } from './local_db.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -294,7 +294,7 @@ async function pickComboboxInQuestion(tab, questionText, value, opts = {}) {
         const cityState = ${JSON.stringify(cityState)};
         const opts = [...document.querySelectorAll("[role=option]")];
         const cityStateOk = (t) => !!cityState && t.includes(cityState.city)
-          && ((cityState.stateFull && t.includes(cityState.stateFull)) || (cityState.state && new RegExp('\\b' + cityState.state + '\\b').test(t)));
+          && ((cityState.stateFull && t.includes(cityState.stateFull)) || (cityState.state && new RegExp('\\\\b' + cityState.state + '\\\\b').test(t)));
         const match = opts.find(o => (o.innerText || '').trim().toLowerCase() === wanted)
           || (wanted.length >= 5 ? opts.find(o => (o.innerText || '').toLowerCase().includes(wanted)) : null)
           || opts.find(o => cityStateOk((o.innerText || '').toLowerCase()));
@@ -481,11 +481,33 @@ async function fillStandard(tab) {
   return { name, email, phone_filled: phoneRes.found };
 }
 
-// ---------- step: submit + read errors ----------
+// Submit-click state for the whole run (verify 第 19 轮 P2 ②): once a click may
+// have landed, a missing button or an unreadable click result can no longer
+// mean "nothing was sent" — the page may have moved on BECAUSE it was received.
+let ACTIVE_TAB = null;
+let SUBMIT_CLICKED = false;
+
+// Click + watch the network in one CDP session (cdp.mjs clickwatch): requests
+// sent after the click are seen even while still in flight. Unreadable output
+// = click state unknown, never "not clicked".
+async function clickAndWatch(tab, js, windowMs) {
+  const r = cdp('clickwatch', tab, String(windowMs), js);
+  try {
+    const out = JSON.parse(r.stdout);
+    return { click: out.click, watch: out.watch };
+  } catch {
+    return { click: { _raw: r.stdout, _err: r.stderr }, watch: { ok: false, error: r.stderr || 'clickwatch output unreadable' } };
+  }
+}
+
+// ---------- submit + read errors ----------
 // The click and its time mark are taken in one eval, so clickReceived can later
-// tell whether ANY request followed this click (page_signals.mjs).
+// tell whether ANY finished request followed this click (page_signals.mjs); the
+// CDP watch around the same click sees requests still in flight.
+const CLICK_WATCH_MS = 19000; // the 7s wait + 4 re-reads × 3s: the whole window before a verdict
 async function submitAndCheck(tab) {
-  const click = await evalInTab(tab, `
+  const started = Date.now();
+  const { click, watch } = await clickAndWatch(tab, `
     (() => {
       const btn = [...document.querySelectorAll("button")].find(b => /submit/i.test(b.innerText));
       if (!btn) return { ok: false, note: 'no_submit_btn' };
@@ -493,10 +515,11 @@ async function submitAndCheck(tab) {
       btn.click();
       return { ok: true, mark };
     })()
-  `);
-  if (!click?.ok || !click.mark) return { clicked: false, click };
-  await sleep(7000);
-  return { clicked: true, mark: click.mark, ...(await readSubmitPage(tab)) };
+  `, CLICK_WATCH_MS);
+  if (click?.ok !== true || !click.mark) return { clicked: false, click, watch };
+  SUBMIT_CLICKED = true;
+  await sleep(Math.max(0, 7000 - (Date.now() - started)));
+  return { clicked: true, mark: click.mark, watch, ...(await readSubmitPage(tab)) };
 }
 
 // Full-page evidence for a terminal outcome (DESIGN §13.7). A failed shot is
@@ -666,7 +689,7 @@ async function answerMissing(tab, missingLabel) {
   const draft = draftFor(AGENT_DRAFTS, APPLY_URL, missingLabel);
   if (draft) {
     const filled = await typeIntoQuestion(tab, missingLabel, draft);
-    return filled.ok ? { ...filled, mode: 'agent_draft', value: draft } : { ...filled, note: 'agent_draft_field_not_found' };
+    return filled.ok ? { ...filled, mode: 'agent_draft', value: draft, source: 'agent_draft' } : { ...filled, note: 'agent_draft_field_not_found' };
   }
   // An opinion about the company's own channels: no profile field answers it.
   // Pend it for the main agent to draft — never a template, never the user first.
@@ -1195,6 +1218,7 @@ function dedupePendingQuestions(pending) {
 async function main() {
   log('Open:', APPLY_URL);
   const tab = await open();
+  ACTIVE_TAB = tab;
   // Longer hydrate wait — agentio + others need >5s for React to fully mount form
   await sleep(6000);
   const hydrated = await waitForAshbyForm(tab);
@@ -1228,8 +1252,17 @@ async function main() {
   const submitOnce = async (attempt) => {
     const sent = await submitAndCheck(tab);
     if (!sent.clicked) {
-      const ev = await pageEvidence(tab, attempt === 1 ? 'before_submit' : 'after_submit', 'unknown');
-      emitOutcome({ outcome: 'crashed', reason: 'submit_button_not_found', detail: sent.click, attempt, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+      const buttonAbsent = sent.click?.ok === false && sent.click.note === 'no_submit_btn';
+      if (!SUBMIT_CLICKED && buttonAbsent) {
+        // Never clicked in this run and no button to click: nothing was sent.
+        const ev = await pageEvidence(tab, 'before_submit');
+        emitOutcome({ outcome: 'crashed', reason: 'submit_button_not_found', detail: sent.click, attempt, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+      }
+      // A click already happened, or this one's result is unreadable: the page
+      // may have moved on because it WAS received → may have submitted.
+      SUBMIT_CLICKED = true;
+      const ev = await pageEvidence(tab, 'after_submit', 'unknown');
+      emitOutcome({ outcome: 'unknown', reason: buttonAbsent ? 'submit_button_gone_after_click' : 'submit_click_result_unreadable', detail: { click: sent.click, watch: sent.watch }, attempt, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }
     let page = sent;
     for (let look = 0; page.missing.length === 0 && page.verdict.verdict === 'unknown' && look < 4; look += 1) {
@@ -1237,7 +1270,7 @@ async function main() {
       page = await readSubmitPage(tab);
     }
     const silent = page.missing.length === 0 && page.verdict.verdict === 'unknown';
-    const received = silent ? await evalInTab(tab, pageCall(clickReceived, sent.mark)) : { registered: true, via: 'page_answered' };
+    const received = silent ? clickVerdict(sent.watch, await evalInTab(tab, pageCall(clickReceived, sent.mark))) : { registered: true, via: 'page_answered' };
     return { ...page, received };
   };
   for (let attempt = 1; attempt <= 5; attempt++) {
@@ -1353,7 +1386,11 @@ async function main() {
   emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
 }
 
-main().catch(async (e) => {
+// A crash after a submit click is exactly the case a screenshot is for.
+async function onDriverException(e) {
   // DO NOT close tab on error — keep it open for debugging.
-  emitOutcome({ outcome: 'crashed', reason: 'driver_exception', error: e.message, stack: e.stack?.split('\n').slice(0, 3), job_id: JOB_ID, answers: ANSWERS });
-});
+  const ev = ACTIVE_TAB ? await pageEvidence(ACTIVE_TAB, SUBMIT_CLICKED ? 'after_submit' : 'before_submit', 'unknown') : null;
+  emitOutcome({ outcome: 'crashed', reason: 'driver_exception', error: e.message, stack: e.stack?.split('\n').slice(0, 3), job_id: JOB_ID, evidence: ev, answers: ANSWERS });
+}
+
+main().catch(onDriverException);

@@ -302,3 +302,47 @@ test('缺口报告：新 note 各归各的问题；档案补上后不再问；�
   const answered = runGapReport('mrw-autofill-gap2-', withQa({ how_did_you_hear: 'Company website', years_social_media_experience: '1', social_accounts_managed: ACCOUNTS }), outcome).report;
   for (const q of [Q_HEAR, Q_YEARS, Q_BRANDS]) assert.equal(categoryOf(answered, q), 'agent_profile_backed', q);
 });
+
+// verify 第 19 轮 P3：选项匹配串是在页面里执行的——在一个假 DOM 里真跑那段注入串，
+// 证明「城市 + 州缩写」那一支真的生效（旧码 '\b' 在模板串里变成退格符，永远不中）。
+test('P3：注入页面的选项匹配串在假 DOM 里真跑——短城名（Troy）只能靠「城市 + 州缩写」认出 Troy, NY, USA，不认 Troy, MI', async () => {
+  // A city under 5 letters never hits the "option contains the term" branch, so
+  // only the city + state branch can pick it — exactly the branch that was dead.
+  const profile = { ...BASE, personal: { ...BASE.personal, address_city: 'Troy', address_state: 'NY' }, standard_qa: {} };
+  const d = await loadDriver(profile, { applyUrl: ELEVEN });
+  const pickerJs = [];
+  rules([
+    { match: 'no_combobox_in_question', result: { ok: true, sel: '#loc' } },
+    { match: 'no_option_match', result: (js) => { pickerJs.push(js); return { ok: false, note: 'no_option_match' }; } },
+  ]);
+  try {
+    await d.answerMissing('tab-1', 'Location');
+  } finally {
+    reset();
+  }
+  assert.ok(pickerJs.length > 0);
+  class FakeMouseEvent { constructor(type) { this.type = type; } }
+  const runWith = (texts) => pickerJs.map((js) => {
+    const options = texts.map((innerText) => ({ innerText, dispatchEvent: () => true }));
+    const fakeDocument = { querySelectorAll: (sel) => (sel === '[role=option]' ? options : []) };
+    return new Function('document', 'MouseEvent', 'window', `return ${js.trim()};`)(fakeDocument, FakeMouseEvent, {});
+  });
+  const hit = runWith(['Troy, MI, USA', 'Troy, NY, USA']).find((r) => r.ok);
+  assert.ok(hit, 'the city + state-abbreviation branch never matched');
+  assert.equal(hit.picked, 'Troy, NY, USA');
+  assert.ok(!runWith(['Troy, MI, USA']).some((r) => r.ok), 'another state must not be picked');
+});
+
+test('P3：起草稿填进表单，答案日志来源记 agent_draft（不是 derived）', async () => {
+  const draft = 'Short product demos with a clear hook work well on TikTok.';
+  const home = mkdtempSync(join(tmpdir(), 'mrw-drafts-src-'));
+  addDraft(home, { url: ELEVEN, question: Q_CRITIQUE, answer: draft });
+  const d = await loadDriver(BASE, { applyUrl: ELEVEN, agentDrafts: readFileSync(join(home, 'agent_drafts.json'), 'utf8') });
+  rules([{ match: 'no_essay_input', result: { ok: true, sel: '#crit', type: 'textarea' } }]);
+  try {
+    const r = await d.answerMissing('tab-1', Q_CRITIQUE);
+    assert.equal(r.source, 'agent_draft');
+  } finally {
+    reset();
+  }
+});

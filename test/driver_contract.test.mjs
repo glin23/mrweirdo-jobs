@@ -69,7 +69,7 @@ test('recordFill：FillEntry 四字段齐全、source 只认五种、value 序�
   recordFill(answers, { label: 'GPA', value: 3.4, source: 'derived', widget: 'text' });
   assert.deepEqual(answers[0], { label: 'Are you authorized to work?', value: 'Yes', source: 'profile', widget: 'combobox' });
   assert.equal(answers[1].value, '3.4', 'numeric values serialize to string');
-  assert.deepEqual(FILL_SOURCES, ['profile', 'bank_default', 'derived', 'user_confirmed', 'left_blank']);
+  assert.deepEqual(FILL_SOURCES, ['profile', 'bank_default', 'derived', 'user_confirmed', 'left_blank', 'agent_draft']);
 
   assert.throws(() => recordFill(answers, { label: 'X', value: 'y', source: 'guessed', widget: 'text' }), /source/);
   assert.throws(() => recordFill(answers, { value: 'y', source: 'profile', widget: 'text' }), /label/);

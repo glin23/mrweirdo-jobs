@@ -40,7 +40,7 @@ import {
 } from './greenhouse_value_rules.mjs';
 import { submissionVerdict, captureEvidence, isSpamFlagged } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
-import { clickReceived, pageCall } from './page_signals.mjs';
+import { clickReceived, clickVerdict, pageCall } from './page_signals.mjs';
 import { priorApplicationToCompany } from './apply_guard.mjs';
 import { dbPath } from './local_db.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -1236,9 +1236,30 @@ async function clickVisibleConsentCheckboxes(tab) {
   return r;
 }
 
+// Submit-click state for the whole run (verify 第 19 轮 P2 ②): once a click may
+// have landed, a missing button or an unreadable click result can no longer
+// mean "nothing was sent" — the page may have moved on BECAUSE it was received.
+let ACTIVE_TAB = null;
+let SUBMIT_CLICKED = false;
+
+// Click + watch the network in one CDP session (cdp.mjs clickwatch): requests
+// sent after the click are seen even while still in flight. Unreadable output
+// = click state unknown, never "not clicked".
+async function clickAndWatch(tab, js, windowMs) {
+  const r = cdp('clickwatch', tab, String(windowMs), js);
+  try {
+    const out = JSON.parse(r.stdout);
+    return { click: out.click, watch: out.watch };
+  } catch {
+    return { click: { _raw: r.stdout, _err: r.stderr }, watch: { ok: false, error: r.stderr || 'clickwatch output unreadable' } };
+  }
+}
+
 // ---------- submit + read errors ----------
+const CLICK_WATCH_MS = 17000; // the 5s wait + 4 re-reads × 3s: the whole window before a verdict
 async function submitAndCheck(tab) {
-  const click = await evalInTab(tab, `
+  const started = Date.now();
+  const { click, watch } = await clickAndWatch(tab, `
     (() => {
       // Look for the actual application submit button (type=submit + "Submit application" text)
       const btn = [...document.querySelectorAll('button[type=submit], input[type=submit]')]
@@ -1255,10 +1276,11 @@ async function submitAndCheck(tab) {
       btn.click();
       return { ok:true, text: btn.innerText || btn.value, mark };
     })()
-  `);
-  if (!click?.ok || !click.mark) return { clicked: false, click };
-  await sleep(5000);
-  return { clicked: true, mark: click.mark, ...(await readSubmitPage(tab)) };
+  `, CLICK_WATCH_MS);
+  if (click?.ok !== true || !click.mark) return { clicked: false, click, watch };
+  SUBMIT_CLICKED = true;
+  await sleep(Math.max(0, 5000 - (Date.now() - started)));
+  return { clicked: true, mark: click.mark, watch, ...(await readSubmitPage(tab)) };
 }
 
 // Full-page evidence for a terminal outcome (DESIGN §13.7); same rule as the
@@ -1776,6 +1798,7 @@ function classifyUnsubmitted(missing = [], blockers = []) {
 async function main() {
   log('Open:', APPLY_URL);
   const tab = await open();
+  ACTIVE_TAB = tab;
   await sleep(4500);
   await navigateGreenhouseIframeIfPresent(tab);
 
@@ -1828,8 +1851,17 @@ async function main() {
   const submitOnce = async (attempt) => {
     const sent = await submitAndCheck(tab);
     if (!sent.clicked) {
-      const ev = await pageEvidence(tab, attempt === 1 ? 'before_submit' : 'after_submit', 'unknown');
-      emitOutcome({ outcome: 'crashed', reason: 'submit_button_not_found', detail: sent.click, attempt, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+      const buttonAbsent = sent.click?.ok === false && sent.click.note === 'no_submit_btn';
+      if (!SUBMIT_CLICKED && buttonAbsent) {
+        // Never clicked in this run and no button to click: nothing was sent.
+        const ev = await pageEvidence(tab, 'before_submit');
+        emitOutcome({ outcome: 'crashed', reason: 'submit_button_not_found', detail: sent.click, attempt, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+      }
+      // A click already happened, or this one's result is unreadable: the page
+      // may have moved on because it WAS received → may have submitted.
+      SUBMIT_CLICKED = true;
+      const ev = await pageEvidence(tab, 'after_submit', 'unknown');
+      emitOutcome({ outcome: 'unknown', reason: buttonAbsent ? 'submit_button_gone_after_click' : 'submit_click_result_unreadable', detail: { click: sent.click, watch: sent.watch }, attempt, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }
     let page = sent;
     for (let look = 0; [...new Set(page.missing)].length === 0 && page.verdict.verdict === 'unknown' && look < 4; look += 1) {
@@ -1837,7 +1869,7 @@ async function main() {
       page = await readSubmitPage(tab);
     }
     const silent = [...new Set(page.missing)].length === 0 && page.verdict.verdict === 'unknown';
-    const received = silent ? await evalInTab(tab, pageCall(clickReceived, sent.mark)) : { registered: true, via: 'page_answered' };
+    const received = silent ? clickVerdict(sent.watch, await evalInTab(tab, pageCall(clickReceived, sent.mark))) : { registered: true, via: 'page_answered' };
     return { ...page, received };
   };
   for (let attempt = 1; attempt <= 5; attempt++) {
@@ -1933,7 +1965,11 @@ async function main() {
   emitOutcome({ outcome: 'rate_limited', reason: 'max_attempts_exceeded', last_missing: lastMissing, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
 }
 
-main().catch(async (e) => {
+// A crash after a submit click is exactly the case a screenshot is for.
+async function onDriverException(e) {
   // DO NOT close tab on error — keep it open for debugging.
-  emitOutcome({ outcome: 'crashed', reason: 'driver_exception', error: e.message, job_id: JOB_ID, answers: ANSWERS });
-});
+  const ev = ACTIVE_TAB ? await pageEvidence(ACTIVE_TAB, SUBMIT_CLICKED ? 'after_submit' : 'before_submit', 'unknown') : null;
+  emitOutcome({ outcome: 'crashed', reason: 'driver_exception', error: e.message, job_id: JOB_ID, evidence: ev, answers: ANSWERS });
+}
+
+main().catch(onDriverException);

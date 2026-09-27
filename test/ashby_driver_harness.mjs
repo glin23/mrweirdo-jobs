@@ -22,7 +22,7 @@ const SHARED = join(ROOT, 'shared');
 const DRIVER_SRC = readFileSync(join(SHARED, 'ashby_apply_driver.mjs'), 'utf8');
 
 // The only functions the harness replaces: the browser boundary.
-const BROWSER_FNS = ['cdp', 'evalInTab'];
+const BROWSER_FNS = ['cdp', 'evalInTab', 'clickAndWatch'];
 
 // The shipped line that builds a pending entry, taken from main() as-is.
 const PENDING_LINE = DRIVER_SRC.split('\n').find((l) => l.includes('addPendingQuestion(pendingForMainClaude,'));
@@ -52,6 +52,14 @@ async function evalInTab(tab, js) {
 }
 // emitOutcome is the driver's ONLY exit (ADR-15). Under test it validates via
 // the real contract, records, and throws instead of process.exit-ing.
+async function clickAndWatch(tab, js, windowMs) {
+  // The click JS goes to the eval rules as before; the network watch that rides
+  // along is __MRW_WATCH (default: one request seen after the click).
+  const click = await evalInTab(tab, js);
+  const w = globalThis.__MRW_WATCH;
+  const watch = typeof w === 'function' ? w(click) : (w ?? { ok: true, requests: [{ url: 'https://under-test/after-click', method: 'POST', ms: 5 }], window_ms: 5 });
+  return { click, watch };
+}
 import { writeFileSync as __writeFileSync } from 'node:fs';
 function captureEvidence(tab, opts) {
   return __real_captureEvidence(tab, opts, async (...args) => {
@@ -68,7 +76,7 @@ function emitOutcome(obj) {
   e.emitted = obj;
   throw e;
 }
-export { answerMissing, addPendingQuestion, submitAndCheck, main, logEssayPending, ESSAY_PENDING_LOG, essayAnswerFor };
+export { answerMissing, addPendingQuestion, submitAndCheck, main, onDriverException, logEssayPending, ESSAY_PENDING_LOG, essayAnswerFor };
 
 // The shipped pending-list statement, verbatim, with the three variables main()
 // has in scope at that point bound as arguments.

@@ -67,3 +67,26 @@ test('注入串：函数源码原样进页面，参数按 JSON 传', () => {
   const out = new Function('performance', `return ${js};`)(perf([req(GQL, 5)], 2));
   assert.equal(out.registered, true);
 });
+
+// verify 第 19 轮 P2 ①：只有「确定什么都没发出去」才算没接住；任何不确定都按接住（不再点）。
+import { clickVerdict } from '../shared/page_signals.mjs';
+
+test('判定：点击后 CDP 看到任何已发出的请求（含在途）→ 接住', () => {
+  assert.equal(clickVerdict({ ok: true, requests: [{ url: 'https://jobs.ashbyhq.com/api/non-user-graphql' }] }, { registered: false }).registered, true);
+});
+
+test('判定：CDP 整个窗口 0 条 + 时间表 0 条、同一文档 → 才算没接住', () => {
+  assert.equal(clickVerdict({ ok: true, requests: [] }, { registered: false }).registered, false);
+});
+
+test('判定：CDP 没看成（没开起来 / 没数据）→ 判不出，不许说没接住', () => {
+  for (const watch of [null, undefined, { ok: false, error: 'ws closed' }, { ok: true }]) {
+    assert.equal(clickVerdict(watch, { registered: false }).registered, null, JSON.stringify(watch));
+  }
+});
+
+test('判定：时间表判不出 / 换了文档 → 不许说没接住', () => {
+  assert.equal(clickVerdict({ ok: true, requests: [] }, { registered: null }).registered, null);
+  assert.equal(clickVerdict({ ok: true, requests: [] }, undefined).registered, null);
+  assert.equal(clickVerdict({ ok: true, requests: [] }, { registered: true, via: 'new_document' }).registered, true);
+});
