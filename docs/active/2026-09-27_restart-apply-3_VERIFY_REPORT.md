@@ -8,7 +8,8 @@ Task: docs/active/2026-09-27_restart-apply-3_TASK.md
 Reads:
   - 6696eb2 / a5b6496 / fba2a0f 全 diff；shared/ashby_apply_driver.mjs、shared/greenhouse_apply_driver.mjs 提交循环；shared/cdp.mjs cmdClickwatch；test/submit_click_received.test.mjs
 Updated: 2026-09-27
-Iterations: 2
+Iterations: 3
+Living_doc: docs/specs/restart-apply-3.md
 ---
 
 # 第 21 轮 — 砍掉自动再点（6696eb2 a5b6496 fba2a0f）
@@ -241,3 +242,105 @@ Greenhouse 那边用的是它的替身能填上的题（Gender / Veteran status�
 
 - **一开始用 Ashby 的题目（LinkedIn）去测 Greenhouse**：Greenhouse 的替身填不了这道题，结果每次都是「补不上 → 点 1 次就停」，根本没测到再提交。后来照 builder 的测试改用 Gender / Veteran status，才真正测到第 2 次点击。
 - **一开始把截图文件名的结尾读成了「submitted」，以为出错了**：实际文件名是 `_after_not_submitted.png`，是我自己按下划线切字符串切错了。页面判定是「没投出」，没有问题。
+
+# 第 23 轮 — 方向预筛 / 年限口径 / release 任意链接（cf5375b 72597d8 9712a37 da981ba）
+
+## 验收范围
+
+验收 builder 第 8 次召唤的 4 个提交（都没推）：
+- **① 方向预筛**（cf5375b）：标题明显属于用户不要的专业职能时，在硬筛就拦下，原因记 `function_mismatch:<职能>`，省下打分的钱。这些职能包括客服、设计、财务、法务、招聘、销售 AE、工程、研究、数据、行政、临床、物流。
+- **② 年限口径**（72597d8）：提示词写明只有「最低要求 ≥3 年」才算不合格。不合格的行必须写 `reject_reasons`。如果某行只因年限被判不合格，而 JD 的起步年限不到 3 年，就整批拒收、退回重打。
+- **③ release 任意链接**（9712a37）：名单扫描没遇到的 Greenhouse / Ashby 链接，按岗位编号从公开板接口直接取，然后走同一套硬筛 → 去重闸 → 打分 → 投前闸 → 唯一写账人。
+- da981ba 是文档。
+
+本轮没有真投，没有 push。真实家目录在验收期间有 3 个文件变化：15:03 的 seen / source_cursor 来自 lead 的 --no-submit 试跑 18:56Z；15:40 的 submissions 是 lead 的 record-manual 4 条（见 TASK 末尾）。都不是本轮写的。
+
+## 5 维高危区评估
+
+- **① 核心业务逻辑（最高）**：预筛会不会误杀对口的岗位（钱省了，机会也丢了），会不会漏放；「整批退回」会不会让一批永远重打、卡死运行。
+- **② 名额与去重边界**：release 非名单链接能不能绕过去重、60 天、日档位、名单 held。
+- **⑤ 主流程**：提交次数守卫有没有被削弱。
+- **④ 集成点**：release 走公开板接口。
+- **③ 平台边界**：有没有绕过检测的改动。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 3 | 预筛标题分三类：对口 / 专业职能 / 混合（职能词 + 用户领域词） |
+| 边界值 | 2 | 年限「3+ preferred, 1+ required」；JD 里一个小年限加一个没被识别的大年限 |
+| 决策表 | 1 | `yearsOnlyRejectionConflict`：7 种 JD × 打分器给的最低年限 |
+| 状态迁移 | 1 | store 拒收 → 批次挂起 → 重打 → 入库：会不会出不去 |
+| 用例测试 | 1 | 用真实 search_intent（只读）跑 85 个标题 |
+| pairwise | 1 | 新预筛 × 旧的排除词硬筛，对比同一批标题的结论 |
+| 风险驱动 | 3 | release 的 company 口径与闸门；驱动文件 diff 是否为空；grep 绕过检测的写法 |
+
+## 5 轮回归循环记录（第 23 轮）
+
+**1. 预筛误杀和漏放**（真实 search_intent 只读，85 个标题）[实测]
+
+- 放行的有：Founder / Founding / Founder's Associate、GTM Associate、Go-to-Market Strategy、Growth（Marketing / Analyst / Data Analyst）、Marketing Analytics、Community（Manager / Support Specialist / Operations / Head of Community）、Social Media、Content（Creator / Strategist）、Creative、UGC、Marketing Ops、Product（Manager / Marketing / Ops / Analyst / Technical PM）、Operations、BizOps、Strategy & Ops、Chief of Staff、RevOps、Partnerships、BDR、Influencer、PR、Communications、Customer Success Associate (Growth)、Growth Associate, Investments 等。✅
+- 拦下的有：GTM Engineer、Growth Engineer、Marketing Engineer、Prompt Engineer、Developer Relations、Developer Advocate、Solutions Engineer、User Researcher。拿旧的排除词硬筛（title_excludes）跑同一批标题，这 8 个**原来就被拦**（命中 engineer / developer / researcher）。所以不是本轮新增的误杀。第 5 轮挂着的「Prompt / Automation / Martech Engineer 是否放行」仍待拍板。
+- 本轮**新增**的拦截：Content Designer、Research Associate, Marketing、Customer Success Manager、Strategic Finance Associate、Account Executive、Office Manager、People Ops、Legal Ops。后 6 个属于用户排除的职能，拦下是对的。前 2 个见下面 P3。
+- 漏放：Account Executive, Growth 被当成用户的领域放行了（AE 本来是排除的）。这类标题交给打分器判，只多花一点打分钱，不会投错。
+
+**2. 年限口径和「整批退回」** [实测]
+
+- 7 种 JD：「2+ TikTok；5+ marketing」判 5 年；「1-2 social；至少 4 年」判 4；「3+ preferred；1+ required」判 1；「Minimum of three years」判 3；「Five or more」判 5；「2 SQL；6+ PM」判 6。这些都正确。
+- 会不会卡死：store 拒收后，运行会 `die`，这一批留在挂起，等主 agent 改分之后重新提交。它不会自己循环，也不是死锁：打分器把确实只因年限的不合格改成合格，或者改用真实的理由（seniority 等），就能入库。
+- 剩余的缝隙（P4）：
+  - JD 里如果同时有一个小年限，和一个解析器认不出的大年限（例如「1+ years Figma and a decade of marketing」），规则会判「起步 1 年」。这时打分器只能改判合格，或者换一个理由，否则这一批永远入不了库。
+  - 反过来，打分器也可以把理由从 experience_years 改成 other 来绕过这项检查。检查只看理由标签，拦不住换标签。
+
+**3. release 的闸门** [读码 + builder 测试]
+
+- 直取回来的岗位，公司名就是链接里的板 slug。名单扫描和批量扫描也用 slug（ADR-S2），所以 60 天按公司计数不会被分成两家。
+- release 只解除 held_for_review，其他的全照原样：去重（identityBlock）、seen、60 天、日档位（投前闸 / apply_batch）。已经投过的岗再 release，会被投前闸拦下（builder 的测试第 97 行）。
+- 名单公司的链接由名单扫描找到，不再直取（测试第 123 行）。只有扫描没遇到的链接，才走 `release` 源。
+- 取不到的、被硬筛拦下的链接，第 2 行报告会逐条说明原因，不会静默丢掉。✅
+
+**4. 提交次数守卫**：从 5bb409c 到 da981ba，两个驱动、driver_contract、cdp.mjs、submit_click_received 测试的 diff 都是空的，守卫没被削弱。✅
+
+**5. 绕过检测**：diff 新增的代码行 0 命中（fingerprint 命中的只是本项目的岗位指纹函数 `jobFingerprint`）。✅
+
+**6. 逐提交 CI**：cf5375b 650/650，72597d8 654/654，9712a37 660/660，da981ba 660/660。smoke、gate、语法检查全部为 0。
+
+## 结论明细（第 23 轮）
+
+### ✅ 通过
+
+- 预筛对 Founder Associate / GTM / Growth / Community / Social / Content / Marketing / Ops / Product / Chief of Staff / BizOps 这些类别都放行；工程和研究类的拦截是原来就有的。
+- 年限口径正确。「整批退回」不会死锁。
+- release 没有绕开任何闸门，只解除了 held。
+- 提交次数守卫没有被削弱，没有绕过检测的改动，CI 全绿。
+
+### ❌ 真 bug
+
+无。
+
+### ⚠️ 风险
+
+- **P3（预筛新增的误杀，影响小）**：
+  - 「Research Associate, Marketing」被当成研究拦下：负向回看只排除了紧挨着的 market / marketing research，词序反过来就认不出。
+  - 「Content Designer」被当成设计拦下。它偏 UX 写作，算不算对口，由 lead 或拍板人定。
+  - 两个都是本轮新增的拦截，建议 builder 补一条规则：标题里有用户领域词（marketing / content）的研究或设计岗，交给打分器判，不在硬筛拦。
+- **P4（年限）**：JD 里有「小年限 + 认不出的大年限」时，整批会一直入不了库，只能靠打分器改理由。反过来，改理由也能绕过这项检查。建议记进老坑：store 拒收 years_misjudged 时，人工看一眼那条 JD。
+- **待拍板（第 5 轮挂账）**：GTM / Growth / Prompt / Marketing Engineer 和 DevRel 是否放行。现在旧规则和新规则都会拦。
+
+## Quinn 重构 / 质量指标 / 老坑（第 23 轮）
+
+- Quinn 重构：无。预筛正则改动涉及业务判断，交 builder。
+- `verify_self_miss_rate: 0%`（上轮漏检 0 / 本轮问题 2）。
+- 真 bug：0。
+- 老坑清单：项目没定义。
+
+## 覆盖度评估（第 23 轮）
+
+**质量分 4/5，可推。**
+- 覆盖：85 个标题在真实 intent 下跑新旧两套规则对比、7 种 JD 年限、store 拒收路径推演、release 闸门读码加测试、驱动 diff 为空的确认、逐提交 CI。
+- 扣 1 分：没有在真实名单拷贝上复核 builder 自报的「45→31、17 个对口应届全放行」这个数；另有 2 个预筛新增误杀（P3）。
+
+## 试过的错误方向（第 23 轮）
+
+- **一开始把 GTM / Growth Engineer、DevRel 被拦算成本轮的误杀**：拿旧的 title_excludes 跑同一批标题对比后，发现旧规则早就在拦它们。所以不算回归，改列为第 5 轮挂账的待拍板项。
+- **一开始以为 15:40 的真实账本写入是本轮 CI 写的**：看了账本末行和 TASK 末尾，是 lead 在拍板人手投之后跑的 record-manual；15:03 是 lead 的 --no-submit 试跑。
