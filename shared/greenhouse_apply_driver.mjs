@@ -73,6 +73,8 @@ function readJsonOptional(path, fallback = {}) {
   }
 }
 const SEARCH_INTENT = readJsonOptional(SEARCH_INTENT_PATH, {});
+// Open-text answers drafted from the user's own stories (answer_templates.mjs aiExperimentStory).
+const ESSAY_PROFILE = readJsonOptional(join(HOME, 'essay_profile.json'), {});
 let companyFamiliarityAnswer = null;
 let coverLetterUploaded = false;
 const latestExperience = Array.isArray(PROFILE.experience_summary) ? PROFILE.experience_summary[0] : null;
@@ -795,7 +797,7 @@ function canonicalGreenhouseApplyUrls(url) {
 function essayAnswerFor(questionText) {
   for (const t of BANK.essay_templates_compiled || []) {
     if (t.regex.test(questionText)) {
-      return renderAnswerTemplate(t.template, { profile: PROFILE, companyPretty: COMPANY_PRETTY, searchIntent: SEARCH_INTENT });
+      return renderAnswerTemplate(t.template, { profile: PROFILE, companyPretty: COMPANY_PRETTY, searchIntent: SEARCH_INTENT, essayProfile: ESSAY_PROFILE });
     }
   }
   return null;

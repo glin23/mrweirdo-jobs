@@ -67,6 +67,8 @@ const STATIC_COVER_LETTER_ALLOWED = process.env.MRWEIRDO_DISABLE_STATIC_COVER_LE
 const COVER_LETTER = process.env.MRWEIRDO_COVER_LETTER_PATH ||
   (STATIC_COVER_LETTER_ALLOWED ? (PROFILE.cover_letter_path || (existsSync(DEFAULT_COVER_LETTER) ? DEFAULT_COVER_LETTER : '')) : '');
 const SEARCH_INTENT = readJsonOptional(SEARCH_INTENT_PATH, {});
+// Open-text answers drafted from the user's own stories (answer_templates.mjs aiExperimentStory).
+const ESSAY_PROFILE = readJsonOptional(join(HOME, 'essay_profile.json'), {});
 let coverLetterUploaded = false;
 
 const APPLY_URL = process.argv[2];
@@ -229,7 +231,7 @@ function stateFullName(state) {
 function essayAnswerFor(questionText) {
   for (const t of BANK.essay_templates_compiled || []) {
     if (t.regex.test(questionText)) {
-      return renderAnswerTemplate(t.template, { profile: PROFILE, companyPretty: COMPANY_PRETTY, searchIntent: SEARCH_INTENT });
+      return renderAnswerTemplate(t.template, { profile: PROFILE, companyPretty: COMPANY_PRETTY, searchIntent: SEARCH_INTENT, essayProfile: ESSAY_PROFILE });
     }
   }
   return null;

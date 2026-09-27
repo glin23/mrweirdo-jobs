@@ -25,7 +25,29 @@ function authSummary(profile = {}) {
   return parts.join('; ');
 }
 
-export function renderAnswerTemplate(template, { profile = {}, companyPretty = '', searchIntent = {} } = {}) {
+// 「Tell us about something you've built, tested, or experimented with using
+// AI」 (首次真投 2026-09-26: no template → the row stopped). Drafted by the
+// system, never asked — but only from the user's own essay_profile stories,
+// word for word (shared/references/truthfulness.md): a story tagged
+// use_for "ai_experiment" first, else the first story whose skills name AI.
+// No such story → '' and the question stays pending; nothing is invented.
+const STORY_LISTS = ['project_stories', 'proof_points'];
+const mentionsAi = (list) => (Array.isArray(list) ? list : []).some((x) => /\bAI\b/.test(String(x)));
+export function aiExperimentStory(essayProfile = {}) {
+  const stories = STORY_LISTS.flatMap((k) => (Array.isArray(essayProfile?.[k]) ? essayProfile[k] : []));
+  const pick = stories.find((st) => (st.use_for || []).includes('ai_experiment')) || stories.find((st) => mentionsAi(st.skills));
+  if (!pick) return '';
+  const goal = firstNonEmpty(pick.problem, pick.context);
+  const did = firstNonEmpty(pick.what_user_did, Array.isArray(pick.actions) ? pick.actions.join('. ') : '');
+  const found = firstNonEmpty(pick.result_or_learning, pick.evidence);
+  if (!did || !found) return '';
+  return [goal && `What I was trying to learn or achieve: ${goal}`, `What I did: ${did}`, `What I discovered: ${found}`].filter(Boolean).join(' ');
+}
+
+// A template whose whole content is one of these must not be sent half-empty.
+const REQUIRED_KEYS = new Set(['AI_EXPERIMENT_STORY']);
+
+export function renderAnswerTemplate(template, { profile = {}, companyPretty = '', searchIntent = {}, essayProfile = {} } = {}) {
   const personal = profile.personal || {};
   const education = profile.education || {};
   const standard = profile.standard_qa || {};
@@ -52,7 +74,11 @@ export function renderAnswerTemplate(template, { profile = {}, companyPretty = '
     WORK_AUTH_SUMMARY: authSummary(profile),
     LATEST_COMPANY: firstNonEmpty(latestExperience?.company),
     LATEST_TITLE: firstNonEmpty(latestExperience?.title),
+    AI_EXPERIMENT_STORY: aiExperimentStory(essayProfile),
   };
+  for (const [, key] of String(template || '').matchAll(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g)) {
+    if (REQUIRED_KEYS.has(key) && !values[key]) return '';
+  }
 
   return String(template || '')
     .replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] || '')

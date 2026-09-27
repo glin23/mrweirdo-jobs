@@ -60,7 +60,7 @@ function emitOutcome(obj) {
   e.emitted = obj;
   throw e;
 }
-export { answerMissing, addPendingQuestion, submitAndCheck, main, logEssayPending, ESSAY_PENDING_LOG };
+export { answerMissing, addPendingQuestion, submitAndCheck, main, logEssayPending, ESSAY_PENDING_LOG, essayAnswerFor };
 
 // The shipped pending-list statement, verbatim, with the three variables main()
 // has in scope at that point bound as arguments.

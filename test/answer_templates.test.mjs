@@ -57,3 +57,45 @@ test('renderAnswerTemplate tolerates empty/no-token input', () => {
   assert.equal(renderAnswerTemplate('', {}), '');
   assert.equal(renderAnswerTemplate('no tokens here', {}), 'no tokens here');
 });
+
+// 首次真投：「Tell us about something you've built, tested, or experimented with using AI…」
+// 没有答案桶 → no_bucket_for。这类开放题由系统据 essay_profile 起草、不问用户；内容只能
+// 逐字来自 essay_profile 的故事（truthfulness.md：不新增任何事实）。
+import { aiExperimentStory } from '../shared/answer_templates.mjs';
+
+const AI_VIDEO = {
+  name: 'AI video model experiments',
+  problem: 'Wanted to learn which AI video models hold up for short-form content, and what makes AI-video posts grow an audience.',
+  what_user_did: 'Ran 27+ controlled AI video experiments with pass/fail criteria, comparing models side by side (Seedance, Wan, Veo); distilled reusable prompt packs and shotlists from wins and postmortems.',
+  result_or_learning: 'A 3M-view viral hit converted only ~100 followers, exposing traffic without positioning; pivoted to vertical AI-video breakdowns and grew from 200 to 1,000+ followers in 3 days.',
+  skills: ['AI video evaluation'],
+  use_for: ['ai_experiment'],
+};
+const R2W = { name: 'R2W', problem: 'P-r2w.', what_user_did: 'Built the AI MVP via vibe coding.', result_or_learning: 'L-r2w.', skills: ['AI-assisted building'], use_for: ['tell_me_about_a_project'] };
+const COR = { name: 'COR', problem: 'P-cor.', what_user_did: 'Recruited mentors.', result_or_learning: 'L-cor.', skills: ['community building'], use_for: ['leadership'] };
+
+test('aiExperimentStory：优先标了 ai_experiment 的故事，全部文字逐字来自 essay_profile', () => {
+  const out = aiExperimentStory({ project_stories: [R2W, AI_VIDEO] });
+  for (const part of [AI_VIDEO.problem, AI_VIDEO.what_user_did, AI_VIDEO.result_or_learning]) assert.ok(out.includes(part), part);
+  const stripped = out.replace(AI_VIDEO.problem, '').replace(AI_VIDEO.what_user_did, '').replace(AI_VIDEO.result_or_learning, '');
+  assert.match(stripped.replace(/\s+/g, ' ').trim(), /^What I was trying to learn or achieve: What I did: What I discovered:$/, 'only fixed connective labels are added');
+});
+
+test('aiExperimentStory：没有 ai_experiment 标签时用技能里写着 AI 的真实项目；一个都没有 → 空（照旧问，不编）', () => {
+  assert.ok(aiExperimentStory({ project_stories: [COR, R2W] }).includes('Built the AI MVP via vibe coding.'));
+  assert.equal(aiExperimentStory({ project_stories: [COR] }), '');
+  assert.equal(aiExperimentStory({}), '');
+});
+
+test('模板里引用的故事为空时整段答案为空（驱动据此挂起而不是交空答案）', () => {
+  assert.equal(renderAnswerTemplate('{{AI_EXPERIMENT_STORY}}', { essayProfile: { project_stories: [COR] } }), '');
+  assert.ok(renderAnswerTemplate('{{AI_EXPERIMENT_STORY}}', { essayProfile: { project_stories: [AI_VIDEO] } }).includes('27+ controlled AI video experiments'));
+});
+
+test('出货答案库有这类题的模板，能匹配首次真投遇到的原题', () => {
+  const bank = JSON.parse(readFileSync(join(ROOT, 'shared/answer_bank.json'), 'utf8'));
+  const q = 'Tell us about something you’ve built, tested, or experimented with using AI. What were you trying to achieve or learn, and what did you discover?';
+  const hit = bank.essay_templates.find((t) => new RegExp(t.match, 'i').test(q));
+  assert.ok(hit, 'no essay template matches the question');
+  assert.match(hit.answer_template, /\{\{AI_EXPERIMENT_STORY\}\}/);
+});

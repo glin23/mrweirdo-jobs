@@ -3,6 +3,15 @@
 
   "essay_templates": [
     {
+      "match": "(built|tested|experimented|tried|played).{0,40}(using|with)\\s+(ai|llms?|generative ai|genai)\\b|(experiment(ed|s)?|project|something).{0,30}\\bwith\\s+(ai|llms?|generative ai)\\b.{0,60}(learn|achieve|discover)",
+      "answer_template": "{{AI_EXPERIMENT_STORY}}",
+      "tags": [
+        "ai_experiment",
+        "from_essay_profile_only"
+      ],
+      "_note": "首次真投 2026-09-26（OpusClip）。答案逐字取自 essay_profile 标了 use_for ai_experiment 的故事，其次是技能写着 AI 的真实项目；都没有则整段为空、题目挂起问用户（shared/answer_templates.mjs aiExperimentStory）。"
+    },
+    {
       "match": "tell us why.{0,30}good fit|why.{0,20}good fit|good fit for this position",
       "answer_template": "I am a strong fit for {{COMPANY_PRETTY}} because {{WHY_ROLE}}. My academic background in {{MAJOR}} at {{SCHOOL}}, combined with my project and work experience, has trained me to learn quickly, communicate clearly, and turn ambiguous tasks into useful output. I would bring ownership, careful execution, and curiosity to the internship from day one.",
       "tags": ["fit", "generic"]

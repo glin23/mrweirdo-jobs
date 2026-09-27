@@ -45,3 +45,20 @@ test('① 岗位在国外（London）：仍然照问，不替用户承诺', asyn
   const res = await askRto('London');
   assert.equal(res.note, 'relocation_commitment_policy_unset');
 });
+
+// ② OpusClip 开放题：「用 AI 做过 / 试过什么」。
+const AI_Q = 'Tell us about something you’ve built, tested, or experimented with using AI. What were you trying to achieve or learn, and what did you discover?';
+const STORY = {
+  problem: 'Wanted to learn which AI video models hold up for short-form content.',
+  what_user_did: 'Ran 27+ controlled AI video experiments with pass/fail criteria, comparing models side by side (Seedance, Wan, Veo); distilled reusable prompt packs and shotlists.',
+  result_or_learning: 'A 3M-view hit converted only ~100 followers; pivoted to vertical AI-video breakdowns and grew from 200 to 1,000+ followers in 3 days.',
+  use_for: ['ai_experiment'],
+};
+
+test('② 驱动：essay_profile 有 AI 实验故事 → 按故事逐字起草；没有任何 AI 故事 → 不起草（照旧挂起）', async () => {
+  const withStory = await loadDriver(BASE, { essayProfile: { project_stories: [STORY] } });
+  const out = withStory.essayAnswerFor(AI_Q);
+  assert.ok(out && out.includes(STORY.what_user_did) && out.includes(STORY.result_or_learning), out);
+  const without = await loadDriver(BASE, { essayProfile: { project_stories: [{ problem: 'p', what_user_did: 'Recruited mentors.', result_or_learning: 'l', skills: ['community building'] }] } });
+  assert.ok(!without.essayAnswerFor(AI_Q), 'no AI story → no answer, never an invented one');
+});
