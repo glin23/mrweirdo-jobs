@@ -235,9 +235,11 @@ async function fullRotationWindows(windowSize) {
   return Math.ceil(longest / windowSize);
 }
 
-// D10 放行（lead 裁决）: `--release <apply_url>`, repeatable — a list job held
-// for review that the user said to apply to. It is found again by the list
-// scan, scored again, and dispatched like any other job instead of held.
+// D10 放行（lead 裁决）: `--release <apply_url>`, repeatable — a job the user
+// said to apply to. A list job held for review is found again by the list scan;
+// any other Greenhouse / Ashby link the list scan did not meet is fetched by
+// its job id (sources/release_source.mjs, restart-apply-3). Either way it is
+// scored again and dispatched like any other job instead of held.
 function releaseUrls() {
   const urls = process.argv.flatMap((a, i) => (a === '--release' ? [process.argv[i + 1]] : []));
   for (const u of urls) {
@@ -309,8 +311,8 @@ async function start() {
     const budget = budgetLine(attemptIndex(entries, now), target, tier, now);
     const workDb = join(runDir, 'work.db');
     initRunDb({ path: workDb, seqFloor: Math.max(maxJobId(entries), SEQ_FLOOR_MIN) });
-    // Released jobs are list jobs held for review: they are found by the list
-    // scan, so a release-only run needs no rotation window.
+    // Released jobs are found by the list scan or fetched by link, so a
+    // release-only run needs no rotation window.
     const maxWindows = sourcing.mode === 'watchlist_only' ? 0
       : argValue('--max-windows') != null ? Number(argValue('--max-windows'))
         : release.length ? 0 : await fullRotationWindows(windowSize);
@@ -345,6 +347,7 @@ function newState({ runId, runDir, workDb, now, budget, maxWindows, windowSize, 
     batch_no: 0,
     pending_batch: null,
     watchlist_done: false,
+    release_scanned: false,
     windows_scanned: 0,
     max_windows: maxWindows,
     window_size: windowSize,
@@ -423,11 +426,17 @@ function gate(st, candidates, kind) {
   return kept.sort((a, b) => (b._released - a._released) || ((b.description?.length || 0) - (a.description?.length || 0)));
 }
 
+// Released links the scans so far have not accounted for (found, dropped, or
+// failed to fetch).
+const unmetReleases = (st) => st.release.filter((u) => st.release_outcome[jobFingerprint(u).fp] === undefined);
+
 function scan(st, kind) {
   const outDir = join(st.run_dir, `disc-${kind}-${st.windows_scanned}`);
   const args = ['shared/discover_candidates.mjs', '--run', '--output-dir', outDir, '--cap-to-score', '1000000', '--run-id', st.run_id];
   if (kind === 'watchlist') {
     args.push('--sources', 'watchlist', '--source-window-size', '0');
+  } else if (kind === 'release') {
+    args.push('--sources', 'release', '--source-window-size', '0', ...unmetReleases(st).flatMap((u) => ['--release-url', u]));
   } else {
     const offset = st.cursor_start + st.windows_scanned * st.window_size;
     args.push('--sources', ROTATION_SOURCES.join(','), '--source-window-size', String(st.window_size), '--source-window-offset', String(offset));
@@ -437,6 +446,15 @@ function scan(st, kind) {
   if (r.code !== 0) throw new Error(`discovery (${kind}) failed with exit ${r.code}`);
   const funnel = readJson(join(outDir, 'discovery_funnel.json'));
   st.source_errors.push(...(funnel.errors || []).map((e) => ({ kind, ...e })));
+  // A released job that never reaches the gate still gets its why: dropped by
+  // the hard filter, or its link could not be fetched.
+  const released = new Set(st.release.map((u) => jobFingerprint(u).fp));
+  const note = (url, why) => {
+    const fp = jobFingerprint(url)?.fp;
+    if (fp && released.has(fp) && st.release_outcome[fp] === undefined) st.release_outcome[fp] = why;
+  };
+  for (const d of readJson(join(outDir, 'hard_filter_dropped.json'))) note(d.apply_url, `hard_filter:${d.reason}`);
+  if (kind === 'release') for (const e of funnel.errors || []) note(e.apply_url, `fetch_failed:${e.error}`);
   return gate(st, readJson(join(outDir, 'to_score.json')), kind);
 }
 
@@ -455,6 +473,9 @@ function next() {
     if (!st.watchlist_done) {
       pool = scan(st, 'watchlist');
       st.watchlist_done = true;
+    } else if (!st.release_scanned) {
+      pool = unmetReleases(st).length ? scan(st, 'release') : [];
+      st.release_scanned = true;
     } else if (st.windows_scanned < st.max_windows) {
       pool = scan(st, 'rotation');
       st.windows_scanned += 1;

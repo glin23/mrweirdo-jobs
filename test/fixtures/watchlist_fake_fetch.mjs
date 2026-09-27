@@ -8,6 +8,17 @@ const ashbyBoards = {
     { id: 'p2', title: 'Senior ML Engineer', employmentType: 'FullTime', location: 'Remote', descriptionPlain: 'Train models.',
       jobUrl: 'https://jobs.ashbyhq.com/pika/00000000-0000-0000-0000-000000000002', applyUrl: 'https://jobs.ashbyhq.com/pika/00000000-0000-0000-0000-000000000002' },
   ],
+  // release 任意链接（restart-apply-3）：拍板人点名要投的两条，不在名单公司里。
+  'prior-labs': [
+    { id: '1e0d43ae-26b1-4b59-a28f-cb1f35a8b576', title: 'Founder Associate (NYC)', employmentType: 'FullTime', location: 'New York', descriptionPlain: 'Work with the founders. 1-3 years of experience.',
+      jobUrl: 'https://jobs.ashbyhq.com/prior-labs/1e0d43ae-26b1-4b59-a28f-cb1f35a8b576', applyUrl: 'https://jobs.ashbyhq.com/prior-labs/1e0d43ae-26b1-4b59-a28f-cb1f35a8b576/application' },
+    { id: 'x2', title: 'Account Executive', employmentType: 'FullTime', location: 'New York', descriptionPlain: 'Sell.',
+      jobUrl: 'https://jobs.ashbyhq.com/prior-labs/00000000-0000-0000-0000-0000000000a2', applyUrl: 'https://jobs.ashbyhq.com/prior-labs/00000000-0000-0000-0000-0000000000a2/application' },
+  ],
+  sequence: [
+    { id: 'a755e204-d28e-4894-8364-b849664766c5', title: 'GTM Associate', employmentType: 'FullTime', location: 'San Francisco', descriptionPlain: 'Go to market.',
+      jobUrl: 'https://jobs.ashbyhq.com/sequence/a755e204-d28e-4894-8364-b849664766c5', applyUrl: 'https://jobs.ashbyhq.com/sequence/a755e204-d28e-4894-8364-b849664766c5/application' },
+  ],
   // 方向预筛（restart-apply-3）：两个对口、两个不对口的应届岗。
   dirco: [
     { id: 'd1', title: 'Founder Associate (NYC)', employmentType: 'FullTime', location: 'New York', descriptionPlain: 'Work with the founders.',

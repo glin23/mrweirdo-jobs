@@ -26,13 +26,15 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path';
 const arg = (n) => { const i = process.argv.indexOf(n); return i >= 0 ? process.argv[i + 1] : null; };
 const sources = arg('--sources');
-const kind = sources === 'watchlist' ? 'watchlist' : 'rotation';
-appendFileSync(process.env.MRW_TEST_DISCOVER_LOG, JSON.stringify({ kind, sources, offset: arg('--source-window-offset'), size: arg('--source-window-size') }) + '\\n');
+const kind = sources === 'watchlist' || sources === 'release' ? sources : 'rotation';
+const release_urls = process.argv.flatMap((a, i) => (a === '--release-url' ? [process.argv[i + 1]] : []));
+appendFileSync(process.env.MRW_TEST_DISCOVER_LOG, JSON.stringify({ kind, sources, offset: arg('--source-window-offset'), size: arg('--source-window-size'), release_urls }) + '\\n');
 const board = JSON.parse(readFileSync(process.env.MRW_TEST_BOARD, 'utf8'));
 const out = arg('--output-dir');
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'to_score.json'), JSON.stringify(board[kind] || []));
 writeFileSync(join(out, 'discovery_funnel.json'), JSON.stringify({ errors: (board.errors || {})[kind] || [] }));
+writeFileSync(join(out, 'hard_filter_dropped.json'), JSON.stringify((board.dropped || {})[kind] || []));
 console.log(JSON.stringify({ ok: true, to_score: (board[kind] || []).length }));
 `;
 

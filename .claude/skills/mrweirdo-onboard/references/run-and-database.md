@@ -74,11 +74,14 @@ permission prompt stays a second spending gate.
 - Held: eligible jobs at list companies are not applied to automatically. They
   are ALL listed in line 1 of the report as 「公司·岗位 链接」 (and in `held`).
   List → the user looks and names the ones to apply to → release only those:
-  `start --target <number of links> --release <link>…` (list scan only,
-  re-scored, applied like any other job, through the pre-dispatch guard and the
-  one ledger writer). A released link that did not go out is named in line 2
-  with its reason (`not found` = taken down, `company_cooldown_60d`,
-  `daily_cap_reached`, `scored_not_eligible`, `not_dispatched:<stop>`, …).
+  `start --target <number of links> --release <link>…` (list scan only; a
+  Greenhouse / Ashby link at a company not on the list is fetched by its job id
+  from the public board API; re-scored, applied like any other job, through the
+  hard filter, the pre-dispatch guard and the one ledger writer). A released
+  link that did not go out is named in line 2 with its reason (`not found` =
+  taken down, `hard_filter:<reason>`, `fetch_failed:<error>`,
+  `company_cooldown_60d`, `daily_cap_reached`, `scored_not_eligible`,
+  `not_dispatched:<stop>`, …).
   The user may also apply by hand (record it, below).
 - Scan only the list: `node shared/install_watchlist.mjs --mode watchlist_only`
   (dry-run) then `--apply`, after the user says so; `--mode watchlist_first`

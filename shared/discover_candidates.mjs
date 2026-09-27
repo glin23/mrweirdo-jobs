@@ -328,6 +328,8 @@ const intent = intentDoc.search_intent || {};
 const roleTypes = roleTypesFromSearchIntent(intent);
 const keywords = derivedKeywords(roleTypes, intentDoc);
 const sources = (argValue('--sources') || DEFAULT_SOURCES.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
+// `--release-url <link>`, repeatable: the links the `release` source fetches.
+const releaseUrls = process.argv.flatMap((a, i) => (a === '--release-url' ? [process.argv[i + 1]] : []));
 const outputDir = argValue('--output-dir', TMP_DIR);
 const limitPerSource = Math.max(1, Number(argValue('--limit-per-source', '500')));
 const concurrency = Math.max(1, Number(argValue('--concurrency', '10')));
@@ -370,6 +372,7 @@ const plan = {
     to_score: path.join(outputDir, 'to_score.json'),
     manual_or_unsupported: path.join(outputDir, 'manual_or_unsupported.json'),
     discovery_funnel: path.join(outputDir, 'discovery_funnel.json'),
+    hard_filter_dropped: path.join(outputDir, 'hard_filter_dropped.json'),
   },
 };
 
@@ -401,6 +404,7 @@ const result = await discoverAll({
   limit_per_source: limitPerSource,
   source_window_size: sourceWindowEnabled ? sourceWindowSize : null,
   source_window_offset: sourceWindowEnabled ? sourceWindowOffset : 0,
+  release_urls: releaseUrls,
   onProgress: (src, count) => progress('discovery', `${src}: ${count} jobs`),
 });
 
@@ -456,6 +460,7 @@ fs.writeFileSync(plan.output_files.filtered, JSON.stringify(filtered, null, 2));
 fs.writeFileSync(plan.output_files.to_score, JSON.stringify(toScore, null, 2));
 fs.writeFileSync(plan.output_files.manual_or_unsupported, JSON.stringify(manualOrUnsupported, null, 2));
 fs.writeFileSync(plan.output_files.discovery_funnel, JSON.stringify(discoveryFunnel, null, 2));
+fs.writeFileSync(plan.output_files.hard_filter_dropped, JSON.stringify(hardFilterResult.dropped, null, 2));
 progress('discovery', `funnel discovered=${discovered.length} kept=${filtered.length} to_score=${toScore.length} manual=${manualOrUnsupported.length} dropped=${hardFilterResult.dropped.length}`);
 
 let nextSourceWindowOffset = null;

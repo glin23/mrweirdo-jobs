@@ -424,8 +424,9 @@ Then, only if it applies, at most one short line each:
   2. the user names the ones to apply to (「投」+ link(s) / 「投第 2、5 个」 →
      map to the links in `held`), or applies by hand;
   3. only those → `node shared/stream_run.mjs start --target <number of links> --release <link> [--release <link2>]`,
-     then Steps 5 and 7 again. A release run scans the list only, re-scores the
-     named jobs and applies them like any other job: the pre-dispatch guard
+     then Steps 5 and 7 again. A release run scans the list only (a released
+     Greenhouse / Ashby link at any other company is fetched by its job id),
+     re-scores the named jobs and applies them like any other job: the pre-dispatch guard
      (never twice / company 2-in-60-days / today's tier) and the one ledger
      writer (`record_apply_outcome.mjs`) apply as usual. Every released link that
      did not go out is named in line 2 with its reason (taken down,

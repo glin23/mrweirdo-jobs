@@ -95,6 +95,16 @@ const ADAPTERS = {
     },
   },
 
+  // 放行任意链接（restart-apply-3）: the jobs behind `--release` links the list
+  // scan did not meet, fetched one board each by job id. Never in DEFAULT_SOURCES.
+  release: {
+    module: '../sourcing/release_source.mjs',
+    async fetch({ releaseUrls, reportError }) {
+      const m = await import('./release_source.mjs');
+      return m.fetchReleased(releaseUrls, { reportError });
+    },
+  },
+
   wellfound: {
     module: '../sourcing/wellfound_search.mjs',
     async fetch({ keywords, limit }) {
@@ -150,6 +160,7 @@ export async function discoverAll({
   limit_per_source = 500,
   source_window_size = null,
   source_window_offset = 0,
+  release_urls = [],
   onProgress = null,
 } = {}) {
   const t0 = Date.now();
@@ -170,6 +181,7 @@ export async function discoverAll({
         const jobs = await adapter.fetch({
           keywords,
           intent,
+          releaseUrls: release_urls,
           reportError,
           concurrency: concurrency_per_source,
           limit: limit_per_source,
