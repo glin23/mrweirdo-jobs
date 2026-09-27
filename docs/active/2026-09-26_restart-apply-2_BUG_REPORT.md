@@ -8,7 +8,7 @@ Reads:
   - shared/discover_candidates.mjs / shared/role_types.mjs / shared/sourcing/dispatcher.mjs / shared/sourcing/watchlist_source.mjs / shared/stream_run.mjs / shared/eligibility.mjs
   - test/role_types.test.mjs
 Blocks: restart-apply-2 首跑（21 家只剩 3 个岗）
-Updated: 2026-09-26
+Updated: 2026-09-27
 ---
 
 # BUG_REPORT — 21 家名单公司 601 个岗，硬筛后只剩 3 个
@@ -125,3 +125,108 @@ Updated: 2026-09-26
 2. **怀疑排除词误杀**（比如 "sre"、"ml engineer" 误伤增长类岗位）：把 193 个命中逐个看过，在增长/市场/产品这几类里只命中 6 个，都是招聘、销售、法务，属于合理淘汰。排除。
 3. **怀疑 seniority: "both" 把全职岗刷掉了**：role_types.mjs:24-29 显示，填了 role_type_targets 之后 seniority 根本不看。排除。
 4. **一开始按硬筛报告的顺序原因来数地点淘汰（99 个）**：这样会少算。改成每道筛子单独跑一遍全部 601 个，得到 158 个，这时才发现地点筛也有反方向的漏洞。
+
+---
+
+# BUG_REPORT 第 2 章（2026-09-27）— 真投 3 个 Ashby 岗结局 unknown / no_errors_no_success 且无截图
+
+只查不修。读：`submit_r3.log`、`submit_r2.log`（scratchpad）、账本末 8 行、`shared/ashby_apply_driver.mjs`、`shared/greenhouse_apply_driver.mjs`、`shared/lever_apply_driver.mjs`、`shared/driver_contract.mjs`、`shared/submission_evidence.mjs`、`git show 7ef0ac3`、DESIGN §13.7（投递留证设计段）。
+Chrome（CDP 远程调试接口 localhost:9222）只用 `Runtime.evaluate`（在页面里执行只读 JS）读取 URL、文字、表单值、`performance` 资源记录（浏览器自带的网络请求时间表）；**零点击、零输入、零刷新**。脚本：scratchpad `ro_read*.mjs`。
+
+## 现场（What happened）
+
+run stream-2026-09-27T03-41-01-577Z-7047。三条行为完全一致 [实测，日志]：`Upload resume… → Fill name/email… → Submit attempt 1… → missing fields:（空）`，驱动再读 4 次页面仍无成功/失败字样 → 结局 unknown，账本 `may_have_submitted=true`、`evidence=null`。
+
+| 行 | 标签页（仍开着） | 页面现状 [实测 CDP 只读] |
+|---|---|---|
+| 100007 OpusClip AI PM Intern | A4FC0C47… | 仍停在投递表单；姓名/邮箱/简历已填；**LinkedIn（必填）、AI 开放题（必填）是空的**，Location、工作许可、RTO 也没答；页面**没有任何报错**（没有「Your form needs corrections」） |
+| 100009 Creatify PM Intern | 223A84DC… | 仍停在投递表单；表单只有姓名/邮箱/简历三项，**全部已填且合法**；无报错、无成功字样 |
+| 100005 ElevenLabs Marketing Ops | AA638641… | 仍停在投递表单；LinkedIn（必填）空；无报错 |
+
+三页的 reCAPTCHA（谷歌人机验证）回执 `g-recaptcha-response` 都是空的，人机验证框没有重新加载过（`ar=1`）。
+
+## 根因（Why it happened）
+
+### 1. 提交按钮点了，但 Ashby 根本没接住 —— 什么都没发出去 [实测 + 推断]
+
+**实测（网络记录）**：同一轮里「点一次提交」在 Ashby 页面上会留下固定痕迹：`seondnsresolve.com`（反欺诈指纹）→ `recaptcha/api2/clr` → `non-user-graphql`（提交请求），人机验证框里还会多一条 `api2/reload`。Suno、ElevenLabs Social 两页每点一次都有这一组（各 3 组 = 3 次尝试）。
+**这 3 页在简历上传那串请求（约 6.5–7.9 秒）之后，一条请求都没有**：没有反欺诈、没有人机验证、没有提交请求；人机验证框里也 0 条 `reload`。页面资源记录总数 20–22 条，远没到 250 上限，不存在被截断。
+→ **结论 [实测]：这 3 家的投递从未离开浏览器。**「点了提交但页面没反应」≠「可能投出去了」。
+
+**为什么没接住 [推断，时间线强相关，未做对照复现]**：驱动流程是「打开 → 睡 6 秒 → 传简历 → 填姓名邮箱 → 立刻点提交」，中间**不等简历上传的后续请求走完**。按账本时间戳倒推，三条都是打开后约 7.5 秒点的提交：
+
+| | 上传那串请求最后结束 | 点提交（推算 / 实测） | 结果 |
+|---|---|---|---|
+| Suno | 7.09s | ≈7.3s（clr 7.38s 实测） | 接住了 |
+| ElevenLabs Social | 7.36s | ≈7.5s（clr 7.65s 实测） | 接住了 |
+| OpusClip | **7.64s** | ≈7.5s（推算） | 没接住 |
+| Creatify | **7.94s** | ≈7.5s（推算） | 没接住 |
+| ElevenLabs MktOps | **7.81s** | ≈7.5s（推算） | 没接住 |
+
+即：上传还没走完就点了，Ashby 在上传进行中静默忽略提交点击 —— 这是 race condition（竞态条件：两件事谁先完成不确定，结果就看运气）。
+
+代码位置：
+- `shared/ashby_apply_driver.mjs:342-363` `uploadResume` 只看 `files.length>0` 就返回成功，不等 Ashby 的上传请求结束。
+- `shared/ashby_apply_driver.mjs:434-445` `submitAndCheck` 的点击返回值（有没有找到按钮）被丢掉，也不检查点击有没有被页面接住。
+
+### 2. 为什么以前没爆：`7ef0ac3` 把「被掩盖的竞态」变成了终局 [实测 git diff]
+
+`7ef0ac3`（2026-09-26）之前，「没缺字段、也读不出结果」时会 `continue` 再点一次提交，第二次点击通常就接住了——竞态被默默掩盖。首次真投（submit_r2.log）的 Tavus Vibe 就是：第 1 次点击无反应、第 2 次才出反垃圾横幅。
+`7ef0ac3` 为防重复投递改成「只重读不再点」（`ashby_apply_driver.mjs:1092-1098`、`:1122-1124`），这个方向对，但它**没区分「点击被接住但结果读不懂」和「点击根本没被接住」**。后者再点一次完全安全（第一次什么都没发出去），却也被一刀切成了 unknown。
+
+### 3. 为什么没截图：代码路径漏调，不是写入失败 [实测代码]
+
+`ashby_apply_driver.mjs:1124` unknown 分支直接 `emitOutcome`，**既不调 `captureEvidence` 也不关标签页**；同文件 submitted（:1108）、not_submitted（:1103、:1119）三处都调了。截图目录里也确实没有这 3 家的文件、没有「截图失败」日志行。DESIGN §13.7 要求 after_submit「先读页面 → 判定 → 整页截图 → 按判定命名」，没有把 unknown 排除在外——unknown 恰恰是最需要留证的一档。
+
+### 修 bug 三问
+1. 真根因：提交前不等上传完成 + 不检查点击是否被接住（第 1 条）；unknown 分支漏留证（第 3 条）。账本记成「可能投过」是这两条的下游后果。
+2. 同一根因别处会爆吗：见下方同模式扫描。
+3. 修法方向是消除根因（等上传、验点击），不是恢复盲点重试。
+
+## 账本记法判断 + 更正建议（只建议，未执行）
+
+- `driver_contract.mjs:162-185` 的规则是「有页面判定（verdict）就算可能投过」——对一个「读不懂的页面」取保守值，**按设计是对的**；错的是上游：驱动在「根本没点成」的时候也交了 verdict。
+- 结合 ① 页面网络记录里没有任何提交请求 ② 人机验证从未执行 ③ 页面停在表单、必填项仍空（OpusClip / ElevenLabs 那种状态 Ashby 服务端也不会收）④ Gmail 1 天内无确认邮件（Synthesia 同轮 1 分钟内就到了）——**3 条都建议改成 not_submitted**，以便重投、并释放 ElevenLabs 的 60 天名额：
+
+```
+node shared/submission_ledger.mjs correct --of led_1790481531129_100007_e87433 --url https://jobs.ashbyhq.com/opusclip/501d374d-7d4f-4889-bc53-0a1fd16253ea/application --verdict not_submitted --evidence "CDP 只读：点提交后页面 0 条提交请求、reCAPTCHA 未执行，表单停留且必填空；Gmail 无确认邮件（BUG_REPORT 第 2 章）"
+node shared/submission_ledger.mjs correct --of led_1790482535211_100009_ef1384 --url https://jobs.ashbyhq.com/creatify/4da91083-999a-4bf8-b53d-92a179073af2/application --verdict not_submitted --evidence "…"
+node shared/submission_ledger.mjs correct --of led_1790485464972_100005_104f9c --url https://jobs.ashbyhq.com/elevenlabs/1c1f4cc9-08f7-4fbb-867f-7e87e7fa19d9/application --verdict not_submitted --evidence "…"
+```
+（先不带 `--apply` 看预演；后两条的 `--evidence` 按第一条写完整原因。）
+**重投前提**：修复第 1 条之前重投，仍有同样概率踩中竞态。另注意 OpusClip 还有一个 9-26 首次真投留下的旧标签页（F5F773DE…，停在「Your form needs corrections」），与本次无关。
+
+## 同模式风险扫描（Where else can it happen）
+
+- `shared/greenhouse_apply_driver.mjs:1838`：unknown / no_errors_no_success 分支同样**不截图**（0b93ac2 同样改成「只重读不再点」）。Greenhouse 是否也有「上传未完就点」的竞态 **未查证**。
+- `shared/lever_apply_driver.mjs:450-489`：提交前、提交后都截图，unknown 也带 evidence —— 无此问题。
+- Ashby 其余行：同一驱动、同一时序，**每个 Ashby 岗都有这个概率**；本轮 7 个里中了 3 个。
+
+## 修复方案（How to fix）— 方向，交 builder
+
+1. **点之前等上传走完**（`uploadResume` 之后）：轮询到页面不再有进行中的上传请求（例如 `performance` 里 `loaded-files-*.s3` 及其后的 graphql 请求都已结束，或 Ashby 简历框出现完成态），设超时；超时 = crashed 大声报错，不默默继续。
+2. **点完验证「被接住」**：`submitAndCheck` 记下点击时刻，之后读 `performance` 看有没有新的 `recaptcha/api2/clr` / `seondnsresolve` / `non-user-graphql` 请求，或页面报错出现。
+   - 没接住（点击后 0 条新请求、无报错）→ 这时再点一次是安全的（上一次什么都没发出去），可有限次重点；多次仍不接 → 新结局 `not_submitted / submit_click_not_registered`（附截图），`may_have_submitted=false`。
+   - 接住了但结果读不懂 → 维持 7ef0ac3 的「只重读不再点」+ unknown。
+   - 同时把「按钮没找到」变成显式错误（现在返回值被丢掉）。
+3. **unknown 分支补 `captureEvidence(phase:'after_submit', verdict:'unknown')`**（Ashby :1124、Greenhouse :1838），与另外三档一致。
+4. 取舍面：选「消除根因（等上传 + 验点击）」而非「恢复盲点重试」——后者简单，但会把「点击被接住了只是页面慢」的情况也重点一次，有重复投递风险，正是 7ef0ac3 要堵的。
+
+## 防回归（How to prevent regression）
+
+- 驱动单测（用假 cdp）：点击后资源记录无新增 → 结局不能是 unknown / may_have_submitted=true；应重点或 `submit_click_not_registered`。先红后绿。
+- 点击后有 clr+graphql 但页面无字 → 仍 unknown，且**不再点第二次**（守住 7ef0ac3）。
+- 源码守卫：Ashby / Greenhouse 驱动里每个 `outcome: 'unknown'` 的 `emitOutcome` 调用都必须带 `evidence`。
+- 上传未完成时点击：假 cdp 模拟上传请求未结束，断言驱动先等待。
+
+## 教训（What to remember）— 提示 lead 沉淀
+
+- **「点了」不等于「页面收到了」**。自动化里任何点击，都要有「对方接住了」的可观测证据，否则下游的「可能投过」判断全建在沙子上。
+- **收紧重试时，要先分清重试在掩盖什么**。7ef0ac3 去掉盲点重试是对的，但盲点重试原来在默默兜底一个竞态；拆掉兜底前没问「它在兜什么」。
+- 留证要覆盖「最说不清」的那一档（unknown），而不是只拍说得清的成功/失败。
+
+## 试过的错误方向
+
+1. **怀疑 reCAPTCHA 弹了图片挑战、卡在那里等人点**：查三页 DOM 和 CDP 目标，没有挑战框（bframe）；人机验证框里 0 条 `reload`，说明验证根本没被触发。排除。
+2. **怀疑浏览器原生必填校验拦住了提交（OpusClip / ElevenLabs 有必填空项）**：页面上没有 `<form>`，按钮不在表单里，原生校验不适用；而且 Creatify 表单全部合法也一样没反应；同轮 ElevenLabs Social、Suno 在必填为空时点击照样发出了提交请求并拿回报错。排除。
+3. **怀疑是提交了、只是成功字样判定器没认出来**：页面网络记录里没有提交请求，页面停在表单；Gmail 无确认邮件。排除。

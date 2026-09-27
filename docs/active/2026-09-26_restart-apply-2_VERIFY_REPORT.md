@@ -10,8 +10,8 @@ Reads:
   - （第 11 轮）2171bee / 736f97b / 7de0026 全 diff；safe_exit / preload_system_ca / entry_preload_guard 测试；说明书与 .sh 里的 node 调用
   - （第 12 轮）TASK Round 23-24；10ec8b7 / 029d522 / f828014 全 diff；submission_ledger（correct / appendCorrection / effectiveEntries）、apply_guard（attemptIndex / identityBlock / checkDispatch）；ledger_correct 测试；真实家目录拷贝
   - （第 13 轮）restart-apply-2 TASK / BUG_REPORT；BUILD_NOTES「第 5 次召唤追加 3」「第 6 次召唤」；b75cb6e…b89cec2 全 diff；role_types / location_gate / discover_candidates / store_scored_jobs / eligibility / recompute_auto_apply_eligibility / validate_auto_row / job_identity；真实家目录拷贝（r13/home）
-Updated: 2026-09-26
-Iterations: 5
+Updated: 2026-09-27
+Iterations: 11
 ---
 
 # VERIFY_REPORT（续）— restart-apply 第 11、12 轮
@@ -697,3 +697,589 @@ Iterations: 5
 
 - **一开始把 part_time 翻回可投当成 P1**：看到重算后是 1、队列里也有这一行，第一反应是会真投。接着读了 apply_batch:431，发现派单前会逐行调用 validate_auto_row，失败时记 needs_user，并且标明是派单前、不会驱动浏览器。所以降为 P3。
 - **一开始打算重新做全量 21 家分桶**：后来改为直接和第 14 轮的 45 个做集合比对，再把 601 个岗在新旧代码下的地点、年限逐条对比。这样更快，也能精确看出这轮改动影响了哪些岗。
+
+---
+
+# 第 16 轮 — 投前自检里的 smoke 继承了调用方环境（2bff44b 7f11e9d，另含文档 f42ef11）
+
+## 验收范围
+
+- 首次真投时，`supervisor_preflight` 里的 `role_guard_smoke` 继承了调用方的 `MRWEIRDO_ROLE_TYPE_TARGETS=intern,new_grad_FT`，自检失败，一个岗都没派出去。
+- builder 的修法（2bff44b）：smoke 一开头就清掉全部 `MRWEIRDO_*` 变量，再设上沙箱自己的；断言不改；另外补了 4 组环境回归测试。
+- 7f11e9d 是施工记录。f42ef11 是 lead 的文档提交，只跑了 CI。
+- 纪律同前：没有真投，没有 push。真实家目录前后 sha 一致。
+
+## 5 维高危区评估
+
+- **① 核心业务逻辑 / ⑤ 主流程（最高）**：投前自检失败就一个岗都派不出去，主流程直接断在「一键投递」这一步。
+- **② 安全边界**：清空变量不能让 smoke 去碰真实家目录。所以专门测了调用方把 HOME 或 DB 指向真实家目录的情况。
+- **④ 集成点**：supervisor_preflight 起的每一个子进程，都要判断该不该继承调用方环境。
+- **③ 性能**：不涉及。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 5 | 目标类型变量：不设 / 实习+应届 / 只应届 / 空 / 兼职 |
+| 边界值 | 1 | 空字符串 `MRWEIRDO_ROLE_TYPE_TARGETS=` |
+| 决策表 | 1 | preflight 起的 5 类子进程 ×「该不该继承」 |
+| 状态迁移 | N/A | 自检是一次性判定，没有状态 |
+| 用例测试 | 1 | 真实家目录拷贝 + 工作库 + 带目标类型，跑完整 supervisor_preflight |
+| pairwise | 1 | 全部 18 个 MRWEIRDO_* 变量同时设成恶意值 |
+| 风险驱动 | 2 | 旧版 smoke 在调用方环境下复现失败；调用方 HOME 和 DB 指向真实家目录 |
+
+## 5 轮回归循环记录（第 16 轮）
+
+**1. 复现修复前的失败**（临时拷出 c1b3b36 版的 smoke）[实测]
+- 不设变量：exit 0。
+- 设成 `intern,new_grad_FT`：exit 1，报错「unexpectedly passed」，和真投时的现场一致。
+- 设成 `new_grad_FT`：exit 1。
+
+**2. ① 修复后的变量组合** [实测]：7 种组合全部 exit 0。
+- 不设、`intern,new_grad_FT`、`new_grad_FT`、空字符串、`part_time`。
+- 18 个 `MRWEIRDO_*` 同时设成恶意值：HOME 和 DB 指向真实家目录、REPO_ROOT 和 TMP_DIR 指向不存在的路径、MIN_FIT 设为 10、MAX_AUTO_APPLY 设为 1 等。
+- 只把 HOME 和 DB 指向真实家目录。
+- 跑完后真实家目录没有生成 jobs.db，sha 也没变。
+
+**3. ② preflight 里起子进程的自检，逐个看有没有同类继承问题**（读 supervisor_preflight.mjs）
+
+| 子进程 | 是否继承调用方环境 | 判断 |
+|---|---|---|
+| auto_apply_queue --summary | 继承，并显式覆盖 MAX_AUTO_APPLY 和 ROLE_TYPE_TARGETS | 该继承：查的就是这次运行的真实库 |
+| queue_diagnostics --json | 同上 | 该继承 |
+| validate_auto_row（每一行） | 继承，并覆盖 ROLE_TYPE_TARGETS | 该继承：真实行、真实口径 |
+| node --check（32 个文件） | 继承 | 只做语法检查，不受环境影响 |
+| role_guard_smoke | 本来继承，现已清空 | 它是唯一自带沙箱的自检，**唯一同类** |
+
+- 另外：cdp、账本一致性、锁扫描都在进程内执行，读的是真实 home，本来就该这样。
+- 在 shared/ 和 scripts/ 里 grep「mkdtemp 加起子进程」，只有 role_guard_smoke 这一处。role_guard_smoke 也只被 preflight 调用。
+
+**4. ③ 清空变量会不会把该测的真实行为也清掉** [读码 + 实测]
+- smoke 从头到尾只测它自己建的沙箱：临时 HOME、临时 DB，读的是自己写进去的 search_intent。它本来就不读真实家目录。
+- 需要特定目标类型的断言，都在调用时显式传 `MRWEIRDO_ROLE_TYPE_TARGETS`（:183-385）。
+- 所以清空不会丢掉任何本该测的行为。修复前，调用方的变量反而会污染这些「按默认口径」的断言，这正是这次的故障。
+- 模块加载顺序：import 会先于清空语句执行。被 import 的三个模块里，只有 role_types 读了这个变量，而且是函数调用时才读（默认参数），不是加载时读，所以清空能生效。
+
+**5. ④ 在真实家目录拷贝上跑完整 supervisor_preflight** [实测]
+- 环境：真实家目录拷贝 + 工作库（里面有 1 行应届可投）+ `MRWEIRDO_ROLE_TYPE_TARGETS=intern,new_grad_FT` + MAX 10。
+- 结果：13 项里 12 项 OK，其中 role_guard_smoke、queue_nonempty、queue_validated、submission_ledger_consistent 都是 OK。
+- 只有 cdp 失败：我故意把端口指到没有 Chrome 的 59999，这是预期内的。
+
+**6. ⑤ 逐提交 CI**
+- npm test：f42ef11 551/551、2bff44b 555/555、7f11e9d 555/555，全绿。
+- smoke、gate、syntax 全部是 0。
+
+## 结论明细（第 16 轮）
+
+### ✅ 通过
+
+- 修复前的失败能复现。修复后，所有变量组合下 smoke 都能过。
+- preflight 里没有其他同类继承问题，清空变量也没有丢掉真实行为。
+- 带目标类型的完整 preflight 在真实拷贝上跑通，除 cdp 外全部 OK。
+- 逐提交 CI 全绿，真实家目录零写入。
+
+### ❌ 真 bug
+
+无。
+
+### ⚠️ 风险
+
+- 观察：CI 从来不设这个变量，所以 CI 一直是绿的。这次新增的 4 组环境回归测试已经把这一点锁住了。
+- 第 15 轮的 P3、P4 风险照旧，本轮没有变化。
+
+## Quinn 重构 / 质量指标 / 老坑（第 16 轮）
+
+- Quinn 重构：无。
+- `verify_self_miss_rate: 100%`（1/1）。这个故障从 smoke 被接进 preflight 起就一直存在。第 11-15 轮的逐提交 CI 我都跑了 smoke，但从来没有在「带目标类型变量」的环境下跑过 preflight，所以没发现。如实记为漏检。
+- 真 bug：0。
+- 老坑清单：项目没定义。
+- 教训：凡是自带沙箱的自检，验收时都要在「调用方真实环境变量」下再跑一遍。
+
+## 覆盖度评估（第 16 轮）
+
+**质量分 4/5，可推。**
+- 覆盖面：复现、7 种变量组合、全部子进程排查、完整 preflight、逐提交 CI 都做了。
+- 扣 1 分：真驱动（cdp 和真投）仍然没有覆盖，只能等拍板人下一次真跑来确认。
+
+## 试过的错误方向（第 16 轮）
+
+- **一开始以为 preflight 其他子进程也要清空环境**：逐个看过以后发现，queue、diagnostics、validate 查的就是本次运行的真实库和口径，必须继承。如果也清空，就会检查错对象。所以只有自带沙箱的 smoke 该清。
+- **一开始担心 import 先于清空语句执行，清空会不生效**：逐个查了被 import 的模块，没有一个在加载时读 MRWEIRDO_*。role_types 读这个变量是在函数调用时，默认参数那时才取值，所以清空是生效的。
+
+---
+
+# 第 17 轮 — 首次真投三处修复（8259257 070d7a8 7ef0ac3 07a65b8）
+
+## 验收范围
+
+首次真投一个都没投出去，builder 针对三处原因做了修复：
+- **8259257（RTO / 搬迁题）**：用户选了「全美可搬」、并且岗位在美国时，RTO（到岗办公）/ 搬迁题自动答 Yes。
+- **070d7a8（AI 开放题）**：「用 AI 做过 / 试过什么」这类开放题，按 essay_profile 里的真实故事起草；没有故事就照旧停下来问用户。
+- **7ef0ac3（反垃圾拦截）**：
+  - 页面出现反垃圾横幅，就当作终局；
+  - Ashby 表单没有报缺字段时，不再重复点提交；
+  - 这种情况记为 may_have_submitted=false，不占这家公司 60 天内的投递名额；
+  - 同一个岗 60 天内不自动重投。
+- **07a65b8**：施工记录。
+
+纪律：没有真投，没有 push。真实家目录只读，前后 sha 一致。
+
+## 5 维高危区评估
+
+- **① 核心业务逻辑 / 真实性（最高）**：自动答题替用户做了承诺，或者开放题写了用户没说过的事实，都会直接写进投给公司的材料里，事后撤不回来。
+- **② 平台边界**：绝不能有任何绕过平台反垃圾或机器人检测的改动。这是硬红线，碰到就判回炉。
+- **④ 集成点**：Ashby、Greenhouse、Lever 三个驱动遇到拦截横幅时，行为要一致。
+- **⑤ 主流程**：驱动的派单和记账路径。真驱动禁止跑，改用 harness 加载真实出货的驱动源码来测。
+- **③ 性能**：只多了一处「重读页面最多 4 次、每次间隔 3 秒」的等待。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 4 | 岗位地点分美国 / 外国 / 远程 / 未知；essay_profile 有 AI 故事 / 没有 |
+| 边界值 | 3 | 数据库里没有这一行；地点字段为空；essay_profile 为空对象 |
+| 决策表 | 1 | 「全美可搬」开关 × 愿意搬 × 主国家 × 岗位地点，共 13 格 |
+| 状态迁移 | 1 | 提交 → 页面读不出 → 只重读、不再点 → 出现反垃圾横幅 → 终局 |
+| 用例测试 | 7 | 用 harness 跑真实驱动的 answerMissing：RTO 题 ×4、问伦敦办公室、问是否住在湾区、AI 开放题没有故事 |
+| pairwise | 1 | 页面文字「确认投出」×「反垃圾」两两组合，共 3 组 |
+| 风险驱动 | 3 | diff 全量 grep 绕过检测的写法；起草出来的草稿逐句回查 essay_profile 原文；三个驱动的拦截路径逐个读 |
+
+## 5 轮回归循环记录（第 17 轮）
+
+**1. ① RTO 题** [实测，用 harness 加载真实驱动]
+- 地点为空、Remote、Toronto, ON、数据库里没有这一行：都停下来问（relocation_commitment_policy_unset），没有替用户答。
+- 「Are you currently located in the Bay Area?」：仍然由「具体城市事实」这道护栏拦下，停下来问。
+- 纯函数：Mountain View、NYC、Palo Alto HQ、US remote 判为可自动答；London、Toronto、Tbilisi 判为要问；用户不愿意搬、或者主国家不是 US 时，一律要问。
+- **❌ 发现问题**：岗位地点是 New York City，但题目问「Are you comfortable working in-person at our office in **London**?」时，**自动答了 Yes**。原因是判断只看岗位地点，不看题目里点名的城市。修复前这道题会停下来问，所以这是这次提交引入的回退。
+
+**2. ② AI 开放题** [实测]
+- 用真实 essay_profile 起草：三句话逐字都能在 essay_profile.json 里找到（grep 各命中 1 次）。外面只加了「What I was trying to learn or achieve / What I did / What I discovered」三个引导语，没有新增任何事实。
+- 草稿没有碰到 hard_no_claims（用户明确不能声称的内容）里的任何一条。
+- 没有 AI 故事时，真实驱动的 answerMissing 返回「no_bucket_for… pending_for_main_claude」，也就是停下来问。模板渲染也不会用空内容凑一段话。
+
+**3. ③ 反垃圾拦截**
+- **没有绕过检测的改动** [读码 + grep]：diff 里新增的行没有任何 cookie、UA、webdriver、指纹、随机延时的操作。唯一新增的 sleep 是「只读页面、不点击」时固定等 3 秒。Math.random 只在已有代码里用来生成 DOM id，这次没有新增。
+- **不再重交是否覆盖所有路径**：
+  - Ashby：表单没报缺字段、页面读不出结果时，只重读、不再点提交；看到反垃圾横幅就终局。✅
+  - Greenhouse：横幅会映射成 platform_spam_flagged。✅ 但页面读不出结果（没报缺字段、没有确认或拒绝的文字）时，**仍然会每隔 3 秒盲点提交，最多 5 次**（greenhouse_apply_driver.mjs:1825）。Ashby 已经改掉的「盲点可能导致重复投递、也可能触发反垃圾」的问题，在 Greenhouse 上还在。这是旧问题，不是这次引入的；本批只修了 Ashby。
+  - Lever：只点一次；横幅会记为 page_states_failure，并按 may_have_submitted=true 计入名额，属于保守方向。名单上 21 家里没有用 Lever 的。
+- **「不占名额」是不是只在页面明说没收到时才成立** ❌：
+  - isSpamFlagged 只看反垃圾规则有没有命中，不看最终判定结果是什么。
+  - 实测：页面同时有「Thank you for applying… submitted」和「flagged as possible spam」时，判定结果是 unknown，但 isSpamFlagged 返回 true。
+  - Ashby 驱动先检查反垃圾，后判断是否已投，所以这种页面会被记成 not_submitted、may_have_submitted=false。结果是一个可能已经投出去的岗不占名额，违背「拿不准就当作可能已投」的口径。
+  - Greenhouse 那边只在判定为 not_submitted 的分支里才看反垃圾，没有这个问题。
+
+**4. 真实账本（只读）**：首次真投 Tavus 那一行记的是 not_submitted / page_states_failure / may_have_submitted=**true**，属于保守计名额，这次改动不会回头改它。要不要用 correct 更正，由 lead 定。
+
+**5. ④ 逐提交 CI**：4 个提交全部通过。
+- npm test 依次是 558、563、570、570，全绿。
+- smoke、gate、syntax 全部是 0。
+
+## 结论明细（第 17 轮）
+
+### ✅ 通过
+
+- RTO 题：国外、远程、地点未知时照问，没有误答；问「住在哪」的事实题仍然被拦下来问。
+- AI 开放题：草稿逐字取自 essay_profile，没有故事时停下来问。
+- 没有任何绕过平台检测的改动。
+- Ashby 不再盲目重复点提交；Greenhouse 看到反垃圾横幅会终局。
+- CI 全绿，真实家目录零写入。
+
+### ❌ 真 bug
+
+- **P2｜① 真实性｜题目点名外国办公室时仍然自动答 Yes**
+  - 复现：岗位地点是 New York City，题目问「in-person at our office in London?」，驱动答了 Yes。
+  - 这是这次提交引入的回退：修复前这类题会停下来问。
+  - 修法方向：题目里点名的地点也要过 classifyPlace，是外国或认不出来就停下来问。
+- **P2｜① 名额口径｜页面同时出现「已投出」和「反垃圾」时，被记成没收到、不占名额**
+  - 修法方向：isSpamFlagged 要同时满足 verdict==='not_submitted'。约 1 行。
+
+### ⚠️ 风险（请 lead 定）
+
+- **P2｜Greenhouse 页面读不出结果时，仍然盲点提交最多 5 次**：这是旧问题。Ashby 已经改了，建议 Greenhouse 同样改成「只重读、不再点」。名单上有 4 家用 Greenhouse，下次真投就会用到这个驱动。
+- **P4｜Lever 的反垃圾横幅没有单独映射**：按保守方向计名额，名单上也没有用 Lever 的公司。
+
+## Quinn 重构 / 质量指标 / 老坑（第 17 轮）
+
+- Quinn 重构：无。两处修复都涉及业务口径，交给 builder。
+- `verify_self_miss_rate: 0%`（0/3）。
+- 真 bug：2 个（都是 P2）。另有风险 P2 1 个、P4 1 个。
+- 老坑清单：项目没定义。
+
+## 覆盖度评估（第 17 轮）
+
+**质量分 3/5，回炉。**
+- 没有绕过检测的改动；RTO 的主路径、AI 开放题的真实性、没有故事时停下来问，都通过了。
+- 但有两处会直接写进投给公司的材料或名额记录：
+  - 替用户承诺到外国办公室上班；
+  - 可能已经投出的岗被记成「没收到」，不占名额。
+- 两处都是 1-3 行的小修。建议 Greenhouse 的盲点提交顺手一起改。
+- 没覆盖到的：真驱动（禁止真投）。
+
+## 试过的错误方向（第 17 轮）
+
+- **一开始只拿纯函数测 relocationPolicyOpen**：13 格全部符合预期，差点直接判通过。后来想到「岗位在美国」不等于「题目问的办公室在美国」，于是改用 harness 加载真实驱动，拿点名伦敦的题去打，这才复现出问题。
+- **一开始以为 Greenhouse 的反垃圾处理和 Ashby 一样完整**：Greenhouse 确实映射了反垃圾原因，但它在「读不出结果」时仍然会重新点提交，而这正是 Tavus 那次触发反垃圾的原因。
+
+---
+
+# 第 18 轮 — 第 17 轮三项回炉复验（0b93ac2 98018e6）
+
+## 验收范围
+
+复验 builder 对第 17 轮三项的修复：
+- **RTO 题**：先看题目本身点名的地点。点名美国以外的地方一律停下来问；点名美国的按「全美可搬」答；题目没点名地点时，才看岗位地点。
+- **反垃圾免名额**：只有判定器判为「没投出」时才免名额；「已投出」和「反垃圾」两边都命中时算不确定，要占名额。
+- **Greenhouse**：没有缺字段、页面读不出结果时，只重读页面，不再点提交。
+
+纪律：没有真投，没有 push。真实家目录前后 sha 一致。
+
+## 5 维高危区评估
+
+- **① 真实性 / 名额口径（最高）**：这些答案会直接写进投给公司的材料，名额的判定也决定会不会重复投递。
+- **② 平台边界**：再次确认没有任何绕过平台检测的改动。
+- **④ 集成点**：用 Ashby 公开接口只读拿到了两个真实表单的结构，确认题目文本。
+- **⑤ 主流程**：Ashby 和 Greenhouse 两个驱动的提交循环。
+- **③ 性能**：只是把 Greenhouse 原来的「等 3 秒再点」改成「等 3 秒再读」，时长不变。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 4 | 题目点名美国 / 外国 / 两者都有 / 都没有 |
+| 边界值 | 3 | 「US hours」只说时区不算地点；「U.S.」；「join us」里的 us 不算美国 |
+| 决策表 | 1 | 岗位地点 4 种 × 题目 10 种，共 40 格 |
+| 状态迁移 | 1 | Greenhouse：点提交 → 读不出结果 → 只重读，最多 4 次 → 仍读不出就记 unknown，不再点 |
+| 用例测试 | 2 | ElevenLabs Social Growth、Synthesia Marketing General Application 的真实表单 |
+| pairwise | 1 | 页面「已投出」×「反垃圾」× 最终判定 × 投过口径 |
+| 风险驱动 | 2 | diff 全量 grep 绕过检测的写法；清单里没有的外国城市 |
+
+## 5 轮回归循环记录（第 18 轮）
+
+**1. 两个真实表单**（Ashby 公开 non-user-graphql 接口，只读取表单结构）[实测]
+
+- **Synthesia Marketing General Application**（主地点 London）：只有姓名、邮箱、简历、Cover Letter、LinkedIn、所在地、两道工作许可题，外加一道开放题「想要什么岗位、为什么合适」。**没有 RTO 题。**
+- **ElevenLabs Social Growth Strategist**（主地点 United Kingdom）：基本信息、从哪里得知、LinkedIn，外加 4 道社媒开放题。**也没有 RTO 题。**
+- 所以这两个岗真实跑时，不会碰到 RTO 题。
+
+**2. 用这两个岗的地点，拿构造的 RTO 题跑 40 格决策表** [实测]
+
+| 题目 | 岗位地点是 UK / London | 岗位地点是 NYC / Mountain View |
+|---|---|---|
+| 不点名地点（「RTO requirements work for you?」「join us in our office」） | 问 | 答 Yes |
+| 点名 New York / Austin, TX / U.S. office | 答 Yes | 答 Yes |
+| 点名 London / Munich | 问 | 问 |
+| 同时点名 London 和 New York | 问 | 问 |
+| 「US hours from our London office」 | 问 | 问 |
+| 点名 Belo Horizonte（不在外国城市清单里） | 问 | **答 Yes** |
+
+- 上一轮复现用的那道题（岗位在 NYC、题目问 London 办公室），现在会停下来问。✅
+- 「join us」里的 us 没有被当成美国。✅
+
+**3. 反垃圾免名额** [实测]
+- 纯反垃圾横幅：isSpamFlagged=true，may_have_submitted=false。✅
+- 「感谢投递」和「反垃圾」同时出现：isSpamFlagged=false。就算有人手工构造一条 not_submitted + platform_spam_flagged 的结果传进来，deriveMayHaveSubmitted 仍然返回 true，也就是照样占名额。两层都拦住了。✅
+- 结果里完全没有判定信息时，也返回 true。✅
+
+**4. Greenhouse 读码**
+- 提交后，没有缺字段并且判定为 unknown 时，只调用 readSubmitPage 重读，最多 4 次。
+- 仍然读不出，就记 unknown / no_errors_no_success，原来的 `if (attempt < 5) continue` 盲点已经删掉。
+- 只有页面明确报了缺字段，才会进入「补填后再提交」的分支。✅
+
+**5. 没有绕过检测的改动**：diff 里新增的行 grep cookie、UA、webdriver、指纹、随机、延时、代理、VPN、验证码，零命中。✅
+
+**6. 逐提交 CI**：0b93ac2 和 98018e6 都是 575/575。smoke、gate、syntax 全部是 0。
+
+## 结论明细（第 18 轮）
+
+### ✅ 通过
+
+- 第 17 轮的两个 P2 都修好了。
+- Greenhouse 的盲点提交已经改掉。
+- 没有绕过检测的改动，CI 全绿，真实家目录零写入。
+
+### ❌ 真 bug
+
+无。
+
+### ⚠️ 风险
+
+- **P4**：外国城市清单里没有的城市（例如 Belo Horizonte），如果题目点名它而岗位在美国，会答 Yes。清单覆盖的是常见城市，真实表单里还没见过这种情况。建议以后补一条：题目里出现「our X office」而 X 认不出时，停下来问。
+- **观察**：Synthesia 那道「wish to work in without sponsorship」工作许可题，要靠 profile 的三态字段来答，这是本轮范围外的已有逻辑。
+
+## Quinn 重构 / 质量指标 / 老坑（第 18 轮）
+
+- Quinn 重构：无。
+- `verify_self_miss_rate: 0%`（0/1）。
+- 真 bug：0。
+- 老坑清单：项目没定义。
+
+## 覆盖度评估（第 18 轮）
+
+**质量分 4/5，可推。**
+- 覆盖：真实表单结构、40 格决策表、反垃圾两层防护、Greenhouse 读码、逐提交 CI。
+- 扣 1 分：真驱动没有跑（禁止真投）；另有清单外外国城市的 P4。
+
+## 试过的错误方向（第 18 轮）
+
+- **一开始打算在真实页面上找 RTO 题来测**：用公开接口拿到两个表单的结构后，发现两个都没有 RTO 题。于是改成用这两个岗的真实地点，配上构造的题目跑决策表。
+- **一开始只测了 isSpamFlagged 一层**：后来想到如果调用方手工传入一条 not_submitted + spam 的结果，只靠这一层拦不住。又补测了 deriveMayHaveSubmitted，确认第二层也会判为占名额。
+
+# 第 19 轮 — 点击没接住 / 终局留证 / 缺信息小题（fa9c012 1c6f071 9e469f1 d9fc5bf 03f1255）
+
+## 验收范围
+
+验收 builder 第 7 次召唤的 5 个提交（都没推）：
+- **① 点提交前后**（fa9c012，1c6f071 是配套测试替身）：先等简历上传走完（S3 上传和其后的 graphql 都回来、请求数不再涨），30 秒等不到就判 crashed、不算投过；点完问页面「接住了吗」，没接住就再点 1 次，还不接住就记 not_submitted / submit_click_not_registered（不算投过）。Greenhouse 同步改。
+- **② 留证**：点过提交之后的各种终局都整页截图，截图文件权限 600。
+- **③ 缺信息小题**（9e469f1）：「从哪里得知」「社媒几年经验」「管过哪些账号」三题读档案，档案空就挂起；「每周几天到我们 NYC 办公室」进 RTO 判断；点评对方社媒的开放题走新的 agent_drafts.mjs 起草通道。
+- d9fc5bf、03f1255 是文档。
+
+纪律：没有真投、没有 push。我的测试全部用沙箱家目录。真实 `~/.mrweirdo-jobs/` 在验收期间有 3 个文件变了（12:39 profile.json / answer_provenance.json、12:43 agent_drafts.json），核过内容是 lead 写入的 ElevenLabs Social 三条草稿和档案字段，不是本轮写的。
+
+## 5 维高危区评估
+
+- **① 名额口径 / 重复投递（最高）**：「再点一次」只有在第一次点击真的什么都没发出去时才安全。所以本轮重点是：「没接住」这个判断会不会误判。一旦误判，同一家公司会收到两份投递，账本却记成「没投过」，下次运行还会再投。
+- **② 平台边界**：确认没有任何绕过反垃圾、反机器人检测的改动。
+- **③ 真实性**：新增的答案只能来自 profile、essay_profile 和 agent_drafts；代码里不能写死候选人的任何事实。
+- **④ 集成点**：「接住了吗」靠浏览器自带的资源时间表（Resource Timing，浏览器记录每条网络请求的清单）来判断。所以要在真 Chrome 上实测这张清单在最坏情况下的表现。
+- **⑤ 主流程**：Ashby 和 Greenhouse 驱动的提交循环，以及 3 行报告。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 3 | 点击后的请求：已完成 / 还在路上 / 失败（连接被拒、域名不存在） |
+| 边界值 | 3 | 年限正好落在区间端点（1、2、3）；档案年限为空、null、不是数字 |
+| 决策表 | 1 | RTO：8 道题 × 2 个岗位地点，共 16 格 |
+| 状态迁移 | 2 | 第 1 次点没接住 → 再点 → 找不到按钮；上传未确认 → crashed，全程不点 |
+| 用例测试 | 1 | agent_drafts 命令行：add、list，空答案、非岗位链接、换题、换岗 |
+| pairwise | 1 | 草稿命中 × 链接写法（apply 页和岗位页）× 题目的大小写和空格 |
+| 风险驱动 | 3 | 真 Chrome 上的「请求还在路上」时序；diff 全量 grep 绕过检测的写法；diff 全量 grep 写死的候选人事实 |
+
+## 5 轮回归循环记录（第 19 轮）
+
+**1. 最坏时序实测：请求还在路上时，「接住了吗」会答「没有」** [实测]
+
+实测方法：在沙箱里开一个无头 Chrome（独立的用户目录、独立端口 9333，没碰真实的 9222）。本地起一个服务，收到提交请求后 25 秒才回复。然后照驱动的原话点按钮，用出货版的 `clickReceived` 去问：
+
+| 点击后多久问 | 服务端是否已收到提交 | clickReceived 的回答 |
+|---|---|---|
+| 7 秒 | 已收到 | `registered:false`（no_request_after_click） |
+| 19 秒 | 已收到 | `registered:false` |
+| 27 秒（回复之后） | 已收到 | `registered:true` |
+
+原因是浏览器的资源时间表只记录**已经走完**的请求，还在路上的请求不在表里。`page_signals.mjs:19` 的注释自己也写了这一点，但 `clickReceived` 没有照顾到。
+
+驱动从点击到发问，Ashby 大约 19 秒（等 7 秒，再最多重读 4 次、每次隔 3 秒），Greenhouse 大约 17 秒。只要点击后所有请求（Ashby 是反欺诈、人机验证、提交接口这三条）都超过这个时长还没回来，就会被判成「没接住」，然后再点一次。
+
+对照组：失败的请求（连接被拒、域名不存在）会被记进表里，判「接住了」。这是安全的方向。
+
+**2. 最坏时序的后半段：第二次点时，页面已经换成确认页** [实测，驱动 harness]
+
+复现方法：用出货版 Ashby `main()` 加替身。第 1 次点击成功，`clickReceived` 判「没接住」（相当于上面那种误判）。再点时页面已经没有提交按钮了。
+
+结果是驱动输出 `crashed / submit_button_not_found`，`attempt:1`，截图标成 `before_submit`，`deriveMayHaveSubmitted` 返回 **false**。原因是 `submit_button_not_found` 在「点提交之前」出口表 `PRE_SUBMIT_EXITS` 里（`driver_contract.mjs:149`）。这一行本来是给 Lever 点击前用的，现在 Ashby 和 Greenhouse 在点过之后也会走到这个出口，但出口表没有区分。
+
+后果是：一份其实已经发出去的投递，在账本上记成「没投过」，下次运行会再投。Greenhouse 在 `:1832` 也是同一条路径。
+
+**3. 已有测试覆盖到的部分** [实测]
+
+- 上传一直没确认 → crashed / resume_upload_failed，一次都没点，不算投过。✅
+- 两次都没接住 → not_submitted，只点 2 次，有截图，权限 600。✅
+- 接住了但页面读不懂 → unknown，只点 1 次，有截图。✅
+- 资源记录满了、判断不了 → 按「接住了」处理，不再点。✅
+
+以上都是替身测试。「请求还在路上」这种情况，替身测试没有覆盖。
+
+**4. 缺信息题** [实测]
+
+- **RTO 16 格**：点名 London / Berlin / Toronto 的题一律照问（第 17、18 轮回归通过）；点名 NYC 或 New York 的答 Yes；「work in the country where the office is located」仍走工作许可桶，没有被新的 RTO 正则抢走。✅
+  - Belo Horizonte 在岗位位于美国时答 Yes，这是第 18 轮已知的 P4，本轮没变。
+- **年限选项**：`pickYearsOption` 在 3 种选项写法 × 7 个值上都对；年限为空、null、非数字时返回 null，题目照问。✅
+- **管过的账号**：档案里没有这项时返回空字符串，驱动记 social_accounts_managed_unset，挂起。✅
+- **从哪里得知**：档案没填就挂起；模板里原来默认的 LinkedIn 已改成空。✅
+- **写死的事实**：diff 全量 grep 学校名、城市名、人名、邮箱、签证词，只在注释里出现（Waltham、Babson 是在讲事故）。代码里零写死。✅
+
+**5. agent_drafts** [实测，沙箱家目录]
+
+- 文件权限 600，并且列进了 PII_TARGETS（隐私文件锁定清单）。
+- 空答案、非岗位链接都会报错退出。
+- 草稿按「岗位指纹 + 题目」取：换一个岗位、或题目多一个字，都取不到。不会串到别的表单。✅
+- 题目的大小写和空格被忽略；apply 页链接和岗位页链接都能命中同一个岗。✅
+- 文件坏了会在驱动启动时直接报错，不会被当成「没有草稿」。✅
+
+**6. 没有绕过检测的改动**：diff 新增行 grep cookie、UA、webdriver、指纹、随机、延时、代理、验证码。命中的只有注释和原有的 `sleep`。新增的 sleep 都是「等上传、等页面」，不是为了装得像人。✅
+
+**7. 逐提交 CI**（worktree 分别检出，沙箱 MRWEIRDO_HOME）
+
+| 提交 | npm test | smoke | gate | 语法检查 |
+|---|---|---|---|---|
+| fa9c012 | 596/597（1 红） | 0 | 0 | 0 |
+| 1c6f071 | 597/597 | 0 | 0 | 0 |
+| 9e469f1 | 613/613 | 0 | 0 | 0 |
+| d9fc5bf | 613/613 | 0 | 0 | 0 |
+
+- fa9c012 单独检出时，`submission_verdict.test.mjs` 里「Directive 失败横幅」那条是红的。原因是测试替身没有给点击加时间标记，1c6f071 补上了。两个提交一起推没问题，但 fa9c012 本身不是一个全绿的提交。
+- 03f1255 只改了文档，实跑 613/613，另外三步都是 0。
+
+## 结论明细（第 19 轮）
+
+### ✅ 通过
+
+- 等上传走完再点、上传确认不到就 crashed：做到了。
+- 点过之后的终局都截图：做到了。例外见下面 P3。
+- 三道缺信息题读档案、档案空就挂起：做到了。
+- RTO 点名外国城市照问：回归通过。
+- agent_drafts 不会串表单，权限 600。
+- 没有任何绕过检测的改动。
+
+### ❌ 真 bug
+
+- **P2（命中维度 ① 名额口径 / ④ 集成点）：「没接住」会误判，而且误判后可能重复投递、账本漏记。**
+  - 原因一：`clickReceived` 只看**已经走完**的请求。点击后请求如果都还在路上超过约 19 秒（Greenhouse 约 17 秒），就会被判成 `registered:false`，然后驱动再点一次。第一次的投递可能已经到了公司，于是公司收到两份。
+  - 原因二：再点时如果页面已经换成确认页、没有按钮了，驱动会输出 `crashed:submit_button_not_found`。这个出口在 `PRE_SUBMIT_EXITS` 里，所以 `may_have_submitted=false`，下次运行会第三次投。
+  - 复现：见第 1、2 条。
+  - 触发条件：网络或平台很慢，概率低；但一旦触发，后果就是重复投递。
+  - 修法方向，交 builder：
+    1. 「接住了吗」要能看到**已经发出但还没回来**的请求。可以在驱动这一侧用 CDP 的 Network 事件（requestWillBeSent，请求一发出就能看到，页面感知不到），或者给出等价的证据；不要改页面里的 fetch。
+    2. 点过之后找不到按钮，要换成一个新的 reason（不在 `PRE_SUBMIT_EXITS` 里，算可能投过），或者先读一遍页面再给结论。截图阶段也要跟着改成 after_submit。
+    3. 补一条回归测试：「第 1 次点击其实已发出 + 判定为没接住 + 再点时按钮消失」，断言结果算可能投过。
+
+### ⚠️ 风险
+
+- **P3：程序抛异常退出时没有截图。** `driver_exception`（ashby:1358、gh:1938）发生在点过提交之后时，账本里的 evidence 是空的。标签页会留着，还能人工去看，但派遣单要求的「点过之后全覆盖」在这一条上没做到。
+- **P3：州缩写匹配不起作用。** `pickComboboxInQuestion` 的 `new RegExp('\\b'…)` 放在页面源码的模板字符串里，到页面上变成了退格符，所以州缩写那一支永远匹配不上。实测「waltham, ma, usa」→ false。前面「整串包含」那一支通常能兜住，所以实际影响小。
+- **P3：草稿在答案日志里记错了来源。** agent_drafts 填进去的答案在 `answers` 日志里 source 记成 `derived`，因为 `FILL_SOURCES` 里没有「agent 起草」这一类，看不出这段话是 agent 写的。另外 CLI 不限制题目类型，理论上可以给事实类的题写「草稿」，现在只靠 truthfulness.md 约束。
+- **观察**：Greenhouse 驱动不读 agent_drafts。现在点评类的题只在 Ashby 挂 agent_draft_required，所以不算回归。
+
+## Quinn 重构 / 质量指标 / 老坑（第 19 轮）
+
+- Quinn 重构：无。P2 涉及驱动逻辑，P3 的正则改动跨模板转义，都超出 1-3 行的边界，交 builder。
+- `verify_self_miss_rate: 0%`（上轮漏检 0 / 本轮问题 4）。
+- 真 bug：1 个（P2）。
+- 老坑清单：项目没定义。
+
+## 覆盖度评估（第 19 轮）
+
+**质量分 3/5，回炉。**
+- 覆盖：真 Chrome 最坏时序实测、驱动 harness 复现、RTO 16 格、年限边界、agent_drafts 沙箱、两类 grep、逐提交 CI。
+- 扣分：
+  - P2 直接违反这轮的核心要求「再点一次绝不能造成重复投递」，而且误判后账本会记成没投过。
+  - 真驱动没有在真 Ashby 上跑（禁止真投），所以 Ashby 点击后请求的真实耗时分布没法测。
+- 建议：修好 P2 的两处原因再推。3 个 P3 可以同包修，也可以挂账，由 lead 定。
+
+## 试过的错误方向（第 19 轮）
+
+- **一开始以为失败的请求也看不见，会被误判成「没接住」**：实测发现连接被拒、域名不存在的请求都会进时间表，判「接住了」，是安全的方向。真正的漏洞只有「请求还在路上」这一种。
+- **一开始把真实家目录的 hash 变化当成本轮误写**：核对文件时间和内容后确认是 lead 写入的（ElevenLabs Social 三条草稿，12:43；profile 12:39）。本轮的草稿测试写在沙箱里（`Draft A` 在真实文件里 0 命中）。
+
+# 第 20 轮 — 第 19 轮回炉复验（8eaf9c4 2a1117d）
+
+## 验收范围
+
+复验 builder 对第 19 轮 P2 和 3 个 P3 的修复：
+- **① 点击后改用 CDP 看网络**：新增 `cdp.mjs clickwatch`。点击和看网络在同一个 CDP 会话里做，听的是 Network.requestWillBeSent（请求一发出就能看到，包括还在路上的）。最后由 `clickVerdict` 下结论：CDP 看到了请求，或者页面自己的请求记录里有，就算接住了；CDP 那边出问题、判断不了，就不再点；只有两边都确定是空的，才会再点一次。
+- **② 第一次点击之后**：找不到按钮、或者点击结果读不出来，一律记 unknown，算可能投过，不再走「点提交之前」的出口。
+- **P3 三项**：异常退出也截图；州缩写正则的转义；草稿填入的答案来源记成 agent_draft。
+
+Greenhouse 同路径同改。没有真投、没有 push；真实家目录 13:00 之后没有文件变化。
+
+## 5 维高危区评估
+
+- **① 重复投递（最高）**：这轮的核心是确认任何路径都不会把已经发出的提交再点一次。lead 点名了 4 种最坏情况：请求在点击之前就发起了、CDP 事件丢失或连接断开、页面跳转和请求同时发生、Greenhouse 走同一条路径。
+- **② 平台边界**：新增的 Network.enable 只在浏览器调试端监听，页面感知不到；userGesture 原来的 eval 就在用，不是这轮新加的。
+- **④ 集成点**：需要在真 Chrome 上实测 CDP 网络事件的时序。
+- **③ 真实性**、**⑤ 主流程**：只涉及 P3 修复和提交循环，都已回归。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 5 | 真 Chrome 的 5 种场景：点击立刻发出慢请求 / 点击 21 秒后才发 / CDP 连接中途断开 / 表单提交跳转 / 请求在点击之前就发起 |
+| 边界值 | 2 | 请求落在观察窗口 19 秒之外；州缩写 ma 对 mass / oklahoma |
+| 决策表 | 1 | `clickVerdict`：观察结果（正常 / 出错）× 请求数（0 / >0）× 页面记录（true / false / null） |
+| 状态迁移 | 3 | 第一次点击 → 按钮消失 / 结果读不出；首次点击就读不出 |
+| 用例测试 | 1 | 复跑第 19 轮在途请求的沙箱 |
+| pairwise | 1 | Ashby / Greenhouse × 3 种点击后异常 |
+| 风险驱动 | 2 | 断开 CDP 连接用 TCP 代理真实掐断；diff grep 绕过检测的写法 |
+
+## 5 轮回归循环记录（第 20 轮）
+
+**1. 真 Chrome 5 个场景**
+
+沙箱用的是无头 Chrome（端口 9333、独立用户目录）。中间加了一个 TCP 代理（端口 9444），用来掐断 CDP 连接。每个场景都用出货版 `cdp.mjs clickwatch` 点击，按驱动的节奏再用 `clickReceived` 查页面记录，最后交给 `clickVerdict` 下结论。本地服务收到提交后 40 秒才回复。
+
+| 场景 | 服务端收到了提交吗 | CDP 观察结果 | 最终结论 | 会再点吗 |
+|---|---|---|---|---|
+| 点击后立刻发出慢请求（第 19 轮的 P2） | 收到 | 2ms 就看到了 | 接住了 | 不会 ✅ |
+| 表单 POST 跳转 | 收到 | 看到 POST | 接住了（新页面） | 不会 ✅ |
+| 请求在点击前发起，点击本身什么也没发 | 只收到背景请求 | 0 条 | 没接住 | 会，这是对的：这次点击确实没发出任何东西 ✅ |
+| **点击后 2 秒 CDP 连接断开，第 4 秒才发出提交** | **收到** | **`ok:true`、0 条** | **没接住** | **会 ❌** |
+| 点击 21 秒后才发出提交（超出 19 秒窗口） | 收到 | 0 条（窗口已结束） | 没接住 | 会 ⚠️ |
+
+**2. 断连场景的根因** [实测 + 读码]
+
+`cdp.mjs` 的 Session 在连接断开时，只把等待中的命令标成失败。`cmdClickwatch` 等窗口用的是一个单独的计时器，不受断开影响：计时器照常到点，然后报告 `watch.ok:true, requests:[]`。于是「没在听」被当成了「听了 19 秒，什么也没有」。
+
+页面自己的请求记录又看不见还在路上的请求，两边都说「空」，`clickVerdict` 就判 false，驱动再点一次。Greenhouse 用的是同一个 clickwatch，同样中招。
+
+**3. 窗口外的请求** [实测]
+
+如果点击后超过约 19 秒（Greenhouse 约 17 秒）才发出请求，而且下结论时它还在路上，就会漏看。代码里写的窗口 19 秒，大致等于「等 7 秒 + 重读 4 次」，但重读本身也要时间，所以窗口结束到下结论之间还有约 1 秒以上的空档。
+
+真实 Ashby 点击后 0.1 到 0.3 秒就会发出请求（BUG_REPORT 第 2 章的实测），所以这种情况概率极低，列为 P4。
+
+**4. 驱动替身复跑第 19 轮的「按钮消失」** [实测]
+
+- 第一次点击之后按钮消失：Ashby 和 Greenhouse 都记 `unknown / submit_button_gone_after_click`，may_have_submitted=true，截图阶段是 after_unknown。✅
+- 第二次点击结果读不出、或者第一次就读不出：都记 `unknown / submit_click_result_unreadable`，算可能投过。✅
+
+**5. P3 三项**
+- 州缩写：`waltham, ma, usa` 和 `waltham (ma)` 现在都能匹配；`waltham, mass` 和 `waltham, oklahoma` 不匹配。✅
+- 草稿答案的来源记成 agent_draft，并且加进了 FILL_SOURCES。✅
+- 异常退出：有 onDriverException，点过提交之后退出会截 after_submit。已有测试覆盖。✅
+
+**6. 绕过检测**：diff 新增行只命中观察窗口用的那个 setTimeout。Network.enable 只在浏览器调试端监听，页面看不到。没有任何绕过检测的改动。✅
+
+**7. 逐提交 CI**：8eaf9c4 和 2a1117d 都是 628/628，smoke、gate、语法检查全是 0。
+
+## 结论明细（第 20 轮）
+
+### ✅ 通过
+
+- 第 19 轮 P2 的两处原因都修好了：请求还在路上也能看到了；第一次点击之后按钮消失、结果读不出都记成可能投过。
+- 3 个 P3 已修。
+- 页面跳转、请求在点击前发起这两种情况，结论都对。
+- 没有绕过检测的改动，CI 全绿。
+
+### ❌ 真 bug
+
+- **P2（命中维度 ① 重复投递 / ④ 集成点）：CDP 连接在观察窗口内断开时，会被当成「没有请求」，驱动会再点一次。**
+  - 实测：服务端已经收到了提交，驱动的结论仍是 `would_reclick: true`。
+  - 位置：`shared/cdp.mjs` 的 `cmdClickwatch`。连接断开后，计时器照常到点，报 `ok:true`。
+  - 修法，交 builder：Session 记下连接是否断开；如果窗口结束之前连接已经断开、或者 Network.enable 之后出过错，就报 `watch.ok=false`，按「判断不了、不再点」处理。补一条测试：窗口内断开 → registered 为 null → 只点 1 次。
+
+### ⚠️ 风险
+
+- **P4：观察窗口之外的请求看不到。** 如果点击后超过约 19 秒才发出请求、而且下结论时还在路上，就会被漏看。另外窗口结束到下结论之间还有约 1 秒以上没人看。
+  - 建议：让观察一直持续到下结论那一刻，比如下结论时再用 CDP 看一次，或者把窗口延长到整段重读结束。
+  - 真实 Ashby 的请求在点击后 0.1 到 0.3 秒就发出，所以概率极低。可以同包修，也可以挂账。
+
+## Quinn 重构 / 质量指标 / 老坑（第 20 轮）
+
+- Quinn 重构：无。修法涉及 cdp.mjs 的会话状态，超出 1-3 行的边界。
+- `verify_self_miss_rate: 0%`（上轮漏检 0 / 本轮问题 2）。
+- 真 bug：1 个（P2）。
+- 老坑清单：项目没定义。
+
+## 覆盖度评估（第 20 轮）
+
+**质量分 3/5，回炉。**
+- 覆盖：真 Chrome 5 个场景，其中断连场景用 TCP 代理真实掐断；驱动替身复跑 6 组；P3 三项；grep；逐提交 CI。
+- 扣分：lead 要求「任何路径都不会二次点击已发出的提交」，断连这条路径违反了这个要求，而且已经实测复现。修法很小，修完就可以推。
+
+## 试过的错误方向（第 20 轮）
+
+- **一开始按「点击后 31 秒下结论」来估算观察空档**：后来按驱动实际的节奏重算（等 7 秒，再重读 4 次、每次隔 3 秒，外加读页面的时间），空档只有约 1 秒以上，不是 12 秒。所以把「窗口外的请求」从 P2 降为 P4。
+- **一开始想用假的 CDP 服务模拟断连**：项目里没有 WebSocket 服务端库。改成在真 Chrome 前面加一个 TCP 代理，连接建立 2 秒后掐断，更接近真实情况。
