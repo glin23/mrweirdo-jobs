@@ -76,10 +76,12 @@ permission prompt stays a second spending gate.
   List → the user looks and names the ones to apply to → release only those:
   `start --target <number of links> --release <link>…` (list scan only; a
   Greenhouse / Ashby link at a company not on the list is fetched by its job id
-  from the public board API; re-scored, applied like any other job, through the
+  from the public board API; only the named jobs are scored, and the scoring
+  budget is at least the number of links; applied like any other job, through the
   hard filter, the pre-dispatch guard and the one ledger writer). A released
-  link that did not go out is named in line 2 with its reason (`not found` =
-  taken down, `hard_filter:<reason>`, `fetch_failed:<error>`,
+  link that did not go out is named in line 2 with its kind (没打到分 /
+  公开接口取不到（疑似下架）/ 取岗出错 / 打分不合格 / 被闸拦) and reason
+  (`not found` = the public API no longer has it, `not_scanned:…` / `not_scored:…`, `hard_filter:<reason>`, `fetch_failed:<error>`,
   `company_cooldown_60d`, `daily_cap_reached`, `scored_not_eligible`,
   `not_dispatched:<stop>`, …).
   The user may also apply by hand (record it, below).

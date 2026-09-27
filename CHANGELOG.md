@@ -132,7 +132,12 @@ since shipped and now lives in `docs/archive/`; the current one is
   through the hard filter, dedupe gate, scoring, pre-dispatch guard and the one
   ledger writer like any other job; company = board slug. Line 2 names every
   released link that did not go out (`not found`, `fetch_failed:…`,
-  `hard_filter:…`, guard reasons). Discovery also writes
+  `hard_filter:…`, guard reasons). A release run scores only the named links
+  (other list jobs are not re-scored), with a scoring budget of at least the
+  number of links; line 2 says which kind each miss is — not scored / not on
+  the public API (probably taken down) / fetch error / not a fit / blocked
+  (Round 3: two named links were never scored and were reported as taken
+  down). Discovery also writes
   `hard_filter_dropped.json` (every drop with its reason).
 - **`submission_ledger.mjs correct`** (2026-09-26). Appends a correction line
   (`--of <line id> --url <its job link> --verdict not_submitted|unknown|submitted

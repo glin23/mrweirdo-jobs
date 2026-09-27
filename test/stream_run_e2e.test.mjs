@@ -400,7 +400,7 @@ test('D10 名单公司合格不自动投：第 1 行列出「公司·岗位·链
 
     const gone = ghUrl('pika', 404);
     const missing = await rig.run(1, { startArgs: ['--release', gone] });
-    assert.match(missing.finish.lines[1], new RegExp(`放行的 1 个没找到（可能已下架）： ${gone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} (；|$)`), 'link set off by half-width spaces (verify 第 10 轮 P4)');
+    assert.match(missing.finish.lines[1], new RegExp(`放行的 1 个公开接口取不到（疑似下架）： ${gone.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} (；|$)`), 'link set off by half-width spaces (verify 第 10 轮 P4)');
     assert.equal(rig.driverCalls().length, 2);
   } finally {
     await rig.close();

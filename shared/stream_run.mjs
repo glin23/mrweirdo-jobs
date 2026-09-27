@@ -309,6 +309,9 @@ async function start() {
     seenCompact = compact(home, now);
     const entries = readAll(home);
     const budget = budgetLine(attemptIndex(entries, now), target, tier, now);
+    // A release run looks at the named links only, so it may always score all
+    // of them (Round 3: the N×10 budget was used up before they were reached).
+    if (release.length) budget.max_scored = Math.max(budget.max_scored, release.length);
     const workDb = join(runDir, 'work.db');
     initRunDb({ path: workDb, seqFloor: Math.max(maxJobId(entries), SEQ_FLOOR_MIN) });
     // Released jobs are found by the list scan or fetched by link, so a
@@ -396,6 +399,12 @@ function gate(st, candidates, kind) {
     if (!fp) throw new Error(`discovery handed over an auto-apply candidate without a job fingerprint: ${c.apply_url}`);
     const released = release.has(fp.fp);
     c._released = released;
+    // A release run handles the named links only (restart-apply-3 Round 3): the
+    // list scan is there to find the named list jobs, not to re-score the rest.
+    if (st.release.length && !released) {
+      bump(st, 'not_named_in_release_run');
+      continue;
+    }
     const ct = companyTitleKey(c.company, c.title);
     if (taken.has(fp.fp) || taken.has(ct)) {
       bump(st, 'duplicate_in_run');
@@ -638,9 +647,10 @@ function releaseWhy(st, rows, lines) {
     const fp = jobFingerprint(u).fp;
     const gateOutcome = st.release_outcome[fp];
     if (gateOutcome === undefined) {
-      // Not met by the list scan: gone from the board — unless the run
-      // stopped before scanning at all (e.g. today's tier already used up).
-      why.set(u, st.watchlist_done ? 'not_found' : (st.stop_reason ?? 'not_scanned'));
+      // Not met by the list scan nor by fetching the link itself: gone from
+      // the board. Never said of a link that was not fetched yet (the run
+      // stopped first, e.g. today's tier already used up).
+      why.set(u, st.release_scanned ? 'not_found' : `not_scanned${st.stop_reason ? `:${st.stop_reason}` : ''}`);
       continue;
     }
     if (gateOutcome !== 'pooled') {
@@ -649,9 +659,19 @@ function releaseWhy(st, rows, lines) {
     }
     const row = rows.find((r) => jobFingerprint(r.apply_url)?.fp === fp);
     if (row && lines.some((e) => e.job_id === row.id)) continue;
-    why.set(u, !row ? 'not_scored' : row.eligible ? `not_dispatched${st.stop_reason ? `:${st.stop_reason}` : ''}` : 'scored_not_eligible');
+    why.set(u, !row ? `not_scored${st.stop_reason ? `:${st.stop_reason}` : ''}` : row.eligible ? `not_dispatched${st.stop_reason ? `:${st.stop_reason}` : ''}` : 'scored_not_eligible');
   }
   return why;
+}
+
+// Which kind of "not applied" a released link is (Round 3: a link never
+// scored was reported as taken down).
+function releaseLabel(code) {
+  if (/^(not_scanned|not_scored)/.test(code)) return '没打到分';
+  if (code === 'scored_not_eligible') return '打分不合格';
+  if (code.startsWith('fetch_failed')) return '取岗出错';
+  if (code.startsWith('not_dispatched')) return '合格但没派出';
+  return '被闸拦';
 }
 
 function report(st, rows, lines, unscored) {
@@ -682,8 +702,8 @@ function report(st, rows, lines, unscored) {
   const why = releaseWhy(st, rows, lines);
   const releaseMissing = st.release.filter((u) => why.get(u) === 'not_found');
   const releaseBlocked = st.release.filter((u) => why.get(u) && why.get(u) !== 'not_found');
-  if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个没找到（可能已下架）：${releaseMissing.map((u) => ` ${u} `).join('、')}`);
-  if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => ` ${u} （${why.get(u)}）`).join('、')}`);
+  if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个公开接口取不到（疑似下架）：${releaseMissing.map((u) => ` ${u} `).join('、')}`);
+  if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => ` ${u} （${releaseLabel(why.get(u))}：${why.get(u)}）`).join('、')}`);
   const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length + spamFlagged.length;
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 

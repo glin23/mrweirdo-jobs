@@ -426,10 +426,12 @@ Then, only if it applies, at most one short line each:
   3. only those → `node shared/stream_run.mjs start --target <number of links> --release <link> [--release <link2>]`,
      then Steps 5 and 7 again. A release run scans the list only (a released
      Greenhouse / Ashby link at any other company is fetched by its job id),
-     re-scores the named jobs and applies them like any other job: the pre-dispatch guard
+     scores ONLY the named jobs (other list jobs are not re-scored and do not use
+     the scoring budget) and applies them like any other job: the pre-dispatch guard
      (never twice / company 2-in-60-days / today's tier) and the one ledger
      writer (`record_apply_outcome.mjs`) apply as usual. Every released link that
-     did not go out is named in line 2 with its reason (taken down,
+     did not go out is named in line 2 with its kind (没打到分 / 公开接口取不到（疑似下架）/
+     取岗出错 / 打分不合格 / 被闸拦) and reason (taken down,
      `company_cooldown_60d`, `daily_cap_reached`, `scored_not_eligible`, …).
   List-company jobs are never auto-applied without step 2, and there is no
   "fill the form and stop before submit" step for them;

@@ -114,7 +114,7 @@ test('--release 非名单链接：名单扫描没遇到 → 按链接直取 → 
 
     const again = await rig.run(1, { startArgs: ['--release', PRIOR] });
     assert.deepEqual(rig.driverCalls(), [prior.apply_url], 'never applied twice');
-    assert.match(again.finish.lines[1], new RegExp(`放行的 1 个没投： ${esc(PRIOR)} （already_attempted_fp）`));
+    assert.match(again.finish.lines[1], new RegExp(`放行的 1 个没投： ${esc(PRIOR)} （被闸拦：already_attempted_fp）`));
   } finally {
     await rig.close();
   }
@@ -149,9 +149,67 @@ test('--release 非名单链接取不到 / 板接口报错 / 被硬筛拦：不�
     });
     const r = await rig.run(1, { startArgs: ['--release', gone, '--release', broken, '--release', ae] });
     assert.deepEqual(rig.driverCalls(), []);
-    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个没找到（可能已下架）： ${esc(gone)} `));
-    assert.match(r.finish.lines[1], new RegExp(`${esc(broken)} （fetch_failed:Ashby broken: HTTP 500）`));
-    assert.match(r.finish.lines[1], new RegExp(`${esc(ae)} （hard_filter:function_mismatch:sales_ae）`));
+    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个公开接口取不到（疑似下架）： ${esc(gone)} `));
+    assert.match(r.finish.lines[1], new RegExp(`${esc(broken)} （取岗出错：fetch_failed:Ashby broken: HTTP 500）`));
+    assert.match(r.finish.lines[1], new RegExp(`${esc(ae)} （被闸拦：hard_filter:function_mismatch:sales_ae）`));
+  } finally {
+    await rig.close();
+  }
+});
+
+// Round 3 真实运行（stream-2026-09-27T20-44-00-192Z-98439）：`start --target 2 --release <prior> --release <sequence>`，
+// 打分额度 2×10=20 被 20 个待重打的名单岗用光，两条放行岗没进批次；报告却说「可能已下架」。
+// 修法：release 运行只处理点名的链接（名单扫描只用来找名单里的放行岗，其余名单岗不进打分、不占额度），
+// 额度至少为放行条数；第 2 行区分 没打到分 / 公开接口取不到（疑似下架）/ 打分不合格 / 被闸拦。
+test('Round 3 复现：两条非名单放行 + 20 个名单岗待重打 → 只打这两条、两条都投；名单岗不重打、不 held', async () => {
+  const rig = await makeStreamRig('mrw-release-round3-');
+  try {
+    const prior = ashbyJob('prior-labs', '1e0d43ae-26b1-4b59-a28f-cb1f35a8b576', { title: 'Founder Associate (NYC)' });
+    const seq = ashbyJob('sequence', 'a755e204-d28e-4894-8364-b849664766c5');
+    const list = Array.from({ length: 20 }, (_, i) => job('pika', i + 1, { fit: i % 3 === 0 }));
+    rig.targets([{ ats: 'greenhouse', slug: 'pika' }], BOTH);
+    rig.board({ watchlist: list, release: [prior, seq] });
+    const r = await rig.run(2, { startArgs: ['--release', PRIOR, '--release', SEQUENCE] });
+    assert.deepEqual(r.scored.sort(), [prior.apply_url, seq.apply_url].sort(), 'only the named links are scored');
+    assert.deepEqual(rig.driverCalls().sort(), [prior.apply_url, seq.apply_url].sort());
+    assert.deepEqual(r.finish.held, [], 'list jobs are not re-scored or held in a release run');
+    assert.match(r.finish.lines[0], /^投出 2 个/);
+    assert.doesNotMatch(r.finish.lines[1], /放行/, 'every named link went out');
+  } finally {
+    await rig.close();
+  }
+});
+
+test('放行额度至少为放行条数：--target 1 放行 12 条 → 12 条都打分', async () => {
+  const rig = await makeStreamRig('mrw-release-budget-');
+  try {
+    const jobs = Array.from({ length: 12 }, (_, i) => ashbyJob(`co${i}`, `00000000-0000-0000-0000-0000000001${String(i).padStart(2, '0')}`, { fit: false }));
+    rig.targets([{ ats: 'greenhouse', slug: 'pika' }], BOTH);
+    rig.board({ watchlist: [], release: jobs });
+    const r = await rig.run(1, { startArgs: jobs.flatMap((j) => ['--release', j.apply_url.replace(/\/application$/, '')]) });
+    assert.equal(r.scored.length, 12);
+    assert.match(r.finish.lines[1], /放行的 12 个没投：.*（打分不合格：scored_not_eligible）/);
+  } finally {
+    await rig.close();
+  }
+});
+
+test('第 2 行分类：公开接口取不到（疑似下架）/ 取岗出错 / 被闸拦 / 没打到分，各说各的', async () => {
+  const rig = await makeStreamRig('mrw-release-labels-');
+  try {
+    const gone = 'https://jobs.ashbyhq.com/gone/00000000-0000-0000-0000-00000000dead';
+    const broken = 'https://jobs.ashbyhq.com/broken/00000000-0000-0000-0000-00000000beef';
+    const ae = 'https://jobs.ashbyhq.com/prior-labs/00000000-0000-0000-0000-0000000000a2';
+    rig.targets([{ ats: 'greenhouse', slug: 'pika' }], BOTH);
+    rig.board({
+      watchlist: [], release: [],
+      errors: { release: [{ source: 'release', apply_url: broken, error: 'Ashby broken: HTTP 500' }] },
+      dropped: { release: [{ apply_url: `${ae}/application`, reason: 'function_mismatch:sales_ae' }] },
+    });
+    const r = await rig.run(1, { startArgs: ['--release', gone, '--release', broken, '--release', ae] });
+    assert.match(r.finish.lines[1], new RegExp(`放行的 1 个公开接口取不到（疑似下架）： ${esc(gone)} `));
+    assert.match(r.finish.lines[1], new RegExp(`${esc(broken)} （取岗出错：fetch_failed:Ashby broken: HTTP 500）`));
+    assert.match(r.finish.lines[1], new RegExp(`${esc(ae)} （被闸拦：hard_filter:function_mismatch:sales_ae）`));
   } finally {
     await rig.close();
   }

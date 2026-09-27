@@ -13,7 +13,7 @@ Reads:
   - （第 4 次召唤 S5）DESIGN §10 S5 行 / §3 / §4 / §7、定稿 docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮、VERIFY_REPORT 第 5 轮（RACE / PID 复用）
 Blocks: restart-apply-3 方向预筛 / 年限口径 / release 任意链接的 verify 验收；restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
 Updated: 2026-09-27
-Iterations: 8
+Iterations: 9
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -774,4 +774,10 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 2. **年限硬规则直接在入库时把打分改判为合格**：否决——打分器因年限已经把 fit_score 压到 ≤4，入库层无法还原真实分数，改判等于替打分器编分；改为整批拒收、点名重打。
 3. **只凭打分理由文字（honest_reason / key_gaps 里出现 years）判断「因年限不合格」**：否决——不合格常有多个原因，文字里提到年限不等于只因年限；改为结构化 `reject_reasons`，只有「仅年限」才触发。
 4. **release 只对「不属于名单公司」的链接直取**：否决——名单公司那块板扫描失败时，放行的名单岗会被报成「没找到」；改为「名单扫描没遇到的放行链接一律直取」，覆盖两种情况。
+
+> **第 8 次召唤回炉（Round 3 真实运行 stream-2026-09-27T20-44-00-192Z-98439：两条放行岗没打分却报「可能已下架」）**
+> 根因 [读码 + 红测试复现]：① release 运行照常把名单扫描到的所有岗放进打分池（提示词改版后 20 个名单岗全要重打），打分额度 target×10=20 先被它们用光，名单扫描后的「按链接直取」那一步根本没走到；② `releaseWhy` 以「名单扫过了」为据把没遇到的链接判成 not_found，于是没取过的链接也被说成下架。
+> 修法（最小方案）：① release 运行在去重闸前**只留被点名的链接**，其余岗计 `not_named_in_release_run`、不打分、不写看过记录、不 held（名单扫描仍用来找名单里的放行岗）；② release 运行的打分额度 = max(target×10, 放行条数)；③ 「没找到」只在按链接直取之后才能下结论，否则记 `not_scanned:<停因>`；没进批次的记 `not_scored:<停因>`；第 2 行按类说：没打到分 / 公开接口取不到（疑似下架）/ 取岗出错 / 打分不合格 / 被闸拦 / 合格但没派出，后跟原因代码。
+> 红测试（先红后绿）：Round 3 复现（两条非名单放行 + 20 个名单岗待重打 → 只打两条、两条都投、名单不 held）；--target 1 放行 12 条 → 12 条都打；第 2 行分类文案。旧测试文案同步为「类别：代码」。
+> 取舍：release 运行不再顺带重打名单岗——名单的新合格岗要等下一次普通运行才报，换来放行必定先打分。
 
