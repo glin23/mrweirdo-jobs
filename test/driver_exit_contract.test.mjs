@@ -163,6 +163,55 @@ test('Ashby 出货 main()：读不懂的页面 → unknown（绝不默认成功�
   }
 });
 
+// 首次真投（2026-09-26 Tavus）：页面「flagged as possible spam」，驱动却又点了一次提交。
+// 反垃圾拦截 = 终局：记 not_submitted / platform_spam_flagged，不重点提交。不为绕过做任何事。
+function clickCounter() {
+  const counter = { n: 0 };
+  return { counter, rule: { match: 'btn.click()', result: () => { counter.n += 1; return true; } } };
+}
+
+test('Ashby 出货 main()：反垃圾拦截横幅 → not_submitted / platform_spam_flagged，只点过一次提交', async () => {
+  const driver = await loadAshby(ASHBY_BASE);
+  const { counter, rule } = clickCounter();
+  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: ASHBY_PAGE(fixture('deny_tavus_spam_flagged.txt')) }]);
+  try {
+    const emitted = await runToEmit(driver.main);
+    assert.equal(emitted.outcome, 'not_submitted');
+    assert.equal(emitted.reason, 'platform_spam_flagged');
+    assert.equal(counter.n, 1, 'submit was clicked again after the spam banner');
+  } finally {
+    clearStubs();
+  }
+});
+
+test('Ashby 出货 main()：提交后页面先是空白、稍后才出反垃圾横幅 → 只重读页面、不再点提交', async () => {
+  const driver = await loadAshby(ASHBY_BASE);
+  const { counter, rule } = clickCounter();
+  let reads = 0;
+  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: () => ASHBY_PAGE(reads++ === 0 ? 'Application' : fixture('deny_tavus_spam_flagged.txt')) }]);
+  try {
+    const emitted = await runToEmit(driver.main);
+    assert.equal(emitted.reason, 'platform_spam_flagged');
+    assert.equal(counter.n, 1, 'no second submit click while the page has no missing fields');
+  } finally {
+    clearStubs();
+  }
+});
+
+test('Ashby 出货 main()：没有缺字段、页面一直读不懂 → unknown，全程只点一次提交（不盲目重交）', async () => {
+  const driver = await loadAshby(ASHBY_BASE);
+  const { counter, rule } = clickCounter();
+  setEvalRules([...ashbyBaseRules(), rule, { match: 'error_count', result: ASHBY_PAGE('nothing recognizable on this page') }]);
+  try {
+    const emitted = await runToEmit(driver.main);
+    assert.equal(emitted.outcome, 'unknown');
+    assert.equal(emitted.reason, 'no_errors_no_success');
+    assert.equal(counter.n, 1);
+  } finally {
+    clearStubs();
+  }
+});
+
 test('Ashby 出货 main()：答得上但换着法子缺字段 → 步数超限 rate_limited / exit 4 + 全问答落盘', async () => {
   const driver = await loadAshby(ASHBY_BASE);
   let round = 0;

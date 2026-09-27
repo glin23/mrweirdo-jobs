@@ -40,7 +40,7 @@ import {
   deriveWorkAuthAnswers, withoutSponsorshipAnswer, workAuthBlockNote, workAuthGapFor,
 } from './answer_routing.mjs';
 import { matchAnswerBucket } from './answer_buckets.mjs';
-import { submissionVerdict, captureEvidence } from './submission_evidence.mjs';
+import { submissionVerdict, captureEvidence, isSpamFlagged } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
 import { dbPath } from './local_db.mjs';
 import { DatabaseSync } from 'node:sqlite';
@@ -440,6 +440,11 @@ async function submitAndCheck(tab) {
     })()
   `);
   await sleep(7000);
+  return readSubmitPage(tab);
+}
+
+// Reads the page after a submit click — never clicks.
+async function readSubmitPage(tab) {
   const page = await evalInTab(tab, `
     (() => {
       const errors = [...document.querySelectorAll(".error, [class*=error i], [role=alert], [aria-live]")]
@@ -1083,7 +1088,22 @@ async function main() {
   let pendingForMainClaude = [];
   for (let attempt = 1; attempt <= 5; attempt++) {
     log(`Submit attempt ${attempt}…`);
-    const res = await submitAndCheck(tab);
+    let res = await submitAndCheck(tab);
+    // No required-field errors and nothing readable yet: the page may still be
+    // settling. Re-READ it — never click Submit again on a form the page did
+    // not reject (首次真投 2026-09-26: a second click on Tavus met the spam
+    // banner; a blind re-click can also send a duplicate).
+    for (let look = 0; res.missing.length === 0 && res.verdict.verdict === 'unknown' && look < 4; look += 1) {
+      await sleep(3000);
+      res = await readSubmitPage(tab);
+    }
+    if (isSpamFlagged(res.verdict)) {
+      // The platform's anti-spam check refused it and the page says so: terminal.
+      // Nothing is changed to get past the check; no retry.
+      const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'not_submitted' }).catch((e) => { log('evidence capture failed:', e.message); return null; });
+      await closeTab(tab);
+      emitOutcome({ outcome: 'not_submitted', reason: 'platform_spam_flagged', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
+    }
     if (res.verdict.verdict === 'submitted') {
       const ev = await captureEvidence(tab, { company: COMPANY, jobId: JOB_ID, phase: 'after_submit', verdict: 'submitted' }).catch((e) => { log('evidence capture failed (submission still recorded):', e.message); return null; });
       await closeTab(tab);
@@ -1100,7 +1120,7 @@ async function main() {
         await closeTab(tab);
         emitOutcome({ outcome: 'not_submitted', reason: 'page_states_failure', verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
       }
-      if (attempt < 5) { await sleep(2500); continue; }
+      // Still unreadable after re-reading: say so; do not submit again.
       emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, snippet: res.snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, answers: ANSWERS });
     }
     if (JSON.stringify(res.missing) === JSON.stringify(lastMissing)) {

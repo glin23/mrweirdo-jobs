@@ -147,6 +147,15 @@ export const PRE_SUBMIT_EXITS = new Set([
 // no driver ran at all.
 export const PRE_DISPATCH_STAGE = 'pre_dispatch';
 
+// The platform's anti-spam check refused the submission and said so on the
+// page (「flagged as possible spam」). Decision (首次真投 2026-09-26): the
+// company did not receive it, so it is NOT an attempt — it does not take one of
+// the company's two 60-day chances, nor today's tier. The same job is still not
+// retried automatically (apply_guard rule platform_spam_flagged_60d): a second
+// automated try would be flagged the same way; the user may apply by hand.
+export const SPAM_FLAGGED_REASON = 'platform_spam_flagged';
+export const SPAM_FLAGGED_MAY_HAVE_SUBMITTED = false;
+
 // The ONE place "may this attempt have reached the company?" is decided
 // (ledger field may_have_submitted = the single 投过 predicate). Order:
 //   1. pre-dispatch validation failure → false (no driver ran)
@@ -160,6 +169,7 @@ export const PRE_DISPATCH_STAGE = 'pre_dispatch';
 export function deriveMayHaveSubmitted(o) {
   const valid = validateOutcome(o);
   if (valid.stage === PRE_DISPATCH_STAGE) return false;
+  if (valid.outcome === 'not_submitted' && valid.reason === SPAM_FLAGGED_REASON) return SPAM_FLAGGED_MAY_HAVE_SUBMITTED;
   if (valid.verdict != null) return true;
   if (PRE_SUBMIT_EXITS.has(`${valid.outcome}:${valid.reason ?? ''}`)) return false;
   // Submit was clicked, but the page stayed on the form listing required-field

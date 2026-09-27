@@ -55,7 +55,13 @@ export const DENY_PATTERNS = [
   { id: 'missing_required_field', re: /missing entry for required field/i, fixture: 'deny_missing_required.txt' },
   { id: 'try_again', re: /try again/i, fixture: 'deny_try_again.txt' },
   { id: 'submission_error', re: /error (?:while )?submitting|submission failed/i, fixture: 'deny_error_submitting.txt' },
+  // Ashby's anti-spam refusal (首次真投 2026-09-26, Tavus): the company never
+  // got it. Terminal — the driver does not click Submit again, and nothing is
+  // changed to get past the check.
+  { id: 'platform_spam_flagged', re: /flagged as (?:possible |potential |likely )?spam|marked as (?:possible )?spam/i, fixture: 'deny_tavus_spam_flagged.txt' },
 ];
+
+export const isSpamFlagged = (verdict) => Boolean(verdict?.denyHits?.includes('platform_spam_flagged'));
 
 // Pure function. Missing/empty input is not an error — it is exactly the
 // "page said nothing readable" case, and the honest answer to it is 'unknown'.

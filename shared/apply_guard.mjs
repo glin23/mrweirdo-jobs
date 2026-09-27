@@ -58,7 +58,7 @@ function pushTo(map, key, value) {
 // Index over the ledger's effective attempt lines (corrections applied).
 export function attemptIndex(entries, now = new Date(), tz = localTimeZone()) {
   const today = localDay(now, tz);
-  const idx = { byFp: new Map(), byCompanyTitle: new Map(), byCompany: new Map(), preSubmitFails: new Map(), todayCount: 0, attemptTimes: [] };
+  const idx = { byFp: new Map(), byCompanyTitle: new Map(), byCompany: new Map(), preSubmitFails: new Map(), spamFlagged: new Map(), todayCount: 0, attemptTimes: [] };
   for (const e of effectiveEntries(entries)) {
     if (typeof e.may_have_submitted !== 'boolean') {
       throw new Error(`ledger line ${e.id} (job_id ${e.job_id}) has no boolean may_have_submitted — every line must say whether it may have reached the company`);
@@ -70,6 +70,8 @@ export function attemptIndex(entries, now = new Date(), tz = localTimeZone()) {
       pushTo(idx.byCompany, e.company_key, e.ts);
       idx.attemptTimes.push(new Date(e.ts).getTime());
       if (localDay(new Date(e.ts), tz) === today) idx.todayCount += 1;
+    } else if (e.reason === 'platform_spam_flagged') {
+      pushTo(idx.spamFlagged, fp, e.ts);
     } else if (e.outcome !== 'needs_user') {
       pushTo(idx.preSubmitFails, fp, e.ts);
     }
@@ -150,6 +152,9 @@ export function identityBlock(job, idx, now, seen) {
   const recent = (idx.byCompany.get(normalizeCompany(job.company)) || []).filter((ts) => withinWindow(ts, now));
   if (recent.length >= COMPANY_MAX_60D) return no('company_cooldown_60d');
   if (preSubmitFailCount(idx, fp, now) > PRE_SUBMIT_RETRIES_60D) return no('pre_submit_retry_exhausted');
+  // The platform's anti-spam check refused this very job: not an attempt (no
+  // company chance used), but an automated retry would meet the same check.
+  if ((idx.spamFlagged.get(fp) || []).some((ts) => withinWindow(ts, now))) return no('platform_spam_flagged_60d');
   const stuck = lookupSeen(seen.index, job).find((r) => r.code === 'needs_info' && stillSeen(r, { jd_hash: null }, seen.basis, now));
   if (stuck) return no('needs_info_unchanged');
   return OK;

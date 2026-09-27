@@ -506,7 +506,7 @@ function afterBatch(st, batch) {
   const rows = runRows(st);
   const lines = runLedgerLines(rows);
   st.attempted_this_run = lines.filter(isAttempted).length;
-  st.pre_submit_fails_this_run = lines.filter((e) => !isAttempted(e) && e.outcome !== 'needs_user').length;
+  st.pre_submit_fails_this_run = lines.filter((e) => !isAttempted(e) && e.outcome !== 'needs_user' && e.reason !== 'platform_spam_flagged').length;
   const fill = fillBasisVersion(home);
   const scoring = scoringBasisVersion(home);
   for (const row of rows.filter((r) => byUrl.has(r.apply_url))) {
@@ -639,7 +639,8 @@ function report(st, rows, lines, unscored) {
   const submitted = lines.filter((e) => e.verdict === 'submitted').map(name);
   const uncertain = lines.filter((e) => isAttempted(e) && e.verdict !== 'submitted');
   const needsInfo = lines.filter((e) => e.outcome === 'needs_user' && !isAttempted(e));
-  const preSubmit = lines.filter((e) => !isAttempted(e) && e.outcome !== 'needs_user');
+  const spamFlagged = lines.filter((e) => !isAttempted(e) && e.reason === 'platform_spam_flagged');
+  const preSubmit = lines.filter((e) => !isAttempted(e) && e.outcome !== 'needs_user' && e.reason !== 'platform_spam_flagged');
   const failedBoards = st.source_errors.filter((e) => e.kind === 'watchlist').map((e) => e.label || e.slug);
 
   const line1 = st.no_submit
@@ -649,6 +650,7 @@ function report(st, rows, lines, unscored) {
   if (uncertain.length) parts.push(`${uncertain.length} 个判不确定（截图：${uncertain.map((e) => e.evidence?.path || '无截图').join('、')}，请你看一眼）`);
   if (needsInfo.length) parts.push(`${needsInfo.length} 个卡在缺信息`);
   if (preSubmit.length) parts.push(`${preSubmit.length} 个表单没打开（没点提交，下次还能再试）`);
+  if (spamFlagged.length) parts.push(`${spamFlagged.length} 个被平台当成垃圾申请拦下，没收到（${spamFlagged.map((e) => `${name(e)} 截图： ${e.evidence?.path || '无截图'} `).join('、')}；不占这家的名额，但不会自动重投，你可以手投）`);
   const extras = [];
   const rec = st.recovered_inflight;
   // Links and paths are set off by half-width spaces: a full-width bracket or
@@ -661,7 +663,7 @@ function report(st, rows, lines, unscored) {
   const releaseBlocked = st.release.filter((u) => why.get(u) && why.get(u) !== 'not_found');
   if (releaseMissing.length) extras.push(`放行的 ${releaseMissing.length} 个没找到（可能已下架）：${releaseMissing.map((u) => ` ${u} `).join('、')}`);
   if (releaseBlocked.length) extras.push(`放行的 ${releaseBlocked.length} 个没投：${releaseBlocked.map((u) => ` ${u} （${why.get(u)}）`).join('、')}`);
-  const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length;
+  const notSubmitted = uncertain.length + needsInfo.length + preSubmit.length + spamFlagged.length;
   const line2 = [`没投成 ${notSubmitted} 个${parts.length ? `：${parts.join('；')}` : ''}`, ...extras].join('；');
 
   // Held list jobs are fit but not applied to: say so where the fit count is.
