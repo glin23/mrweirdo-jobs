@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { atsHome } from './paths.mjs';
 import { initDb, upsertJob } from './local_db.mjs';
-import { classifyRoleType, roleTypesFromSearchIntent } from './role_types.mjs';
+import { classifyRoleType, normalizeRoleType, roleTypesFromSearchIntent } from './role_types.mjs';
 import { SUPPORTED_AUTO_PLATFORMS, platformFromUrl } from './sourcing/apply_url_classification.mjs';
 import { hasUsableApplyUrl } from './sourcing/usable_apply_url.mjs';
 import { legitimacyBlockReason, unusableAutoApplyReason } from './eligibility.mjs';
@@ -164,7 +164,16 @@ for (const job of candidates) {
   const score = byUrl.get(applyUrl) || {};
   const platform = platformFromUrl(applyUrl);
   const capped = cappedNames.has(String(job.company || '').toLowerCase());
-  const storedRoleType = score.role_type_match || job.role_type || 'other';
+  // The scorer's label is one of intern / part_time / new_grad_FT / other or an
+  // alias of one (full_time → new_grad_FT). Anything else ("senior", …) is not
+  // a role type: the row is stored as other, never eligible, and said out loud
+  // (verify 第 14 轮 P2 — a raw "senior" used to reach the DB and be re-read as
+  // new_grad_FT later).
+  const rawLabel = String(score.role_type_match || job.role_type || 'other').trim();
+  const normalizedLabel = rawLabel.toLowerCase() === 'other' ? 'other' : normalizeRoleType(rawLabel);
+  const labelInvalid = normalizedLabel == null;
+  if (labelInvalid) console.error(`[store] ${applyUrl}: role_type_match "${rawLabel}" is not intern | part_time | new_grad_FT | other — stored as other, not eligible`);
+  const storedRoleType = labelInvalid ? 'other' : normalizedLabel;
   const recheckedRoleType = classifyRoleType(job);
   // What goes into the DB is a veto the later rechecks cannot lift (verify 第 13
   // 轮 P1): the DB row has no JD, so a recheck there cannot see "5+ years" and
@@ -190,7 +199,7 @@ for (const job of candidates) {
   else if (functionRelevanceReason) reason = functionRelevanceReason;
   else if (!passThreshold) reason = 'fit_below_threshold';
   else if (!recommended) reason = 'not_recommended';
-  else if (!roleOk) reason = 'role_type_not_allowed';
+  else if (!roleOk) reason = labelInvalid ? 'role_type_label_invalid' : 'role_type_not_allowed';
   else if (capped) reason = 'quota_guarded';
   else if (legitimacyReason) reason = legitimacyReason;
   else if (!platformOk) reason = 'unsupported_ats_platform';

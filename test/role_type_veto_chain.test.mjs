@@ -27,7 +27,7 @@ function storeOne(job, scorerRole) {
   const db = new DatabaseSync(join(home, 'jobs.db'));
   const row = db.prepare('SELECT id, role_type_match, auto_apply_eligible FROM jobs WHERE apply_url = ?').get(job.apply_url);
   db.close();
-  return { home, row };
+  return { home, row, out: r.stdout, err: r.stderr };
 }
 
 function afterRecompute(home, id) {
@@ -68,4 +68,34 @@ test('应届岗（JD 1-2 年）照常可投，recompute 后仍可投', () => {
 test('deriveRoleTypeFromJob：库里记的 other 是否决，标题重判不得翻回', () => {
   assert.equal(deriveRoleTypeFromJob({ role_type_match: 'other', title: 'Product Manager, Growth' }), 'other');
   assert.equal(deriveRoleTypeFromJob({ role_type_match: 'new_grad_FT', title: 'Senior Growth Marketer' }), 'other');
+});
+
+// verify 第 14 轮 P2：打分器给非规范标签（senior / full_time / Other）时按原始字符串比对，
+// JD 重判的 other 被丢掉，库里记了 senior / full_time，derive 规范化后翻回可投。
+for (const [n, label] of [[4, 'senior'], [5, 'full_time'], [6, 'Other'], [7, 'New Grad FT']]) {
+  test(`打分器标签「${label}」+ JD 5–10+ 年：入库 other、不可投；recompute 不翻；validate 拒`, () => {
+    const { home, row } = storeOne({ ...LUMA, apply_url: url(n) }, label);
+    assert.equal(row.role_type_match, 'other');
+    assert.equal(row.auto_apply_eligible, 0);
+    const after = afterRecompute(home, row.id);
+    assert.equal(after.row.auto_apply_eligible, 0);
+    assert.notEqual(after.validate.status, 0);
+  });
+}
+
+test('非法标签（senior）：该行不可投、原因 role_type_label_invalid 记进汇总并在 stderr 响亮说', () => {
+  const job = { ...LUMA, title: 'Growth Marketer', apply_url: url(8), description: '- 1-2 years in growth' };
+  const { home, row, out, err } = storeOne(job, 'senior');
+  assert.equal(row.role_type_match, 'other');
+  assert.equal(row.auto_apply_eligible, 0, 'an unreadable label is never eligible, even when the JD looks entry-level');
+  assert.match(out, /role_type_label_invalid/);
+  assert.match(err, /role_type_match "senior"/);
+  assert.equal(afterRecompute(home, row.id).row.auto_apply_eligible, 0);
+});
+
+test('合法别名 full_time + 应届 JD：规范为 new_grad_FT，照常可投', () => {
+  const job = { ...LUMA, title: 'Growth Marketer', apply_url: url(9), description: '- 1-2 years in growth' };
+  const { row } = storeOne(job, 'full_time');
+  assert.equal(row.role_type_match, 'new_grad_FT');
+  assert.equal(row.auto_apply_eligible, 1);
 });
