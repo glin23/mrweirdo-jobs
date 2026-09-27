@@ -15,6 +15,13 @@ const repoRoot = path.resolve(__dirname, '..');
 const tmpHome = mkdtempSync(path.join(tmpdir(), 'mrweirdo-role-guard-'));
 const dbFile = path.join(tmpHome, 'jobs.db');
 
+// A self-check with its own sandbox: nothing of the caller's configuration may
+// leak in. supervisor_preflight runs it inside a real run whose env carries
+// MRWEIRDO_ROLE_TYPE_TARGETS=intern,new_grad_FT (and more); inherited, it
+// judged this sandbox by the caller's targets and failed the first real
+// dispatch (2026-09-26). Every MRWEIRDO_* is dropped, then the sandbox's own set.
+for (const k of Object.keys(process.env)) if (k.startsWith('MRWEIRDO_')) delete process.env[k];
+process.env.MRWEIRDO_ONBOARD_TMP_DIR = path.join(tmpHome, 'run-tmp');
 process.env.MRWEIRDO_HOME = tmpHome;
 process.env.MRWEIRDO_DB_PATH = dbFile;
 process.env.MRWEIRDO_REPO_ROOT = repoRoot;
