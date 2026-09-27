@@ -137,6 +137,23 @@ work bucket and should be answered or templated before asking. For
 `agent_attestation` and `agent_profile_backed`, fill only from the local profile
 or driver coverage, and follow `shared/references/truthfulness.md`.
 
+A question only this one job asks — e.g. "Look at our social accounts … what is
+working and what is not" (driver note `agent_draft_required`) — is drafted by
+you and handed to the driver through one command; the next run brings the row
+back (drafts are part of the fill basis) and the driver types the draft word for
+word:
+
+```bash
+node shared/agent_drafts.mjs add --url "<apply_url>" --question "<exact form label>" --answer "<draft>"
+node shared/agent_drafts.mjs list
+```
+
+Draft under `shared/references/truthfulness.md`: comment only on what the
+company's public accounts visibly do (formats, hooks, cadence, what gets
+engagement); any claim about the candidate must come from the resume, profile or
+`essay_profile.json`. Do not type into a kept-open tab and re-run the driver —
+a re-run opens a new tab and the typed text is lost.
+
 Jobs that got stuck on missing info are not requeued by hand: once the answer is
 recorded, the profile they were stuck on has changed and the next run brings
 them back as candidates.
