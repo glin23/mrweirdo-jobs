@@ -107,3 +107,11 @@ test('带人的经理算资深：Engineering / Design / Research / Solutions Eng
     assert.equal(roleTypeBlockReason(FT(title), BOTH), null, title);
   }
 });
+
+// verify 第 14 轮 P3：年限前的「区间上半截」判断跨过了换行——上一行以数字结尾（GA4、URL）
+// 时，下一行的「- 3+ years」被当成区间后半截漏认。
+test('P3：上一行以数字结尾，下一行的年限照认', () => {
+  assert.equal(requiredYears('- Experience with GA4\n- 3+ years in growth'), 3);
+  assert.equal(requiredYears('- Read our research at https://example.com/papers/FJOi1\n- 5+ years of ML research experience'), 5);
+  assert.equal(requiredYears('Tools: GA4\n3-5 years in lifecycle marketing'), 3);
+});

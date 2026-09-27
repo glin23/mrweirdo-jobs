@@ -71,3 +71,16 @@ test('verify 第 13 轮 P4：US hours 不算美国；Tbilisi, Georgia 是外国�
   assert.equal(v({ location: 'Atlanta, Georgia' }).ok, true);
   assert.equal(v({ location: 'Bangalore, IN' }).ok, false);
 });
+
+// verify 第 14 轮 P3：标题写的是面向哪个市场，不是在哪上班；「New Mexico」「Lima, Ohio」是美国。
+test('P3：标题里的市场 / 区域词不当上班地点（地点字段是美国城市时）', () => {
+  assert.equal(v({ title: 'Social Media - Japan Market', location: 'San Francisco' }).ok, true);
+  assert.equal(v({ title: 'Creator Partnerships - India', location: 'San Francisco, CA' }).ok, true);
+  assert.equal(v({ title: 'Growth Marketing (LATAM)', location: 'New York, NY' }).ok, true);
+  assert.equal(v({ title: 'Sales - New Mexico', location: 'Remote' }).ok, true);
+  assert.equal(v({ title: 'Field Marketing - Lima', location: 'Lima, Ohio' }).ok, true);
+  // 仍然拦：地点字段没有具体美国地名时，标题点名的外国城市就是上班地
+  assert.equal(v({ title: 'Consumer Support Specialist - London', location: 'Remote', locations: ['Remote', 'London'], location_countries: ['United States'] }).ok, false);
+  assert.equal(v({ title: 'Growth Marketer (Berlin)', location: 'Remote' }).ok, false);
+  assert.equal(v({ location: 'Tbilisi, Georgia' }).ok, false);
+});

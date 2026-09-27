@@ -87,11 +87,12 @@ function fullTimeEntryBlock(job) {
 const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const N = '(\\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)';
 // Not the upper end of a range ("3-5 years" is 3, never 5).
-const NOT_RANGE_END = '(?<!(?:\\d|one|two|three|four|five|six|seven|eight|nine|ten)\\s*(?:-|–|—|to|or)\\s*)';
+// Same line only (verify 第 14 轮 P3): "GA4\n- 3+ years" is not the range "4 - 3+".
+const NOT_RANGE_END = '(?<!(?:\\d|one|two|three|four|five|six|seven|eight|nine|ten)[ \\t]*(?:-|–|—|to|or)[ \\t]*)';
 const YEARS_RES = [
   new RegExp(`${NOT_RANGE_END}\\b${N}\\s*\\+\\s*(?:years|yrs)\\b`, 'gi'),
   // "3-5 years", "3-5+ years", "5–10+ years", "2 or 3 years" → the lower end
-  new RegExp(`\\b${N}\\s*(?:-|–|—|to|or)\\s*${N}\\s*\\+?\\s*(?:years|yrs)\\b`, 'gi'),
+  new RegExp(`\\b${N}[ \\t]*(?:-|–|—|to|or)[ \\t]*${N}[ \\t]*\\+?[ \\t]*(?:years|yrs)\\b`, 'gi'),
   new RegExp(`\\b(?:minimum|min\\.?|at least)\\s*(?:of\\s*)?${N}\\s*(?:years|yrs)\\b`, 'gi'),
   new RegExp(`${NOT_RANGE_END}\\b${N}\\s*(?:or more|and above|plus)\\s*(?:years|yrs)\\b`, 'gi'),
   new RegExp(`${NOT_RANGE_END}\\b${N}\\s*(?:years|yrs)\\s*(?:of\\s*)?(?:professional\\s*|relevant\\s*|related\\s*|work\\s*|industry\\s*|hands-on\\s*)?experience\\b`, 'gi'),

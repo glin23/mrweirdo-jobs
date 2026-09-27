@@ -74,7 +74,10 @@ const US_CODE_RE = new RegExp(`,\\s*(${US_STATE_CODES.join('|')})(?=$|[\\s,)])`)
 // ", WA" etc. that no country shares — "Vancouver, WA" is US; "Bangalore, IN" /
 // "Toronto, CA" are not decided by the code (IN = India, CA = Canada too).
 const US_CODE_UNAMBIGUOUS_RE = new RegExp(`,\\s*(${US_STATE_CODES.filter((c) => !['IN', 'CA', 'DE', 'GA', 'AL', 'AR', 'CO', 'ID', 'MA', 'MD', 'ME', 'MN', 'MT', 'NE', 'PA', 'SC', 'VA'].includes(c)).join('|')})\\s*$`);
-const US_STATE_RE = wordsRe(US_STATES);
+// Georgia is also a country: "Tbilisi, Georgia" is foreign, "Atlanta, Georgia"
+// is not. Every other state name decides US ("Lima, Ohio", "New Mexico").
+const US_STATE_RE = wordsRe(US_STATES.filter((st) => st !== 'georgia'));
+const GEORGIA_RE = wordsRe(['georgia']);
 const US_NOT_STATE_RE = wordsRe([...US_WORDS, ...US_CITIES]);
 // "overlap with US hours" / "US time zones" says when, not where.
 const US_TIME_RE = /\b(u\.?s\.?|us)\s*(hours|business hours|time\s*zones?|timezones?)\b/gi;
@@ -88,10 +91,8 @@ export function classifyPlace(text) {
   const t = String(text || '').replace(US_TIME_RE, ' ').trim();
   if (!t) return 'unknown';
   if (US_CODE_UNAMBIGUOUS_RE.test(t)) return 'us';
-  // A foreign city with only a US *state* name is the foreign one
-  // ("Tbilisi, Georgia"); a US city or "United States" still wins.
-  if (US_STATE_RE.test(t) && !US_NOT_STATE_RE.test(t) && FOREIGN_RE.test(t)) return 'foreign';
-  if (US_RE.test(t)) return 'us';
+  if (US_NOT_STATE_RE.test(t) || US_STATE_RE.test(t)) return 'us';
+  if (GEORGIA_RE.test(t)) return FOREIGN_RE.test(t) ? 'foreign' : 'us';
   if (CN_RE.test(t)) return 'cn';
   if (FOREIGN_RE.test(t)) return 'foreign';
   if (US_CODE_RE.test(t)) return 'us';
@@ -107,19 +108,23 @@ function classifyCountry(country) {
 }
 
 // A place the title itself names ("Consumer Support Specialist - London",
-// "… (Berlin)"): the job is there, whatever the location fields add (verify
-// 第 13 轮: Remote + London with a US country slipped through).
+// "… (Berlin)") is where the job is — unless the location fields name a
+// concrete US place: then the title names the market served ("Social Media -
+// Japan Market" in San Francisco, verify 第 14 轮 P3). A structured US country
+// alone is not concrete (runway's London job carried one; verify 第 13 轮).
+const MARKET_RE = /\b(market|markets|region|localization|localisation)\b/i;
 function titlePlace(title) {
   const t = String(title || '');
   const m = t.match(/(?:\s[-–—|]\s*|[([])([^-–—|()[\]]{2,40})[)\]]?\s*$/);
-  return m ? m[1].trim() : null;
+  return m && !MARKET_RE.test(m[1]) ? m[1].trim() : null;
 }
 
 export function locationVerdict(job = {}, intent = {}) {
   const geo = intent.geographic_preference || {};
   const named = titlePlace(job.title);
   const namedKind = named ? classifyPlace(named) : 'unknown';
-  if (namedKind === 'foreign' || (namedKind === 'cn' && !(geo.countries_open_to || []).map((c) => String(c).toUpperCase()).includes('CN'))) {
+  const concreteUs = [job.location, ...(Array.isArray(job.locations) ? job.locations : [])].some((p) => classifyPlace(p) === 'us' && !REMOTE_RE.test(String(p)));
+  if (!concreteUs && (namedKind === 'foreign' || (namedKind === 'cn' && !(geo.countries_open_to || []).map((c) => String(c).toUpperCase()).includes('CN')))) {
     return { ok: false, reason: `location_mismatch:${named}` };
   }
   const openTo = new Set((geo.countries_open_to || [geo.primary_country || 'US']).map((s) => String(s).toUpperCase()));
