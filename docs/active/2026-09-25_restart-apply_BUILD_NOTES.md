@@ -11,9 +11,9 @@ Reads:
   - （第 2 次召唤）docs/active/2026-09-25_restart-apply_DESIGN.md 第 2 轮全文、docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮 V1-V13、VERIFY_REPORT §5
   - （第 3 次召唤）DESIGN 第 2 轮 §3/§4/§7/§10、VERIFY_REPORT 第 2-3 轮挂账（规则 6、P3 slug/锁、P4 跨午夜）
   - （第 4 次召唤 S5）DESIGN §10 S5 行 / §3 / §4 / §7、定稿 docs/specs/restart-apply.md、PRODUCT_SPEC 第 2 轮、VERIFY_REPORT 第 5 轮（RACE / PID 复用）
-Blocks: restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
+Blocks: restart-apply-3 方向预筛 / 年限口径 / release 任意链接的 verify 验收；restart-apply 小修包的 verify 验收；S1+S2 的 verify 验收；S3+S4 的 verify 验收；S5 的 verify 验收；lead 对真实家目录跑 backfill-legacy --apply 与 retire_jobs_db --apply
 Updated: 2026-09-27
-Iterations: 7
+Iterations: 8
 ---
 
 # BUILD_NOTES — restart-apply 小修包（4 项）
@@ -732,3 +732,46 @@ DESIGN 子任务进度：S1 七项全部完成；S2 除「`not_submitted:job_una
 > 红测试（两驱动各 5 条，先红后绿）：原样残留 → unknown、点 2 次；部分残留 → unknown、不点第 3 次；新字段 → needs_user、不算投过；第 1 次有补不上的 → 只点 1 次；守卫 7 种缺字段序列总点击 ≤2，且「第 2 次后判没投过」必须有第 1 次没列过的字段、「第 2 次后只列旧字段」必须 unknown。改动旧测试：「换着法子缺字段 → rate_limited」改为「补完再提交又报新字段 → needs_user、只点 2 次」；Greenhouse 替身把自定义题渲染成下拉，测试题改用它答得上的 Gender / Veteran status。
 > **代价**：第 2 次后只要页面还挂着已补过的字段就记 unknown（例如我们填的值没被接受），这类岗需要 lead 查邮箱确认；以前会一直重试到 5 次。
 > 结果：全量 `npm test` 串行连跑 3 次 **646/646**，role_guard_smoke / public_alpha_gate / 全部 `node --check` exit 0；真实家目录零写入。
+
+## 第 8 次召唤（restart-apply-3：方向预筛 / 年限口径 / release 任意链接）
+
+> 派遣依据：`docs/active/2026-09-27_restart-apply-3_TASK.md` Round 2 关卡（拍板人「行，先改，这两个先投」）。提交 `cf5375b`、`72597d8`、`9712a37` + 本文档提交，未推。标注同上：[实测] / [读码] / [猜]。
+
+### 实现摘要
+
+1. **方向预筛**（`cf5375b`）：新 `shared/function_prefilter.mjs`（约 75 行），`discover_candidates` 硬筛里排在排除词之后、地点 / 岗位类型之前，原因 `function_mismatch:<职能>`。只拦「标题明显是某个专业职能、且用户想要的词里没有这个职能」：工程、设计、研究、法务、IT 一律拦；财务、销售 AE、客服、数据、行政、招聘 / HR、临床、物流这几类，标题里同时出现用户自己的方向词（marketing / growth / content / GTM / partnerships / product …）或通用创业岗词（business operations / strategy & operations / chief of staff / founder's associate）就放行。认不出的标题、没写目标职能的用户一律放行给打分。名单公司同样适用。
+2. **年限口径**（`72597d8`）：`score_prompt.md` 新增「Years of experience」段（只看起步数，区间取下限；1-2 / 1-3 / 2 / 2+ 年不许扣任何分、不许判不合格），输出加 `years_required_min`、`reject_reasons`（不合格行必填）。硬规则层 `role_types.yearsOnlyRejectionConflict` + `store_scored_jobs`：不合格理由只有 `experience_years`（可带 `role_type`）且 JD 起步 <3 年（规则 `requiredYears` 读 JD；读不出才用打分器报的数）→ 整批拒收 `years_misjudged`，点名链接；不合格行缺 `reject_reasons` 也拒收。批次保持待交（和缺分拒收同一条路），主 agent 重打点名的行。SKILL.md 写明。
+3. **release 任意链接**（`9712a37`）：新 `shared/sourcing/release_source.mjs`（按链接的板 slug 取板、按岗位编号挑出，同板只取一次，公司名 = slug）+ dispatcher 源 `release` + `discover_candidates --release-url`（可重复）+ `hard_filter_dropped.json` 全量落盘。`stream_run next`：名单扫描 → 名单没遇到的放行链接直取（`release` 扫描）→ 轮转。放行链接没进闸的原因逐条记：`hard_filter:<原因>`、`fetch_failed:<错误>`、没找到。之后与其他岗同路：去重闸、打分、投前权威闸、唯一写账人；提交 ≤2 次的驱动守卫未动。
+
+### TDD 落地证据
+
+- 先红后绿 [实测]：`test/function_prefilter.test.mjs`（4 条：拦 60+ 真实 / 点名标题、放行 60+ 对口标题、别的用户不误伤、discover 漏斗记 function_mismatch）；`test/years_rule_scoring.test.mjs`（4 条：提示词口径、规则真值表、1-3 年只因年限 → 拒收且不写看过记录、重打后照常入库、缺 reject_reasons 拒收）；`test/release_direct.test.mjs`（6 条：按编号挑岗 / 同板一次、Lever / gh_jid / 板报错进 errors、真 dispatcher + 真 discover_candidates 替身 fetch、stream 端到端直取并投出且记账、名单岗 + 非名单岗混放、取不到 / 报错 / 被硬筛拦逐条说原因）。
+- 改动的旧测试：替身打分器与 `store_scored_seen` 的不合格行补 `reject_reasons`；`stream_run_harness` 的找岗替身认 `release` 来源、写 `hard_filter_dropped.json`。
+- 全量 `npm test` 串行连跑 3 次 **660/660**；role_guard_smoke / public_alpha_gate / 全部 `node --check` exit 0 [实测]。覆盖率：项目没有覆盖率工具，未测数字（与前几轮同）。
+- 拷贝家目录复跑 [实测]（`rsync` 拷贝，不含 chrome-profile；只读公开板接口）：名单 21 家 602 → 硬筛 45 → **31**，拦下 14 个全是客服 / 应付账款 / 设计 ×4 / 客户经理 / 行政 ×3 / IT / 研究实习 / 客户成功；verify 第 13 轮「应届能投 42」里对口的 17 个全部放行。轮转窗口（偏移 22050，同上次试跑）1000 → 硬筛 **204 → 102**。上次试跑实际打分的 49 个里 **23 个**会在硬筛就拦下（lead 数的方向不对口是 24），两个合格岗 Prior Labs Founder Associate、Sequence GTM Associate 放行。剩下 102 个里仍有一些方向偏的（生命科学编辑、医药广告、咨询、能源交易等）[我认为约 20 个]，按设计留给打分。
+- 两条待投链接 [实测，只读 GET]：`fetchReleased` 真网络取回 prior-labs「Founder Associate (NYC)」、sequence「GTM Associate」；在拷贝家目录上 `discover_candidates --sources release` 两条都过硬筛（0 拦）。
+
+### 遗留事项
+
+1. **偏离派遣单：function_mismatch 没写看过记录**。硬筛是确定性的、不花钱，每次重跑结果一样，方向改了自动重判；写进看过记录只会让 seen.jsonl 每个窗口多几十上百行，现有硬筛原因（排除词、地点、≥3 年）也都不写。若 lead 仍要写，请说，加一处即可。
+2. **提示词改了 → 打分依据版本变**：已有的「不合适」看过记录下次运行会重打一遍（今天那批约 90 个，一次运行的打分量）。这是「依据变则重看」的既定规则，不是 bug；年限误判的 7 个也因此会被重看。
+3. `reject_reasons` 现在是不合格行的必填项：主 agent 如果漏写，整批被拒、要补写后重交（错误信息点名链接）。这是有意的快速失败，代价是多一次往返。
+4. 方向预筛是标题词表，不是语义判断：「Customer Education Specialist」「Triage Associate」这类认不出的仍交给打分；词表新增职能需改 `function_prefilter.mjs` 并加测试。
+5. 真实家目录 `log/submissions.jsonl` 15:40 有一行 `reported_by_user`（creatify 手投记录），非本轮所写（本轮所有命令都指向临时目录或拷贝，唯一碰真网络的是两条链接的只读 GET）。
+
+### 交付自查清单
+
+- [x] TDD：三项均先写红测试再实现；全量串行 3 次 660/660；CI 另三步 exit 0。
+- [x] 不真投、不写真实 `~/.mrweirdo-jobs/`（find -mmin 核对，见遗留 5）、无绕过平台检测的改动；驱动与「提交 ≤2 次」守卫未改一行。
+- [x] 无吞异常：`release_source` 取板失败逐条 `reportError` 带链接；缺 `reportError` 直接抛错；非 GH/Ashby/Lever 链接抛错。
+- [x] 主流程冒烟（ci_smoke.main_chain「各平台找岗 → 投递」段）：stream 端到端替身测试覆盖 找岗 → 硬筛 → 去重闸 → 打分 → 投 → 记账 → 3 行报告。
+- [x] CHANGELOG 顶部已记三条；SKILL.md 与 references/run-and-database.md 已同步 release 与 reject_reasons 说明。
+- [ ] 覆盖率数字：项目无覆盖率工具，未提供。
+
+### 试过的错误方向
+
+1. **用「通用创业岗词」（operations / founding / generalist）给所有专业职能解围**：否决——「Founding Customer Success Manager」「Workplace Operations」会被放进来；改为只给财务 / 客服等「领域类」解围，且只认 business operations / strategy & operations / chief of staff / founder's associate 这几个明确的通用岗词。
+2. **年限硬规则直接在入库时把打分改判为合格**：否决——打分器因年限已经把 fit_score 压到 ≤4，入库层无法还原真实分数，改判等于替打分器编分；改为整批拒收、点名重打。
+3. **只凭打分理由文字（honest_reason / key_gaps 里出现 years）判断「因年限不合格」**：否决——不合格常有多个原因，文字里提到年限不等于只因年限；改为结构化 `reject_reasons`，只有「仅年限」才触发。
+4. **release 只对「不属于名单公司」的链接直取**：否决——名单公司那块板扫描失败时，放行的名单岗会被报成「没找到」；改为「名单扫描没遇到的放行链接一律直取」，覆盖两种情况。
+

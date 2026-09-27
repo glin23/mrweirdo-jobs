@@ -60,6 +60,25 @@ since shipped and now lives in `docs/archive/`; the current one is
 `docs/PRD-improvements.md`.
 
 ### Changed
+- **Direction pre-filter at discovery: `function_mismatch:<family>`** (2026-09-27,
+  restart-apply-3, 拍板人「行，先改」). A title that plainly names a specialist
+  function the user does not target (support / success, design, finance,
+  legal, recruiting / HR, sales AE, engineering, research, data, admin, IT,
+  clinical, logistics) is dropped before scoring. Marketing / growth / content /
+  community / GTM / product / operations / founder's-associate titles and any
+  title it cannot place still go to the scorer; a user with no target
+  functions is never filtered. Rotation window on a copy of the real home:
+  204 → 102 kept; 23 of the 49 jobs scored in the 2026-09-27 trial would now
+  be dropped for free, both fit ones still pass.
+- **JD years are read one way, at discovery and at scoring** (2026-09-27,
+  restart-apply-3). Only a stated minimum of 3+ years is not entry level;
+  "1-2 / 1-3 / 2 years" never lower a score. `score_prompt.md` adds
+  `years_required_min` and `reject_reasons` (required on every
+  `recommended: false` row); storage refuses a batch with a row turned down on
+  years alone whose JD asks for under 3 (`years_misjudged`), or a rejected row
+  without reasons — the batch stays pending for a re-score. Changing the
+  prompt changes the scoring basis, so earlier "not a fit" records are scored
+  once more.
 - **`new_grad_FT` means "a full-time role a new graduate can take"** (2026-09-26,
   restart-apply-2, 拍板人「3年以上的跳过」). Any non-senior full-time role
   (Senior / Sr. / Staff / Principal / Lead / Director / Head / VP / Chief;
@@ -106,6 +125,15 @@ since shipped and now lives in `docs/archive/`; the current one is
   history line failed it as `ledger_row_without_db_row`.
 
 ### Added
+- **`stream_run start --release <link>` takes any Greenhouse / Ashby job link**
+  (2026-09-27, restart-apply-3). A released link the list scan does not meet
+  is fetched by its job id from the public board API
+  (`shared/sourcing/release_source.mjs`, discovery source `release`), then goes
+  through the hard filter, dedupe gate, scoring, pre-dispatch guard and the one
+  ledger writer like any other job; company = board slug. Line 2 names every
+  released link that did not go out (`not found`, `fetch_failed:…`,
+  `hard_filter:…`, guard reasons). Discovery also writes
+  `hard_filter_dropped.json` (every drop with its reason).
 - **`submission_ledger.mjs correct`** (2026-09-26). Appends a correction line
   (`--of <line id> --url <its job link> --verdict not_submitted|unknown|submitted
   --evidence "…"`), never edits the original. Dry-run by default; the link must
