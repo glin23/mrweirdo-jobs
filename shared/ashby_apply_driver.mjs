@@ -40,13 +40,14 @@ import {
   confirmedCitiesFrom as routingConfirmedCities, mentionsConfirmedCity as routingMentionsConfirmedCity,
   deriveWorkAuthAnswers, withoutSponsorshipAnswer, workAuthBlockNote, workAuthGapFor,
   pickYearsOption, isCompanyCritiqueQuestion,
+  salaryNumberFor, isWorkLocationChoiceQuestion, pickWorkLocations,
 } from './answer_routing.mjs';
 import { socialAccountsAnswer } from './answer_templates.mjs';
 import { readDrafts, draftFor } from './agent_drafts.mjs';
 import { matchAnswerBucket } from './answer_buckets.mjs';
 import { submissionVerdict, captureEvidence, isSpamFlagged } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
-import { uploadSettled, clickReceived, clickVerdict, pageCall } from './page_signals.mjs';
+import { formSettled, clickReceived, clickVerdict, emptyRequiredFields, pageCall, ASHBY_FORM_TRAFFIC, ASHBY_SUBMIT_REQUEST } from './page_signals.mjs';
 import { dbPath } from './local_db.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -355,30 +356,45 @@ async function waitForAshbyForm(tab, timeoutMs = 25000) {
   return { ok: false, note: 'ashby_form_not_loaded', state: last };
 }
 
-// ---------- step: wait until an upload has really finished ----------
-// 真投 2026-09-27 (BUG_REPORT 第 2 章): a click made while the resume upload was
-// still in flight was dropped by Ashby without a trace. Before anything else is
-// clicked, the upload must be observably done (page_signals.uploadSettled).
-// Not confirmed within the window = the upload did not happen as far as we can
-// tell: the caller fails loudly, it does not click and hope.
-const UPLOAD_SETTLE_POLLS = 30; // × 1s
+// ---------- step: page-idle gate (uploads AND field autosaves) ----------
+// 真投 2026-09-27: a click made while the resume upload was still in flight was
+// dropped by Ashby without a trace (fa9c012 gated uploads). restart-apply-3
+// BUG_REPORT 第 2 章: the same gate in Ashby's front end also covers every text
+// box, which saves itself 500ms after typing (graphql ApiSetFormValue). Any save
+// in flight at click time → Ashby shows a fading toast and sends NOTHING.
+// So before every submit click (and after every upload) the page must be idle:
+//   - CDP half (cdp.mjs netidle): no form request in flight for IDLE_QUIET_MS —
+//     sees requests still in flight, which the page's own list cannot;
+//   - page half (formSettled): the count of finished form requests is the same
+//     as the previous round — catches a request that was already in flight
+//     before the CDP watch attached and finished during it.
+// Not idle within the deadline = fail loudly before clicking; never click and hope.
+const IDLE_QUIET_MS = 1500; // > Ashby's 500ms autosave debounce
+const IDLE_DEADLINE_MS = 30000;
+const IDLE_MAX_ROUNDS = 20;
 
 async function uploadMark(tab) {
   const m = await evalInTab(tab, '/*mrw_upload_mark*/ ({ since: performance.now() })');
   return typeof m?.since === 'number' ? m.since : null;
 }
 
-async function waitUploadSettled(tab, since) {
+async function waitPageIdle(tab, { since = 0, needUpload = false } = {}) {
+  const started = Date.now();
   let prev = -1;
   let last = null;
-  for (let poll = 1; poll <= UPLOAD_SETTLE_POLLS; poll += 1) {
-    await sleep(1000);
-    last = await evalInTab(tab, pageCall(uploadSettled, since, prev));
-    if (last?.settled === true) return { ok: true, polls: poll, last };
+  let net = null;
+  for (let round = 1; round <= IDLE_MAX_ROUNDS; round += 1) {
+    const left = IDLE_DEADLINE_MS - (Date.now() - started);
+    if (left <= 0) break;
+    const r = cdp('netidle', tab, String(IDLE_QUIET_MS), String(Math.max(left, IDLE_QUIET_MS)), ASHBY_FORM_TRAFFIC);
+    try { net = JSON.parse(r.stdout); } catch { net = { ok: false, why: 'netidle_output_unreadable', detail: (r.stderr || '').slice(0, 200) }; }
+    last = await evalInTab(tab, pageCall(formSettled, since, prev, needUpload));
     if (last?.settled === null) break; // resource list full: cannot be confirmed
+    if (net?.ok === true && last?.settled === true) return { ok: true, rounds: round, last };
     prev = typeof last?.count === 'number' ? last.count : -1;
+    if (net?.ok !== true) await sleep(500); // e.g. connection trouble: do not spin
   }
-  return { ok: false, last };
+  return { ok: false, last, net };
 }
 
 // ---------- step: upload resume + dispatch React change ----------
@@ -405,9 +421,9 @@ async function uploadResume(tab) {
     })()
   `);
   if (!r?.ok) return r;
-  const settled = await waitUploadSettled(tab, since);
-  if (!settled.ok) return { ok: false, note: 'resume_upload_not_confirmed', attached: r, upload: settled.last };
-  return { ...r, upload_polls: settled.polls };
+  const settled = await waitPageIdle(tab, { since, needUpload: true });
+  if (!settled.ok) return { ok: false, note: 'resume_upload_not_confirmed', attached: r, upload: settled.last, net: settled.net };
+  return { ...r, upload_rounds: settled.rounds };
 }
 
 async function uploadCoverLetter(tab, missingLabel = '') {
@@ -452,7 +468,7 @@ async function uploadCoverLetter(tab, missingLabel = '') {
   if (since === null) return { ok: false, note: 'upload_mark_unreadable', manual_required: true, question: missingLabel };
   const upload = cdp('upload', tab, found.sel, COVER_LETTER);
   if (!upload.stdout.includes('"ok":true')) return { ok: false, note: 'cover_letter_upload_failed', manual_required: true, detail: upload.stdout || upload.stderr, question: missingLabel };
-  const settled = await waitUploadSettled(tab, since);
+  const settled = await waitPageIdle(tab, { since, needUpload: true });
   if (!settled.ok) return { ok: false, note: 'cover_letter_upload_not_confirmed', manual_required: true, detail: settled.last, question: missingLabel };
   coverLetterUploaded = true;
   return { ok: true, mode: 'cover_letter_upload', value: COVER_LETTER, selector: found.sel };
@@ -489,10 +505,12 @@ let ACTIVE_TAB = null;
 let SUBMIT_CLICKED = false;
 
 // Click + watch the network in one CDP session (cdp.mjs clickwatch): requests
-// sent after the click are seen even while still in flight. Unreadable output
-// = click state unknown, never "not clicked".
-async function clickAndWatch(tab, js, windowMs) {
-  const r = cdp('clickwatch', tab, String(windowMs), js);
+// sent after the click are seen even while still in flight. The watch waits for
+// the submission request itself (--only): an autosave right after the click is
+// not the click being received (restart-apply-3). Unreadable output = click
+// state unknown, never "not clicked".
+async function clickAndWatch(tab, js, windowMs, pattern) {
+  const r = cdp('clickwatch', tab, String(windowMs), '--only', pattern, js);
   try {
     const out = JSON.parse(r.stdout);
     return { click: out.click, watch: out.watch };
@@ -516,7 +534,7 @@ async function submitAndCheck(tab) {
       btn.click();
       return { ok: true, mark };
     })()
-  `, CLICK_WATCH_MS);
+  `, CLICK_WATCH_MS, ASHBY_SUBMIT_REQUEST);
   if (click?.ok !== true || !click.mark) return { clicked: false, click, watch };
   SUBMIT_CLICKED = true;
   await sleep(Math.max(0, 7000 - (Date.now() - started)));
@@ -550,7 +568,7 @@ async function readSubmitPage(tab) {
   return { ...page, verdict: submissionVerdict({ bodyText: page.bodyText, url: page.url }) };
 }
 
-async function fillTextInQuestion(tab, question, value) {
+async function fillTextInQuestion(tab, question, value, opts = {}) {
   const r = await evalInTab(tab, `
     (() => {
       const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
@@ -566,7 +584,7 @@ async function fillTextInQuestion(tab, question, value) {
         const lbl = inp.id ? document.querySelector('label[for="' + CSS.escape(inp.id) + '"]') : null;
         if (lbl && norm(lbl.innerText).includes(targetQ)) {
           const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id;
-          return { ok:true, sel, via:'label_for' };
+          return { ok:true, sel, via:'label_for', type: String(inp.type || 'text').toLowerCase() };
         }
       }
 
@@ -583,14 +601,38 @@ async function fillTextInQuestion(tab, question, value) {
         if (!inp) continue;
         if (!inp.id) inp.id = 'mrw_txt_' + Math.random().toString(36).slice(2,8);
         const sel = /^[0-9]/.test(inp.id) ? '[id="' + inp.id + '"]' : '#' + inp.id;
-        return { ok:true, sel, via:'smallest_container', container_size: norm(c.innerText).length };
+        return { ok:true, sel, via:'smallest_container', container_size: norm(c.innerText).length, type: String(inp.type || 'text').toLowerCase() };
       }
       return { ok:false };
     })()
   `);
   if (!r.ok) return r;
-  cdp('typetext', tab, r.sel, value);
-  return { ok: true, mode: 'text_fill', value };
+  // A number box takes digits only (restart-apply-3: Reevo's salary box got an
+  // English sentence, stayed empty, and the driver said ok). `numberFor` gives
+  // the number when the caller has one; otherwise a non-numeric value is refused.
+  let typed = value;
+  if (r.type === 'number' && !/^\s*-?\d+(?:\.\d+)?\s*$/.test(String(value))) {
+    const n = typeof opts.numberFor === 'function' ? opts.numberFor() : { ok: false, note: 'number_field_needs_number' };
+    if (!n?.ok) return { ok: false, note: n?.note || 'number_field_needs_number', input_type: 'number', detail: n };
+    typed = n.value;
+  }
+  const put = typeVerified(tab, r.sel, typed);
+  if (!put.ok) return { ...put, input_type: r.type };
+  return { ok: true, mode: r.type === 'number' ? 'number_fill' : 'text_fill', value: typed };
+}
+
+// Types through cdp.mjs typetext and trusts only the value read back from the
+// box. Formatted boxes (phone masks) keep the digits but not the punctuation:
+// the same digits count as in.
+function typeVerified(tab, sel, value) {
+  const r = cdp('typetext', tab, sel, value);
+  let out;
+  try { out = JSON.parse(r.stdout); } catch { return { ok: false, note: 'typetext_output_unreadable', detail: (r.stderr || r.stdout || '').slice(0, 200) }; }
+  if (out?.verified === true) return { ok: true };
+  const digits = (x) => String(x ?? '').replace(/\D/g, '');
+  const want = String(value);
+  if (/^[\d\s()+.-]+$/.test(want) && digits(want) && digits(out?.value) === digits(want)) return { ok: true };
+  return { ok: false, note: 'value_not_accepted', got: typeof out?.value === 'string' ? out.value.slice(0, 80) : null };
 }
 
 // ---------- step: answer a missing field by keyword ----------
@@ -652,6 +694,14 @@ async function answerMissing(tab, missingLabel) {
     return await uploadCoverLetter(tab, missingLabel);
   }
 
+  // "Which location(s) would you be open to working from?" as checkboxes /
+  // radios (restart-apply-3 Reevo): a set of places, not a yes/no. Without a
+  // choice widget (text box / dropdown) it falls through to the buckets below.
+  if (isWorkLocationChoiceQuestion(missingLabel)) {
+    const loc = await answerWorkLocationChoices(tab, missingLabel);
+    if (loc) return loc;
+  }
+
   if (/(?:authorized|eligible|right|legally).{0,80}work.{0,80}without.{0,50}sponsor|without.{0,50}sponsor.{0,80}(?:work|employment|authorization)|unrestricted.{0,50}(?:work|employment|authorization)/i.test(ml)) {
     const withoutSponsorshipAns = withoutSponsorshipAnswer(PROFILE); // ADR-12 R2 + 关卡 2 ③: 三态布尔说了算，与 Greenhouse 逐字同款；未知 → 停这一行，不再嗅 visa_status、不默认
     if (!withoutSponsorshipAns) return { ok: false, note: workAuthBlockNote(PROFILE, 'sponsorship_future_required'), pending_for_main_claude: true, question: missingLabel };
@@ -690,7 +740,7 @@ async function answerMissing(tab, missingLabel) {
   const draft = draftFor(AGENT_DRAFTS, APPLY_URL, missingLabel);
   if (draft) {
     const filled = await typeIntoQuestion(tab, missingLabel, draft);
-    return filled.ok ? { ...filled, mode: 'agent_draft', value: draft, source: 'agent_draft' } : { ...filled, note: 'agent_draft_field_not_found' };
+    return filled.ok ? { ...filled, mode: 'agent_draft', value: draft, source: 'agent_draft' } : { ...filled, note: filled.note === 'value_not_accepted' ? 'value_not_accepted' : 'agent_draft_field_not_found' };
   }
   // An opinion about the company's own channels: no profile field answers it.
   // Pend it for the main agent to draft — never a template, never the user first.
@@ -1028,10 +1078,70 @@ async function answerMissing(tab, missingLabel) {
   }
 
   if (bucket.action === 'fill_text_in_question') {
-    return await fillTextInQuestion(tab, bucket.q, bucket.value);
+    const numberFor = bucket.numberFrom === 'salary' ? () => salaryNumberFor(missingLabel, PROFILE, ESSAY_PROFILE) : undefined;
+    const filled = await fillTextInQuestion(tab, bucket.q, bucket.value, { numberFor });
+    // No number the profile can stand behind: a fact only the user has.
+    if (!filled.ok && numberFor && /^salary_/.test(filled.note || '')) return { ...filled, pending_for_main_claude: true, question: missingLabel };
+    return filled;
   }
 
   return { ok: false, note: 'unhandled_action' };
+}
+
+// ---------- which-location(s) choice question ----------
+// Reads the options under the question, decides the places from the profile's
+// relocation rules (answer_routing.pickWorkLocations), clicks exactly those and
+// reads back that they are checked. null = no choice widget under the question.
+async function answerWorkLocationChoices(tab, questionText) {
+  const targetQ = questionText.toLowerCase().replace(/\s+/g, ' ').slice(0, 56);
+  const found = await evalInTab(tab, `
+    (() => { /* mrw_location_choices */
+      const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+      const targetQ = ${JSON.stringify(targetQ)};
+      const cs = [...document.querySelectorAll("fieldset, div")].filter(c => norm(c.innerText).includes(targetQ)
+        && c.querySelectorAll("input[type=radio], input[type=checkbox]").length >= 1);
+      cs.sort((a, b) => a.innerText.length - b.innerText.length);
+      const c = cs[0];
+      if (!c) return { ok: false, note: 'no_choice_container' };
+      const inputs = [...c.querySelectorAll("input[type=radio], input[type=checkbox]")];
+      const labelOf = (r) => (r.closest('label')?.innerText || (r.id ? c.querySelector('label[for="' + CSS.escape(r.id) + '"]')?.innerText : '') || r.nextElementSibling?.innerText || r.value || '').trim();
+      return { ok: true, type: inputs[0].type, labels: inputs.map(labelOf).filter(Boolean) };
+    })()
+  `);
+  if (!found?.ok || !Array.isArray(found.labels) || !found.labels.length) return null;
+  const decision = pickWorkLocations(found.labels, { searchIntent: SEARCH_INTENT, profile: PROFILE, jobLocation: JOB_LOCATION, questionText });
+  if (!decision.ok) return { ok: false, note: decision.note, pending_for_main_claude: true, question: questionText, options: found.labels, unconfirmed: decision.unconfirmed };
+  const picks = found.type === 'radio' ? decision.picks.slice(0, 1) : decision.picks;
+  const clicked = await evalInTab(tab, `
+    (async () => { /* mrw_click_choices */
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+      const targetQ = ${JSON.stringify(targetQ)};
+      const picks = ${JSON.stringify(picks)};
+      const cs = [...document.querySelectorAll("fieldset, div")].filter(c => norm(c.innerText).includes(targetQ)
+        && c.querySelectorAll("input[type=radio], input[type=checkbox]").length >= 1);
+      cs.sort((a, b) => a.innerText.length - b.innerText.length);
+      const c = cs[0];
+      if (!c) return { ok: false, note: 'no_choice_container' };
+      const inputs = [...c.querySelectorAll("input[type=radio], input[type=checkbox]")];
+      const labelOf = (r) => (r.closest('label')?.innerText || (r.id ? c.querySelector('label[for="' + CSS.escape(r.id) + '"]')?.innerText : '') || r.nextElementSibling?.innerText || r.value || '').trim();
+      const picked = [];
+      for (const want of picks) {
+        const inp = inputs.find((r) => norm(labelOf(r)) === norm(want));
+        if (!inp) return { ok: false, note: 'choice_not_found', want, picked };
+        if (!inp.checked) {
+          const lbl = inp.id ? c.querySelector('label[for="' + CSS.escape(inp.id) + '"]') : null;
+          (lbl || inp).click();
+          await sleep(150);
+        }
+        if (!inp.checked) return { ok: false, note: 'choice_not_checked', want, picked };
+        picked.push(labelOf(inp));
+      }
+      return { ok: true, picked };
+    })()
+  `);
+  if (!clicked?.ok) return { ok: false, note: clicked?.note || 'choice_click_failed', detail: clicked, options: found.labels };
+  return { ok: true, mode: 'location_choices', picked: clicked.picked, value: picks.join(' / '), source: 'derived' };
 }
 
 // ---------- radio multichoice handler ----------
@@ -1124,7 +1234,8 @@ async function typeIntoQuestion(tab, questionText, text) {
     })()
   `);
   if (!f.ok) return f;
-  cdp('typetext', tab, f.sel, text);
+  const put = typeVerified(tab, f.sel, text);
+  if (!put.ok) return put;
   return { ok: true, mode: 'long_text', value: text, answer_len: text.length };
 }
 
@@ -1249,6 +1360,16 @@ async function main() {
   // request followed the click — a hint for the lead's inbox check only; no
   // decision reads it and nothing is ever clicked again because of it.
   const submitOnce = async (attempt) => {
+    // Page-idle gate before EVERY click (the resubmit too: each answer typed
+    // after the first click autosaves the same way). Not idle → nothing is
+    // clicked; before the first click that is a pre-submit failure, and before
+    // the second the first click was already refused with a missing-field list.
+    const idle = await waitPageIdle(tab);
+    if (!idle.ok) {
+      const ev = await pageEvidence(tab, 'before_submit');
+      await closeTab(tab);
+      emitOutcome({ outcome: 'crashed', reason: 'form_saves_not_settled', detail: { last: idle.last, net: idle.net }, attempt, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
+    }
     const sent = await submitAndCheck(tab);
     if (!sent.clicked) {
       const buttonAbsent = sent.click?.ok === false && sent.click.note === 'no_submit_btn';
@@ -1268,9 +1389,27 @@ async function main() {
       await sleep(3000);
       page = await readSubmitPage(tab);
     }
-    const silent = page.missing.length === 0 && page.verdict.verdict === 'unknown';
-    const received = silent ? clickVerdict(sent.watch, await evalInTab(tab, pageCall(clickReceived, sent.mark))) : { registered: true, via: 'page_answered' };
+    // Received = the submission request itself was sent, or the page moved to
+    // a new document (restart-apply-3: autosaves after the click do not count).
+    const received = clickVerdict(sent.watch, await evalInTab(tab, pageCall(clickReceived, sent.mark, ASHBY_SUBMIT_REQUEST)), ASHBY_SUBMIT_REQUEST);
     return { ...page, received };
+  };
+  // A click that sent no submission request, on a page whose required fields
+  // are still empty, submitted nothing: Ashby's server answers such a form with
+  // a missing-field list, and no request reached it. Both halves are needed —
+  // no submission request alone could be one sent after the watch window;
+  // empty required fields alone prove nothing about a request in flight.
+  // Anything unreadable → null, and the caller stays at unknown.
+  const notSentEvidence = async (res) => {
+    if (res.received?.registered !== false) return null;
+    const req = await evalInTab(tab, pageCall(emptyRequiredFields));
+    if (req?.ok !== true || !Array.isArray(req.fields) || req.fields.length === 0) return null;
+    return req.fields;
+  };
+  const emitNotSent = async (res, requiredEmpty, attempt) => {
+    const ev = await pageEvidence(tab, 'after_submit', 'not_submitted');
+    await closeTab(tab);
+    emitOutcome({ outcome: 'not_submitted', reason: 'submit_request_not_sent', submit_request_seen: false, required_empty: requiredEmpty, received: res.received, page_verdict: res.verdict, attempt, job_id: JOB_ID, url: APPLY_URL, post_url: res.url, evidence: ev, answers: ANSWERS });
   };
   // Fields this run has answered (normalized labels) — the only evidence that a
   // page listing "missing" fields after a resubmit is a real rejection and not
@@ -1366,7 +1505,10 @@ async function main() {
       // The page never answered this click. Whatever the network watch saw,
       // it is never clicked again (lead 裁决, verify 第 20 轮: three rounds of
       // re-click judgement each had a duplicate-submission hole). Unknown =
-      // may have submitted; lead checks the inbox and corrects the ledger.
+      // may have submitted; lead checks the inbox and corrects the ledger —
+      // unless the page itself proves nothing was sent (notSentEvidence).
+      const requiredEmpty = await notSentEvidence(res);
+      if (requiredEmpty) await emitNotSent(res, requiredEmpty, attempt);
       const ev = await pageEvidence(tab, 'after_submit', 'unknown');
       emitOutcome({ outcome: 'unknown', reason: 'no_errors_no_success', verdict: res.verdict, received: res.received, snippet: res.snippet, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }
@@ -1374,7 +1516,10 @@ async function main() {
       // Every field still listed is one we answered before this click: either
       // the page rejected our answers again, or the resubmit is still in flight
       // and the previous errors are still on screen. Cannot tell → may have
-      // submitted; never clicked a third time.
+      // submitted; never clicked a third time. Unless no submission request
+      // left and required fields are still empty: then nothing was sent.
+      const requiredEmpty = await notSentEvidence(res);
+      if (requiredEmpty) await emitNotSent(res, requiredEmpty, attempt);
       const ev = await pageEvidence(tab, 'after_submit', 'unknown');
       emitOutcome({ outcome: 'unknown', reason: 'resubmit_page_lists_only_answered_fields', verdict: res.verdict, stale_missing: res.missing, received: res.received, tab_id: tab, job_id: JOB_ID, url: APPLY_URL, evidence: ev, answers: ANSWERS });
     }

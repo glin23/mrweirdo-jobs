@@ -188,6 +188,29 @@ since shipped and now lives in `docs/archive/`; the current one is
   `shared/sourcing/data/watchlist_ai_video.json` (not applied automatically).
 
 ### Fixed
+- **Ashby waits until every field has saved before clicking Submit, and only the
+  submission request counts as "received"** (2026-09-27, restart-apply-3
+  BUG_REPORT). Ashby saves each text box 500ms after typing; a click while any
+  save was in flight sent nothing (Prior Labs, Rillet — about half of Ashby
+  jobs). One page-idle gate now runs after every upload and before every
+  Submit click: no form request in flight for 1.5s (new `cdp.mjs netidle`,
+  read-only network watch) and the count of finished form requests stable;
+  not idle in 30s is `crashed / form_saves_not_settled`, nothing clicked. The
+  click watch waits for `ApiSubmitSingleApplicationFormAction` /
+  `ApiSubmitMultipleFormsAction` (`clickwatch --only`); autosaves no longer
+  count. No submission request + required fields still empty on the page is
+  `not_submitted / submit_request_not_sent` (not an attempt); anything less
+  certain stays `unknown`. The ≤2-click guard is unchanged.
+- **Ashby answers "which location(s)" checkbox questions and stops typing text
+  into number boxes** (2026-09-27, restart-apply-3 Reevo). Location options are
+  picked by the profile's relocation rules ("Both" when every place is
+  covered; a foreign or unknown place goes to the user). A number-only salary
+  box gets the profile's salary number only when its unit matches the question
+  (an hourly figure is never turned into a base salary — asked instead). Every
+  typed answer is read back from the box; a value that did not go in is
+  "could not fill", not success. The ledger and the run report now name the
+  page's missing fields whatever the driver exit called them (`missing` /
+  `still_missing`).
 - **Ashby waits for the resume upload before clicking Submit; every driver clicks
   a silent Submit only once** (2026-09-27, 真投 BUG_REPORT 第 2 章 + verify 第
   19-20 轮). Ashby clicks only after the upload is observably done (S3 upload +

@@ -111,7 +111,8 @@ export function buildAnswerBuckets(missingLabel, ctx = {}) {
     // residence/transport fact (isSpecificCityLogisticsFact lets it through), so answer
     // with the user's base city. fill_location_combobox falls back to a text fill.
     { match: /which (city|state).{0,40}(work|plan)|city\s*\/\s*state.{0,25}(work|plan|based)|city and state.{0,25}(work|plan|based)|where.{0,20}plan.{0,15}work/i, action: 'fill_location_combobox', q: missingLabel, value: cityFull },
-    { match: /compensation|salary|pay expectation|expected pay|expected compensation/i, action: 'fill_text_in_question', q: missingLabel, value: compensationExpectation },
+    // numberFrom: a number-only box gets the profile's salary number instead (restart-apply-3 Reevo).
+    { match: /compensation|salary|pay expectation|expected pay|expected compensation/i, action: 'fill_text_in_question', q: missingLabel, value: compensationExpectation, numberFrom: 'salary' },
     { match: /linkedin/i, action: 'fill_text_in_question', q: missingLabel, value: linkedin },
     { match: /portfolio|website/i, action: 'fill_text_in_question', q: missingLabel, value: personal.portfolio || linkedin },
     // Major / field of study — tested BEFORE university/school so "major" wins.

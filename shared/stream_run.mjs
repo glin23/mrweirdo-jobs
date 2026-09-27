@@ -689,7 +689,11 @@ function report(st, rows, lines, unscored) {
     : `投出 ${submitted.length} 个${submitted.length ? `：${submitted.join('、')}` : ''}${st.held.length ? `；名单公司 ${st.held.length} 个合格、等你过目（你手投，或说「投」+链接我来投）：${st.held.map((h) => `${h.company}·${h.title} ${h.apply_url} `).join('、')}` : ''}`;
   const parts = [];
   if (uncertain.length) parts.push(`${uncertain.length} 个判不确定（截图：${uncertain.map((e) => e.evidence?.path || '无截图').join('、')}，请你看一眼）`);
-  if (needsInfo.length) parts.push(`${needsInfo.length} 个卡在缺信息`);
+  // Name the fields the page asked for (restart-apply-3: 「卡在缺信息」 alone left the
+  // user guessing). At most 3 per job, each cut at 40 characters.
+  const gapOf = (e) => (Array.isArray(e.missing) && e.missing.length
+    ? ` 缺：${e.missing.slice(0, 3).map((m) => String(m).slice(0, 40)).join(' / ')}${e.missing.length > 3 ? ` 等 ${e.missing.length} 项` : ''}` : '');
+  if (needsInfo.length) parts.push(`${needsInfo.length} 个卡在缺信息（${needsInfo.map((e) => `${name(e)}${gapOf(e)}`).join('、')}）`);
   if (preSubmit.length) parts.push(`${preSubmit.length} 个表单没打开（没点提交，下次还能再试）`);
   if (spamFlagged.length) parts.push(`${spamFlagged.length} 个被平台当成垃圾申请拦下，没收到（${spamFlagged.map((e) => `${name(e)} 截图： ${e.evidence?.path || '无截图'} `).join('、')}；不占这家的名额，但不会自动重投，你可以手投）`);
   const extras = [];

@@ -3,10 +3,11 @@
 // 在浏览器里跑的就是这里被测的同一份函数源码（fn.toString() 注入），不是副本。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { uploadSettled, clickReceived, pageCall } from '../shared/page_signals.mjs';
+import { formSettled, clickReceived, pageCall } from '../shared/page_signals.mjs';
 
 const perf = (entries, timeOrigin = 1000) => ({ timeOrigin, getEntriesByType: (t) => (t === 'resource' ? entries : []) });
 const req = (name, startTime, responseEnd = startTime + 50) => ({ name, startTime, responseEnd });
+const uploadSettled = (p, since, prev) => formSettled(p, since, prev, true); // the upload half of the page-idle gate
 const S3 = 'https://loaded-files-ashby.s3.us-east-1.amazonaws.com/abc?X-Amz-Signature=1';
 const GQL = 'https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiSetFile';
 

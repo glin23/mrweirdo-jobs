@@ -39,6 +39,8 @@ function cdp(...args) {
     }
   }
   if (args[0] === 'goto') return { stdout: '{"id":"tab-under-test"}', stderr: '' };
+  // typetext reads the value back (cdp.mjs); by default the page took it.
+  if (args[0] === 'typetext') return { stdout: JSON.stringify({ ok: true, value: args[3], verified: true }), stderr: '' };
   return { stdout: '{"ok":true}', stderr: '' };
 }
 // Scriptable eval: rules match a distinctive substring of the injected JS so a
@@ -52,12 +54,13 @@ async function evalInTab(tab, js) {
 }
 // emitOutcome is the driver's ONLY exit (ADR-15). Under test it validates via
 // the real contract, records, and throws instead of process.exit-ing.
-async function clickAndWatch(tab, js, windowMs) {
+async function clickAndWatch(tab, js, windowMs, pattern) {
   // The click JS goes to the eval rules as before; the network watch that rides
-  // along is __MRW_WATCH (default: one request seen after the click).
+  // along is __MRW_WATCH (default: the submission request seen after the click).
+  (globalThis.__MRW_CLICKWATCH_ARGS ||= []).push({ windowMs, pattern });
   const click = await evalInTab(tab, js);
   const w = globalThis.__MRW_WATCH;
-  const watch = typeof w === 'function' ? w(click) : (w ?? { ok: true, requests: [{ url: 'https://under-test/after-click', method: 'POST', ms: 5 }], window_ms: 5 });
+  const watch = typeof w === 'function' ? w(click) : (w ?? { ok: true, requests: [{ url: 'https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiSubmitSingleApplicationFormAction', method: 'POST', ms: 5 }], window_ms: 5 });
   return { click, watch };
 }
 import { writeFileSync as __writeFileSync } from 'node:fs';

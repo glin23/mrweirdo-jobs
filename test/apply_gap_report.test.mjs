@@ -744,3 +744,19 @@ test('every NOTE_CATEGORY key is a note some driver actually emits', () => {
     );
   }
 });
+
+test('apply_gap_report（restart-apply-3 Reevo）：城市勾选题问地点、数字薪资题问用户，stuck 出口的 missing 也列出来', () => {
+  const LOC = 'This role is primarily in-office. Which location(s) would you be open to working from?';
+  const SAL = 'What are your base salary expectations for this position?';
+  const report = runGapReport('mrw-gap-reevo-', { work_authorization: { salary_expectation_usd: '$20/hr' } }, [
+    {
+      outcome: 'needs_user', reason: 'essay_pending', job_id: 1201, company: 'Reevo',
+      pending: [{ question: LOC, note: 'work_location_needs_user' }, { question: SAL, note: 'salary_unit_mismatch' }],
+      still_missing: [LOC, SAL],
+    },
+    { outcome: 'needs_user', reason: 'stuck_on_same_missing', job_id: 1202, company: 'Reevo', missing: ['Why Reevo zz1?'] },
+  ]).report;
+  assert.equal(categoryOf(report, LOC), 'user_work_location_commitment');
+  assert.equal(categoryOf(report, SAL), 'unknown_user_fact', 'an hourly number is not an annual salary: ask, never "fill from profile"');
+  assert.ok(categoryOf(report, 'Why Reevo zz1?'), 'the stuck exit\'s missing list reaches the report');
+});

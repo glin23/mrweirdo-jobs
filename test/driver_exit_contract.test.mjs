@@ -69,7 +69,7 @@ const ashbyBaseRules = () => ([
   { match: 'has_resume', result: { ready: 'complete', has_resume: true, input_count: 9, url: 'x', title: 't', body_text: '' } },
   { match: 'mrw_upload_mark', result: { since: 0 } },
   { match: 'react_unmounted', result: { ok: true, files: 1, name: 'resume.pdf' } },
-  { match: 'function uploadSettled', result: { settled: true, why: 'quiet', count: 3 } },
+  { match: 'function formSettled', result: { settled: true, why: 'quiet', count: 3 } },
   { match: 'mrw_phone_temp', result: { found: false } },
   { match: 'btn.click()', result: CLICK_OK },
   { match: 'function clickReceived', result: { registered: true, via: 'request_after_click' } },

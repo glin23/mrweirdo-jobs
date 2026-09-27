@@ -134,6 +134,9 @@ export function recordFill(answers, entry) {
 //     unknown:submit_button_gone_after_click (not listed here → may have
 //     submitted), because the page may have moved on after receiving it
 //     (verify 第 19 轮 P2 ②).
+//   crashed:form_saves_not_settled   ashby main() page-idle gate, right before a
+//     submit click; that click never happens. Before the 2nd click it can fire
+//     only after the 1st was refused with a missing-field list (restart-apply-3).
 // Lever's pre-click needs_user / captcha_blocked exits are deliberately NOT
 // listed: the key has no ATS, and the same keys (e.g. needs_user:
 // cover_letter_required_not_generated) are emitted by greenhouse AFTER a click.
@@ -148,7 +151,25 @@ export const PRE_SUBMIT_EXITS = new Set([
   'crashed:resume_upload_fail',
   'crashed:resume_storage_timeout',
   'crashed:submit_button_not_found',
+  'crashed:form_saves_not_settled',
 ]);
+
+// Ashby (restart-apply-3 BUG_REPORT 第 3 章): a click after which the network
+// watch saw NO submission request, on a page whose required fields are still
+// empty. Not an attempt: nothing left the browser, and the server would have
+// refused the form anyway. Needs BOTH pieces of evidence on the outcome.
+export const SUBMIT_NOT_SENT_REASON = 'submit_request_not_sent';
+
+// The page's own required-field error list, whatever the exit named it:
+// Ashby's stuck exit says `missing`, the essay_pending exits `still_missing`,
+// Lever `last_missing`. Every reader goes through here (restart-apply-3: a
+// reader of still_missing alone saw Reevo's four missing fields as none).
+export function pageMissingOf(o) {
+  for (const key of ['missing', 'still_missing', 'last_missing']) {
+    if (Array.isArray(o?.[key]) && o[key].length > 0) return o[key];
+  }
+  return [];
+}
 
 // apply_batch's synthesized line for a row that failed pre-dispatch validation:
 // no driver ran at all.
@@ -166,6 +187,8 @@ export const SPAM_FLAGGED_MAY_HAVE_SUBMITTED = false;
 // The ONE place "may this attempt have reached the company?" is decided
 // (ledger field may_have_submitted = the single 投过 predicate). Order:
 //   1. pre-dispatch validation failure → false (no driver ran)
+//   1b. platform_spam_flagged with a not_submitted verdict → false;
+//       submit_request_not_sent with both pieces of evidence → false
 //   2. a page verdict is present (the post-submit page was read) → true
 //   3. "<outcome>:<reason>" in PRE_SUBMIT_EXITS → false
 //   4. needs_user / rate_limited carrying the page's required-field error list
@@ -180,13 +203,14 @@ export function deriveMayHaveSubmitted(o) {
   // (success text too) is unknown and counts as maybe submitted (verify 第 17 轮 P2).
   if (valid.outcome === 'not_submitted' && valid.reason === SPAM_FLAGGED_REASON
     && (valid.verdict?.verdict ?? valid.verdict) === 'not_submitted') return SPAM_FLAGGED_MAY_HAVE_SUBMITTED;
+  if (valid.outcome === 'not_submitted' && valid.reason === SUBMIT_NOT_SENT_REASON
+    && valid.submit_request_seen === false && Array.isArray(valid.required_empty) && valid.required_empty.length > 0) return false;
   if (valid.verdict != null) return true;
   if (PRE_SUBMIT_EXITS.has(`${valid.outcome}:${valid.reason ?? ''}`)) return false;
   // Submit was clicked, but the page stayed on the form listing required-field
   // errors → the form was rejected; nothing reached the company. Judged on the
   // page evidence, not the reason string (greenhouse builds reasons
   // dynamically). No error list = no evidence = stays true.
-  const pageErrors = valid.missing ?? valid.still_missing ?? valid.last_missing;
-  if (['needs_user', 'rate_limited'].includes(valid.outcome) && Array.isArray(pageErrors) && pageErrors.length > 0) return false;
+  if (['needs_user', 'rate_limited'].includes(valid.outcome) && pageMissingOf(valid).length > 0) return false;
   return true;
 }

@@ -132,3 +132,83 @@ test('clickwatch：窗口内 Chrome 断开 → 判不出，不许报 ok + 0 条�
     rmSync(profile, { recursive: true, force: true });
   }
 });
+
+// restart-apply-3（Prior Labs / Rillet）：Ashby 打字后 500ms 自动保存；保存在途时点提交，前端不发提交请求。
+// ① netidle 要等到在途的保存真正回来；② clickwatch --only 只认提交请求，自动保存不算「接住」。
+const AUTOSAVE_PAGE = `<!doctype html><html><body><input id="q"><button id="save">Submit Application</button><button id="both">Send</button>
+<script>
+let t = null;
+document.getElementById('q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => fetch('/api/non-user-graphql?op=ApiSetFormValue', { method: 'POST', body: 'v' }), 500); });
+document.getElementById('save').addEventListener('click', () => { fetch('/api/non-user-graphql?op=ApiSetFormValue', { method: 'POST', body: 'v' }); });
+document.getElementById('both').addEventListener('click', () => { fetch('/api/non-user-graphql?op=ApiSetFormValue', { method: 'POST' }); setTimeout(() => fetch('/api/non-user-graphql?op=ApiSubmitSingleApplicationFormAction', { method: 'POST' }), 300); });
+</script></body></html>`;
+
+test('netidle 等到在途保存回来；clickwatch --only 只认提交请求', { skip: !CHROME && 'no local Chrome' }, async () => {
+  const { ASHBY_FORM_TRAFFIC, ASHBY_SUBMIT_REQUEST } = await import('../shared/page_signals.mjs');
+  let lastSaveAnswered = 0;
+  const server = createServer((req, res) => {
+    if (req.url.includes('ApiSetFormValue')) {
+      setTimeout(() => { res.writeHead(200); res.end('{}'); lastSaveAnswered = Date.now(); }, 1200);
+      return;
+    }
+    if (req.url.includes('ApiSubmit')) { res.writeHead(200); res.end('{}'); return; }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(AUTOSAVE_PAGE);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const site = `http://127.0.0.1:${server.address().port}/`;
+  const port = await freePort();
+  const profile = mkdtempSync(join(tmpdir(), 'mrw-chrome-idle-'));
+  const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
+  const env = { ...process.env, CDP_HOST: `127.0.0.1:${port}`, MRWEIRDO_HOME: profile };
+  const cdpSync = (...args) => spawnSync(process.execPath, [join(ROOT, 'shared/cdp.mjs'), ...args], { env, encoding: 'utf8' });
+  // Async: the fake server lives in this process and must keep answering while cdp.mjs waits.
+  const cdp = (...args) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [join(ROOT, 'shared/cdp.mjs'), ...args], { env });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+  try {
+    let tab = null;
+    for (let i = 0; i < 50 && !tab; i += 1) {
+      await sleep(200);
+      const r = cdpSync('goto', site);
+      if (r.status === 0) tab = JSON.parse(r.stdout).id;
+    }
+    assert.ok(tab, 'headless Chrome did not come up');
+    await sleep(1000);
+
+    assert.equal((await cdp('typetext', tab, '#q', 'hello')).status, 0);
+    const idle = await cdp('netidle', tab, '800', '10000', ASHBY_FORM_TRAFFIC);
+    const returnedAt = Date.now();
+    assert.equal(idle.status, 0, idle.stderr);
+    const out = JSON.parse(idle.stdout);
+    assert.equal(out.ok, true, idle.stdout);
+    assert.ok(out.seen.some((u) => /ApiSetFormValue/.test(u)), `the debounced save was seen: ${idle.stdout}`);
+    assert.ok(lastSaveAnswered > 0 && lastSaveAnswered <= returnedAt, 'netidle returned before the in-flight save came back');
+
+    const timeout = JSON.parse((await cdp('netidle', tab, '5000', '1500', ASHBY_FORM_TRAFFIC)).stdout);
+    assert.equal(timeout.ok, false, 'quiet window longer than the timeout → not idle');
+
+    const clickJs = (id) => `(() => { const mark = { t: performance.now(), origin: performance.timeOrigin }; document.getElementById('${id}').click(); return { ok: true, mark }; })()`;
+    const saveOnly = JSON.parse((await cdp('clickwatch', tab, '2500', '--only', ASHBY_SUBMIT_REQUEST, clickJs('save'))).stdout);
+    assert.equal(saveOnly.watch.ok, true);
+    assert.ok(saveOnly.watch.requests.some((r) => /ApiSetFormValue/.test(r.url)), JSON.stringify(saveOnly));
+    assert.ok(saveOnly.watch.window_ms >= 2400, 'an autosave does not end the watch');
+    assert.equal(clickVerdict(saveOnly.watch, { registered: false }, ASHBY_SUBMIT_REQUEST).registered, false);
+
+    await sleep(1500);
+    const both = JSON.parse((await cdp('clickwatch', tab, '5000', '--only', ASHBY_SUBMIT_REQUEST, clickJs('both'))).stdout);
+    assert.ok(both.watch.requests.some((r) => /ApiSubmitSingleApplicationFormAction/.test(r.url)), JSON.stringify(both));
+    assert.equal(clickVerdict(both.watch, { registered: false }, ASHBY_SUBMIT_REQUEST).registered, true);
+  } finally {
+    chrome.kill('SIGKILL');
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+    await sleep(300);
+    rmSync(profile, { recursive: true, force: true });
+  }
+});

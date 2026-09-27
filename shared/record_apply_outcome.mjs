@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { dbPath, initDb } from './local_db.mjs';
 import { companyTitleKey, jobFingerprint, normalizeCompany, normalizeTitle, SUBMITTED_STATUSES } from './job_identity.mjs';
 import { onboardTmpPath } from './onboard_tmp.mjs';
-import { deriveMayHaveSubmitted, validateOutcome } from './driver_contract.mjs';
+import { deriveMayHaveSubmitted, validateOutcome, pageMissingOf } from './driver_contract.mjs';
 import { append as ledgerAppend, readAll, sqliteTs } from './submission_ledger.mjs';
 import { attemptIndex } from './apply_guard.mjs';
 import { workAuthSources } from './answer_provenance.mjs';
@@ -133,6 +133,9 @@ const ledgerEntry = ledgerAppend(atsHome(), {
   // 「投过」唯一口径（ADR-S6）：只在 driver_contract 推导，这里不写第二份规则。
   may_have_submitted: deriveMayHaveSubmitted(outcome),
   reason: outcome.reason ?? null,
+  // The page's own missing-field list, under one name whatever the driver exit
+  // called it (restart-apply-3 Reevo): the run report lists it.
+  ...(pageMissingOf(outcome).length ? { missing: pageMissingOf(outcome).map((m) => String(m).slice(0, 200)) } : {}),
   evidence: outcome.evidence ?? null,
   answers: Array.isArray(outcome.answers) ? outcome.answers : [],
   work_auth_provenance: workAuthSources(atsHome()),

@@ -160,6 +160,13 @@ const NOTE_CATEGORY = {
   // An opinion about the company's own channels: nothing in the profile answers
   // it, the main agent drafts it (shared/agent_drafts.mjs) — never asked first.
   agent_draft_required: 'agent_open_text',
+  // restart-apply-3 Reevo: a which-location(s) choice with a place no rule covers.
+  work_location_needs_user: 'user_work_location_commitment',
+  // A number-only salary box and no profile number in the asked unit (an hourly
+  // figure is never turned into an annual one): only the user has it.
+  salary_number_unset: 'unknown_user_fact',
+  salary_unit_unknown: 'unknown_user_fact',
+  salary_unit_mismatch: 'unknown_user_fact',
 };
 
 // Dynamic notes. When a driver stops on one specific field it appends that

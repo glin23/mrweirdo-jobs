@@ -51,7 +51,7 @@ function ashbyRig({ settled = () => ({ settled: true, why: 'quiet', count: 3 }),
     { match: 'has_resume', result: { ready: 'complete', has_resume: true, input_count: 9, url: 'x', title: 't', body_text: '' } },
     { match: 'mrw_upload_mark', result: () => { events.push('upload_mark'); return { since: 100 }; } },
     { match: 'react_unmounted', result: { ok: true, files: 1, name: 'resume.pdf' } },
-    { match: 'function uploadSettled', result: () => { const r = settled(); events.push(`settle:${r.settled}`); return r; } },
+    { match: 'function formSettled', result: () => { const r = settled(); events.push(`settle:${r.settled}`); return r; } },
     { match: 'mrw_phone_temp', result: { found: false } },
     { match: 'btn.click()', result: () => { events.push('click'); return { ok: true, mark: { t: 5000, origin: 1 } }; } },
     { match: 'function clickReceived', result: () => { const r = received(); events.push(`received:${r.registered}`); return r; } },
@@ -64,11 +64,12 @@ function ashbyRig({ settled = () => ({ settled: true, why: 'quiet', count: 3 }),
 test('Ashby ①：上传没走完不点提交——等到「S3 + 其后 graphql 回来且请求数不再涨」才点', async () => {
   const d = await loadAshby(ASHBY_BASE);
   const seq = [{ settled: false, why: 'upload_not_confirmed', count: 2 }, { settled: false, why: 'still_loading', count: 3 }, { settled: true, why: 'quiet', count: 3 }];
-  const events = ashbyRig({ settled: () => seq.shift() });
+  // After the upload, the same page-idle gate runs again right before the click (restart-apply-3).
+  const events = ashbyRig({ settled: () => seq.shift() || { settled: true, why: 'quiet', count: 3 } });
   try {
     await runToEmit(d.main);
     const firstClick = events.indexOf('click');
-    assert.deepEqual(events.filter((e) => e.startsWith('settle:')), ['settle:false', 'settle:false', 'settle:true'], `upload was not polled until settled: ${events}`);
+    assert.deepEqual(events.filter((e) => e.startsWith('settle:')).slice(0, 3), ['settle:false', 'settle:false', 'settle:true'], `upload was not polled until settled: ${events}`);
     assert.ok(firstClick > events.lastIndexOf('settle:false'), `clicked before the upload settled: ${events}`);
     assert.ok(events.indexOf('settle:true') < firstClick, `never saw a settled upload before clicking: ${events}`);
   } finally {

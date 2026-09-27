@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve as pathResolve } from 'node:path';
 import { atsHome } from './paths.mjs';
 import { lockFile } from './state_file_lock.mjs';
+import { netIdleTracker } from './page_signals.mjs';
 
 function resolveCdpHost() {
   if (process.env.CDP_HOST) return process.env.CDP_HOST.replace(/^https?:\/\//, '');
@@ -32,7 +33,11 @@ Commands:
   tabs                                   List tabs as JSON [{id, url, title}]
   goto <url> [tabId]                     Navigate; opens new tab if tabId omitted
   eval <tabId> <js>                      Runtime.evaluate, print result.value (or stack)
-  clickwatch <tabId> <windowMs> <js>     Run click JS; report requests sent after it (Network.requestWillBeSent, in-flight included)
+  clickwatch <tabId> <windowMs> [--only <urlRegex>] <js>
+                                         Run click JS; report requests sent after it (Network.requestWillBeSent, in-flight included);
+                                         with --only, keep watching until a request matching urlRegex is sent (others are still listed)
+  netidle <tabId> <quietMs> <timeoutMs> [urlRegex]
+                                         Wait until no (matching) request is in flight for quietMs; read-only network watch
   upload <tabId> <selector> <file>       DOM.setFileInputFiles to <selector>
   screenshot <tabId> <out.png> [--full-page]   Page.captureScreenshot → write file (600); --full-page scrolls to bottom first, captures beyond viewport
   typetext <tabId> <selector> <text>     Focus + CLEAR (React-safe) + Input.insertText, read back value
@@ -186,9 +191,14 @@ async function cmdEval(tabId, expr) {
 // windowMs. Output: { click, watch: { ok, requests:[{url,method,ms}], window_ms } }.
 // A connection that drops or errors inside the window is NOT "watched, 0
 // requests": watch.ok is false, i.e. cannot tell (verify 第 20 轮 P2).
-async function cmdClickwatch(tabId, windowMs, expr) {
+// --only <urlRegex> (Ashby, restart-apply-3): the page autosaves fields all the
+// time, so "the first request after the click" can be an autosave; the watch
+// then waits for the submission request itself. Every request is still listed.
+async function cmdClickwatch(tabId, windowMs, expr, only = null) {
+  const onlyRe = only ? new RegExp(only, 'i') : null;
   await withSession(tabId, async s => {
     const requests = [];
+    let matched = false;
     let t0 = null;
     let wake = null;
     let lost = null;
@@ -198,7 +208,10 @@ async function cmdClickwatch(tabId, windowMs, expr) {
     s.listeners.push(msg => {
       if (msg.method !== 'Network.requestWillBeSent' || t0 === null) return;
       const r = msg.params?.request || {};
-      requests.push({ url: String(r.url || '').slice(0, 200), method: r.method || '', ms: Date.now() - t0 });
+      const url = String(r.url || '');
+      if (requests.length < 40) requests.push({ url: url.slice(0, 200), method: r.method || '', ms: Date.now() - t0 });
+      if (onlyRe && !onlyRe.test(url)) return;
+      matched = true;
       if (wake) wake();
     });
     let watch = { ok: true };
@@ -219,7 +232,7 @@ async function cmdClickwatch(tabId, windowMs, expr) {
     const click = r.exceptionDetails
       ? { ok: false, note: 'click_js_exception', detail: r.exceptionDetails.exception?.description || r.exceptionDetails.text }
       : (r.result?.value ?? null);
-    if (watch.ok && click?.ok && requests.length === 0 && !lost) {
+    if (watch.ok && click?.ok && !matched && !lost) {
       await new Promise(res => {
         const timer = setTimeout(res, windowMs);
         wake = () => { clearTimeout(timer); res(); };
@@ -227,9 +240,35 @@ async function cmdClickwatch(tabId, windowMs, expr) {
     }
     // Requests seen before a drop still prove the click went out; zero seen
     // with a drop proves nothing.
-    if (lost && requests.length === 0 && watch.ok) watch = { ok: false, error: lost };
+    if (lost && !matched && watch.ok) watch = { ok: false, error: lost };
     const out = { click, watch: watch.ok ? { ok: true, requests, window_ms: Date.now() - t0, ...(lost ? { lost } : {}) } : watch };
     process.stdout.write(JSON.stringify(out) + '\n');
+  });
+}
+
+// netidle: the CDP half of the Ashby page-idle gate (restart-apply-3 BUG_REPORT
+// 第 2 章). Watches Network events and returns once no request matching
+// urlRegex has been in flight for quietMs — requests still in flight are
+// exactly what the page's own Resource Timing list cannot show. Read-only:
+// nothing on the page is touched. Output: { ok:true, idle_ms, waited_ms, seen }
+// or { ok:false, why:'timeout'|<connection lost>, inflight, seen }.
+async function cmdNetidle(tabId, quietMs, timeoutMs, pattern) {
+  await withSession(tabId, async s => {
+    const tracker = netIdleTracker(pattern || null);
+    let lost = null;
+    s.ws.addEventListener('close', () => { lost ||= 'connection closed during netidle'; });
+    s.ws.addEventListener('error', () => { lost ||= 'connection error during netidle'; });
+    s.listeners.push(msg => tracker.onEvent(msg, Date.now()));
+    await s.send('Network.enable');
+    const t0 = Date.now();
+    for (;;) {
+      const now = Date.now();
+      if (lost) { process.stdout.write(JSON.stringify({ ok: false, why: lost, inflight: tracker.inflight(), seen: tracker.seen }) + '\n'); return; }
+      const idle = tracker.idleFor(now, t0);
+      if (idle >= quietMs) { process.stdout.write(JSON.stringify({ ok: true, idle_ms: idle, waited_ms: now - t0, seen: tracker.seen }) + '\n'); return; }
+      if (now - t0 >= timeoutMs) { process.stdout.write(JSON.stringify({ ok: false, why: 'timeout', waited_ms: now - t0, inflight: tracker.inflight(), seen: tracker.seen }) + '\n'); return; }
+      await new Promise(r => setTimeout(r, 100));
+    }
   });
 }
 
@@ -414,9 +453,16 @@ async function main() {
       }
       case 'clickwatch': {
         const [, tabId, ms, ...rest] = argv;
-        const expr = rest.join(' ');
-        if (!tabId || !/^\d+$/.test(ms || '') || !expr) throw new Error('Usage: clickwatch <tabId> <windowMs> <js>');
-        await cmdClickwatch(tabId, Number(ms), expr);
+        const only = rest[0] === '--only' ? rest[1] : null;
+        const expr = (rest[0] === '--only' ? rest.slice(2) : rest).join(' ');
+        if (!tabId || !/^\d+$/.test(ms || '') || !expr || (rest[0] === '--only' && !only)) throw new Error('Usage: clickwatch <tabId> <windowMs> [--only <urlRegex>] <js>');
+        await cmdClickwatch(tabId, Number(ms), expr, only);
+        break;
+      }
+      case 'netidle': {
+        const [, tabId, quiet, timeout, pattern] = argv;
+        if (!tabId || !/^\d+$/.test(quiet || '') || !/^\d+$/.test(timeout || '')) throw new Error('Usage: netidle <tabId> <quietMs> <timeoutMs> [urlRegex]');
+        await cmdNetidle(tabId, Number(quiet), Number(timeout), pattern);
         break;
       }
       case 'upload': {

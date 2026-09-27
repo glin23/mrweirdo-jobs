@@ -1,4 +1,5 @@
 import { classifyPlace, namedPlaces } from './location_gate.mjs';
+import { customFactKey } from './missing_field_questions.mjs';
 // Pure answer-routing helpers extracted from ashby_apply_driver.mjs so the
 // safety-critical decisions can be unit-tested WITHOUT a live browser tab.
 // Behavior here is verbatim with the driver's prior inline logic — these are
@@ -333,4 +334,86 @@ const COMPANY_CRITIQUE_RE = /what(?:'s| is) working and what(?:'s| is)? not|what
 
 export function isCompanyCritiqueQuestion(label = '') {
   return COMPANY_CRITIQUE_RE.test(String(label));
+}
+
+// --- Salary number for a number-only box (restart-apply-3 BUG_REPORT 第 4 章) ---
+// Reevo's "base salary expectations" is <input type=number>: the English
+// sentence the driver typed never went in, and the driver said ok. A number box
+// gets the profile's own number — same source order as the Lever driver — and
+// only when the question's unit (hourly vs annual) matches the profile's. An
+// hourly figure is never turned into an annual one: that number was never said.
+const HOURLY_RE = /\/\s*h(?:ou)?r\b|per hour|hourly|an hour|\bhr\b/i;
+const ANNUAL_RE = /\/\s*y(?:ea)?r\b|per year|per annum|annual|yearly|\bk\b/i;
+
+export function salaryNumberFor(label = '', profile = {}, essayProfile = {}) {
+  // The user's own answer to THIS question comes first: the gap report asks it
+  // and writes it under custom_facts[customFactKey(label)] (missing_field_questions.mjs).
+  const asked = profile?.standard_qa?.custom_facts?.[customFactKey(label)];
+  const raw = String(
+    (asked !== undefined && asked !== null && asked !== '' ? asked : '')
+    || profile?.work_authorization?.salary_expectation_usd
+    || profile?.standard_qa?.salary_expectation_usd
+    || essayProfile?.factual_gap_fields?.compensation_acceptance?.expected_salary_number
+    || '',
+  );
+  const m = raw.replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*(k\b)?/i);
+  if (!m) return { ok: false, note: 'salary_number_unset' };
+  const amount = Number(m[1]) * (m[2] ? 1000 : 1);
+  const q = String(label);
+  const want = /hour|hourly|\/\s*hr\b|\brate\b/i.test(q) ? 'hour' : (/salary|annual|per year|yearly/i.test(q) ? 'year' : null);
+  const answeredHere = asked !== undefined && asked !== null && asked !== '';
+  // A bare number the user gave to this very question is in that question's unit.
+  const have = HOURLY_RE.test(raw) ? 'hour' : (ANNUAL_RE.test(raw) || amount >= 1000 ? 'year' : (answeredHere ? want : null));
+  if (!have) return { ok: false, note: 'salary_unit_unknown', have: raw };
+  if (want && want !== have) return { ok: false, note: 'salary_unit_mismatch', have: raw, want };
+  return { ok: true, value: String(amount), unit: have };
+}
+
+// --- Which-location(s) choice questions (restart-apply-3 BUG_REPORT 第 4 章) ---
+// "This role is primarily in-office. Which location(s) would you be open to
+// working from?" with San Francisco / Santa Clara / Both checkboxes. It went to
+// the RTO yes/no bucket and found no Yes button. The answer is a set of places,
+// decided by the same relocation rules as every other location question.
+const WORK_LOCATION_Q_RE = /\bwhich\s+(?:of\s+(?:our|the|these)\s+)?(?:locations?|offices?|cit(?:y|ies)|sites?|hubs?)(?:\s*\(s\))?\b/i;
+
+export function isWorkLocationChoiceQuestion(label = '') {
+  return WORK_LOCATION_Q_RE.test(String(label));
+}
+
+const ALL_OPTION_RE = /^(?:both|all|all of the above|any|either|any location|all locations|open to all|no preference|flexible)\b/i;
+const NONE_OPTION_RE = /^(?:none|neither|other|n\/a|not applicable)\b/i;
+const REMOTE_OPTION_RE = /\bremote\b/i;
+
+// Returns { ok:true, picks:[option labels] } or { ok:false, note, unconfirmed }.
+// Every place option must be covered (a city the user confirmed, or covered by
+// the relocation policy — which never covers a foreign place); one uncovered
+// place and the whole question goes to the user. An "all / both" option is
+// picked alone when every place is covered; otherwise every covered place.
+export function pickWorkLocations(options = [], { searchIntent = {}, profile = {}, jobLocation = '', questionText = '' } = {}) {
+  const geo = searchIntent?.search_intent?.geographic_preference || searchIntent?.geographic_preference || {};
+  const confirmed = confirmedCitiesFrom(profile);
+  const refused = Object.entries(profile?.standard_qa?.work_location_commitments || {})
+    .filter(([, ok]) => ok === false).map(([place]) => String(place).toLowerCase());
+  const jobLoc = String(jobLocation || '').toLowerCase();
+  const labels = (options || []).map((o) => String(o || '').trim()).filter(Boolean);
+  const meta = labels.filter((o) => ALL_OPTION_RE.test(o));
+  const remote = labels.filter((o) => REMOTE_OPTION_RE.test(o) && !ALL_OPTION_RE.test(o));
+  const places = labels.filter((o) => !ALL_OPTION_RE.test(o) && !NONE_OPTION_RE.test(o) && !REMOTE_OPTION_RE.test(o));
+  const covered = (place) => {
+    const p = place.toLowerCase();
+    if (refused.some((r) => r && p.includes(r))) return false;
+    if (mentionsConfirmedCity(p, confirmed)) return true;
+    const named = namedPlaces(place);
+    if (named.foreign) return false;
+    // A name that is neither a known US place nor part of this job's own
+    // location is not something any rule covers.
+    if (!named.us && !(jobLoc && jobLoc.includes(p))) return false;
+    return relocationPolicyOpen(searchIntent, { jobLocation, questionText: place });
+  };
+  const unconfirmed = places.filter((p) => !covered(p));
+  if (unconfirmed.length) return { ok: false, note: 'work_location_needs_user', unconfirmed, question: questionText };
+  if (places.length && meta.length) return { ok: true, picks: [meta[0]] };
+  if (places.length) return { ok: true, picks: places };
+  if (remote.length && geo.remote_acceptable === true) return { ok: true, picks: remote };
+  return { ok: false, note: 'work_location_needs_user', unconfirmed: labels, question: questionText };
 }
