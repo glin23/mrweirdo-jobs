@@ -8,7 +8,7 @@ Task: docs/active/2026-09-27_restart-apply-3_TASK.md
 Reads:
   - 6696eb2 / a5b6496 / fba2a0f 全 diff；shared/ashby_apply_driver.mjs、shared/greenhouse_apply_driver.mjs 提交循环；shared/cdp.mjs cmdClickwatch；test/submit_click_received.test.mjs
 Updated: 2026-09-27
-Iterations: 3
+Iterations: 5
 Living_doc: docs/specs/restart-apply-3.md
 ---
 
@@ -344,3 +344,216 @@ Greenhouse 那边用的是它的替身能填上的题（Gender / Veteran status�
 
 - **一开始把 GTM / Growth Engineer、DevRel 被拦算成本轮的误杀**：拿旧的 title_excludes 跑同一批标题对比后，发现旧规则早就在拦它们。所以不算回归，改列为第 5 轮挂账的待拍板项。
 - **一开始以为 15:40 的真实账本写入是本轮 CI 写的**：看了账本末行和 TASK 末尾，是 lead 在拍板人手投之后跑的 record-manual；15:03 是 lead 的 --no-submit 试跑。
+
+# 第 24 轮 — release 运行只打点名链接（bc3d070）
+
+## 验收范围
+
+Round 3 真实运行时，2 条非名单的放行链接没进批次：打分额度被 20 个待重打的名单岗用光了。报告还把它们误写成「可能已下架」。
+
+builder 的 `bc3d070`（未推）改了三处：
+- release 运行只处理点名的链接。名单扫描只用来找点名的名单岗，其余名单岗不进打分，也不占额度。
+- 打分额度至少等于放行条数。
+- 第 2 行报告按类写原因：没打到分、公开接口取不到（疑似下架）、打分不合格、被闸拦、合格但没派出。
+
+本轮要验：
+- 名单岗 held 解锁还正常吗。
+- 点名链接是不是仍然全部经过去重、60 天、日档位、投前闸和唯一写账人。
+- 点名重复链接、已投链接、下架链接时，报告怎么写。
+- 普通运行受不受影响。
+- 提交次数守卫、有没有绕过检测的改动、CI。
+
+本轮没有真投、没有 push。另外，worktree 列表里有一个 `wt-recheck27`，是 lead 并行复验的，不是本轮建的，我没动。
+
+## 5 维高危区评估
+
+- **① 名额与去重（最高）**：点名链接能不能借 release 绕开 60 天、日档位或已投拦截。
+- **⑤ 主流程**：名单岗 held 解锁；普通运行（不带 release）的名单扫描、轮转和 held 不能变。
+- **① 报告真实性**：第 2 行不能把「没打分」写成「下架」。
+- **②③ 平台边界 / 提交守卫**：驱动文件没有改动。
+- **④ 集成点**：release 取岗沿用第 23 轮的实现，这次没改。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 4 | 点名的是：名单岗（原本 held）/ 非名单岗 / 重复链接 / 已投链接 |
+| 边界值 | 2 | 点名条数大于 target（target 1、点名 17 条）；点名条数大于日档位（target 20、日档位 10） |
+| 决策表 | 1 | 同一家公司点名 3 条 × 60 天上限 2 次，连跑 2 轮 |
+| 状态迁移 | 1 | 名单岗第 1 轮 held → 第 2 轮 release → 投出 |
+| 用例测试 | 1 | 复现 Round 3（builder 的测试）加普通运行对照 |
+| pairwise | 1 | 点名链接写法（带 /application / 不带）× 去重 |
+| 风险驱动 | 2 | 驱动和守卫文件的 diff 为空；grep 绕过检测的写法 |
+
+## 5 轮回归循环记录（第 24 轮）
+
+用的是 stream_run 替身环境，家目录是沙箱。
+
+- **A 名单岗 held 解锁**：第 1 轮普通运行，名单岗合格后被 held，驱动调用 0 次。第 2 轮 release 它，结果「投出 1 个：pika·Growth Intern 1」。✅
+- **B 同一链接点名两次**（带 /application 和不带各一次）：驱动只调用 1 次，投出 1 个，第 2 行没有多余条目。✅
+- **C 点名 17 条、target 1**：17 条全都打了分，只投出 1 个，其余 16 条写「合格但没派出：not_dispatched:target_reached」。这说明打分额度被放宽了，但 target 没有被放宽。✅
+- **C2 点名 17 条、target 20**：投出 10 个，正好停在日档位 10。其余 7 条写「合格但没派出：not_dispatched:daily_cap_reached」。✅
+- **C3 同一家公司点名 3 条，连跑 2 轮**（日档位 25）：
+  - 第 1 轮投出 2 个，第 3 条没派出。
+  - 第 2 轮三条全部被闸拦：两条是 `already_attempted_fp`，一条是 `company_cooldown_60d`。60 天每家 2 次的上限守住了。✅
+  - 但第 1 轮第 3 条写的是「not_dispatched:supply_exhausted」，没有说是同一家公司名额满了（见 P4）。
+- **D 普通运行**（不带 release，名单 1 个、轮转 2 个）：打分 3 个，投出 2 个，名单那条照常 held。不受影响。✅
+- **下架 / 取岗出错 / 被硬筛拦 / 已投**：builder 的测试已经覆盖了措辞，分别是「公开接口取不到（疑似下架）」「取岗出错：fetch_failed:…」「被闸拦：hard_filter:…」「被闸拦：already_attempted_fp」。✅
+- **守卫**：从 da981ba 到 bc3d070，两个驱动、driver_contract、cdp.mjs、submit_click_received 测试的 diff 都是空的。grep 绕过检测的写法，0 命中。✅
+- **CI**：bc3d070 663/663，smoke、gate、语法检查都是 0。
+
+## 结论明细（第 24 轮）
+
+### ✅ 通过
+
+- release 运行只打点名的链接，Round 3 的问题修好了。
+- 名单岗的 held 解锁正常。
+- 点名链接全部经过去重、60 天、日档位、投前闸和唯一写账人。
+- 普通运行不受影响。
+- 报告不再把「没打分」写成「下架」。
+- 守卫没有被动过，没有绕过检测的改动，CI 全绿。
+
+### ❌ 真 bug
+
+无。
+
+### ⚠️ 风险
+
+- **P4（措辞）**：同一家公司点名超过 60 天剩余名额时，多出来的那条在当轮写「合格但没派出：not_dispatched:supply_exhausted」，没有说是「这家 60 天名额满了」。下一轮会正确写成「被闸拦：company_cooldown_60d」。
+- **观察（口径，由 lead 定）**：
+  - release 运行不会自动把 target 提到放行条数。拍板人点名 N 条、target 却小于 N 时，多出来的会写「合格但没派出：target_reached」。报告如实写了，但拍板人可能以为「点名 = 全投」。建议 lead 发起 release 时让 target 至少等于点名条数，或者由 builder 自动抬高（日档位仍然照常封顶）。
+  - release 运行现在不再顺带投普通岗。
+
+## Quinn 重构 / 质量指标 / 老坑（第 24 轮）
+
+- Quinn 重构：无。
+- `verify_self_miss_rate: 0%`（上轮漏检 0 / 本轮问题 1）。
+- 真 bug：0。
+- 老坑清单：项目没定义。
+
+## 覆盖度评估（第 24 轮）
+
+**质量分 4/5，可推。**
+- 覆盖：替身环境 6 组场景（held 解锁、重复链接、target 边界、日档位、60 天连跑 2 轮、普通运行对照）；builder 已有的措辞测试；守卫 diff 为空的确认；CI。
+- 扣 1 分：没有在真网络上复跑 Round 3（禁止真投）；另有 supply_exhausted 措辞不准的 P4。
+
+## 试过的错误方向（第 24 轮）
+
+- **一开始用 target 1 测日档位**：结果被 target 先挡住了，日档位根本没测到。改成 target 20 才测到日档位 10。
+- **一开始想让同一家公司的 3 条和其他 14 条一起跑，看 60 天名额**：结果日档位先满，sequence 那 3 条一条都没派出，60 天没测到。改成只点名 sequence 的 3 条、连跑 2 轮，才测到 60 天。
+
+# 第 25 轮 — Ashby 页面空闲闸 / 只认提交请求 / Reevo 三项（5622208 1aee1d3）
+
+## 验收范围
+
+验收 builder 的 `5622208`（代码）和 `1aee1d3`（文档），都没推。根因见 BUG_REPORT：Ashby 前端在任何字段自动保存进行中时，点提交只会弹一个会自动消失的提示，不发提交请求。改动三项：
+- **① 页面空闲闸**：简历上传后，以及每次点提交前，都要等到没有正在进行的请求、且表单请求数稳定。用两个信号一起判断：CDP 的 `netidle` 看还在路上的请求，页面的 `formSettled` 看已完成请求的数量。30 秒内等不到空闲，就记 `crashed/form_saves_not_settled`，不点提交，不算投过。
+- **② 点击算不算接住**：只认 `ApiSubmit(SingleApplicationForm|MultipleForms)Action` 这两种提交请求（clickwatch --only）。字段自动保存的请求不再算接住。如果点击后没有提交请求、并且页面上的必填项仍然空着，就判 `not_submitted/submit_request_not_sent`，不算投过。
+- **③ Reevo 三项**：缺项字段统一读取（pageMissingOf）；城市多选题走勾选路由；数字薪资框只填数字；打字之后回读确认。
+
+builder 自己说明过：这些改动只在本机的假页面上验证过，没有在真的 Ashby 页面上跑。
+
+本轮没有真投、没有 push。真实家目录只有 `chrome-profile/` 在变，那是投递用的 Chrome 日常活动；我开的无头 Chrome 用的都是 scratchpad 里的独立目录。其余文件在 17:50 之后都没有变化。
+
+## 5 维高危区评估
+
+- **① 名额口径 / 重复投递（最高）**：新的 not_submitted 会让这条不算投过，以后可以再投。一旦把真正投成的判成 not_submitted，就会重复投递。所以要检查这两个条件（没见到提交请求、必填为空）够不够严。
+- **④ 集成点**：Ashby 前端的真实行为。可以只读地去看：公开的 JS 脚本、公开投递页的 DOM、页面加载后的网络情况。
+- **⑤ 主流程**：空闲闸如果永远等不到，所有 Ashby 岗都会停在点提交之前。
+- **② 平台边界**：确认没有绕过检测的改动。
+- **③ 真实性**：Reevo 的薪资框和城市勾选题，答案从哪来。
+
+## 7 类测试
+
+| 技术 | 次数 | 用在哪 |
+|---|---|---|
+| 等价类 | 4 | 点击窗口内看到的请求：只有自动保存 / 有提交请求 / 提交请求名变体 / 什么都没有 |
+| 边界值 | 2 | 空闲的安静时长 1.5 秒（Ashby 自动保存的防抖是 500 毫秒）；必填读取失败 |
+| 决策表 | 1 | CDP 观察（正常 / 断连）× 页面记录（有 / 无提交请求 / 新页面）× 必填（空 / 满 / 读不出），共 9 种组合 |
+| 状态迁移 | 1 | 空闲闸 → 点击 → 判定：接住 / unknown / not_submitted |
+| 用例测试 | 2 | 真实 Ashby 公开投递页（ElevenLabs、Suno），只读渲染 DOM 并测网络空闲 |
+| pairwise | 1 | CDP 断连 × 必填为空 |
+| 风险驱动 | 3 | 下载 Ashby 公开前端 JS，核对提交请求名和 URL 的构成；diff 驱动守卫；grep 绕过检测的写法 |
+
+## 5 轮回归循环记录（第 25 轮）
+
+**1. Ashby 公开前端 JS**（只读 GET：`manifest.json` → `index-JyJvxh41.js`）[实测]
+
+- graphql 请求的地址写死成 `/api/non-user-graphql?op=${operationName}`，操作名在 URL 里，所以按 URL 匹配提交请求是可行的。✅
+- 全部以 `ApiSubmit*` 开头的操作共 12 个。跟投递有关的只有 `ApiSubmitSingleApplicationFormAction` 和 `ApiSubmitMultipleFormsAction`，和 builder 写的一致。其余是面试反馈、日程、短信授权、问卷等，不相关。
+- 「We're updating your application」这句提示在脚本里出现 2 次，BUG_REPORT 说的前端保存闸确实存在。
+
+**2. 真实 Ashby 投递页 DOM**（ElevenLabs、Suno 各一个公开岗；无头 Chrome 只渲染和读取，不填、不点）[实测]
+
+- 带 `required` 属性的只有：姓名、邮箱、简历（file）、必填的文本框和 textarea。
+- 地点下拉框（role=combobox）**没有** required；单选、复选也**没有** required。
+- 页面刚打开时，`emptyRequiredFields` 读出来的结果：ElevenLabs 是 Name、Email、LinkedIn、AI 工具开放题；Suno 是 Name、Email、Why Suno。和页面上真正的必填文本项一一对应。
+- 结论：「必填为空」这个信号只会盯着纯文本类的必填框。不存在「下拉框已经选了、但读出来是空」这种误判。单选、复选题漏看的话，只会让结果走向 unknown，是安全的方向。✅
+
+**3. 真实页面的网络空闲**（`cdp.mjs netidle 1500 30000`）[实测]
+
+- 页面加载完 2.3 秒内就进入空闲。这期间看到 4 个 graphql 请求：ApiJobPosting、2 个 Organization、ApiAutocompleteGeoLocation。
+- 再等 5 秒，没有任何周期性请求，1.5 秒就判空闲。
+- 所以空闲闸不会因为后台轮询而永远等不到。字段保存一直不停的情况，会在 30 秒后记 crashed，这发生在点击之前，不点、不算投过（builder 测试第 252 行覆盖了）。✅
+
+**4. 判定边界：驱动替身 9 种组合** [实测]
+
+| 场景 | 结局 | 点击 | may_have_submitted |
+|---|---|---|---|
+| 点击后只有自动保存 + 必填为空 | not_submitted / submit_request_not_sent | 1 | false |
+| 看到了提交请求 + 必填为空 | unknown | 1 | true |
+| 只在页面记录里看到提交请求（CDP 没看到） | unknown | 1 | true |
+| CDP 断连 + 必填为空 | unknown | 1 | true |
+| 页面换成了新文档 + 必填为空 | unknown | 1 | true |
+| 提交请求名变体（认不出）+ 必填为空 | not_submitted | 1 | false |
+| 没有提交请求 + 必填全部已填 | unknown | 1 | true |
+| 必填读取失败 | unknown | 1 | true |
+
+- 要判 not_submitted，必须同时满足四件事：CDP 观察正常地看完了整个窗口；页面记录里也没有提交请求；页面没有换成新文档；必填里读出了空项。缺任何一项，都会退回 unknown。
+- 提交请求名变体那一行判 not_submitted，我认为是可以接受的：真实页面上有必填文本框为空，Ashby 服务端一定会拒（BUG_REPORT 里那句「Missing entry」就是服务端回的），所以不可能投成。第一次点击时，驱动本来就还没填那些自定义必填项。补字段之后再提交时，页面上仍然为空的必填项同样会被拒。所以「必填为空」这一条本身就足够说明没投成。另一条「没见到提交请求」是加上去的第二道保险。✅
+- **剩余的理论缝隙（P4）**：只有在某个字段 DOM 上带 required、但 Ashby 服务端并不要求它时，才可能误判。Ashby 前端的 required 属性就来自同一份字段配置，这种情况没有找到证据。
+
+**5. 守卫和绕过检测**
+- 两个驱动的点击循环仍然是 `attempt <= 2`。旧的守卫测试只是把 uploadSettled 改名成 formSettled、放宽了 settle 事件的截取范围，断言本身没有变弱。✅
+- Greenhouse 驱动这次没有改动。
+- diff 新增代码 grep 0 命中。`netidle` / `clickwatch --only` 只是在浏览器调试端监听网络。✅
+
+**6. 逐提交 CI**：5622208 和 1aee1d3 都是 715/715，smoke、gate、语法检查全是 0。
+
+## 结论明细（第 25 轮）
+
+### ✅ 通过
+
+- 空闲闸在真实页面上能等到空闲，不会被后台请求卡住；一直等不到时，在点击之前就停下，不算投过。
+- 「接住」只认提交请求，和 Ashby 公开脚本一致。
+- not_submitted 的判定足够严：四个条件缺一个就退回 unknown；真实页面的 required 只挂在纯文本类必填上，不会误报。
+- CDP 断连、页面跳转、请求名变体、必填读取失败，都退回 unknown，或者按「服务端必拒」判为 not_submitted。
+- 提交次数守卫没有被削弱，没有绕过检测的改动，CI 全绿。
+
+### ❌ 真 bug
+
+无。
+
+### ⚠️ 风险
+
+- **P4**：只有「DOM 上是 required，但服务端不要求」的字段，才可能把真投成的判成 not_submitted。目前没有找到证据。
+- **未实测**：真 Ashby 页面上的「填表 → 空闲闸 → 点提交」全流程没有跑过（禁止真投，也不在真实投递页上填写）。第一次真投时，建议 lead 看驱动日志里的 `upload_rounds`、空闲闸轮数，以及结局是不是 submit_request_not_sent 或 unknown；如果出现 not_submitted，去邮箱核对一次。
+- Reevo 三项（城市勾选、数字薪资、打字回读）只在假页面上测过，本轮没有单独深挖。builder 的 reevo_form_fixes 测试 206 行都通过了。
+
+## Quinn 重构 / 质量指标 / 老坑（第 25 轮）
+
+- Quinn 重构：无。
+- `verify_self_miss_rate: 0%`（上轮漏检 0 / 本轮问题 1）。
+- 真 bug：0。
+- 老坑清单：项目没定义。建议补一条：Ashby 的提交判定依赖 `op=` 写在 URL 里、依赖 required 只挂在文本类框上。Ashby 前端升级之后，要用 `index-*.js` 和真实页面 DOM 重新核一遍。
+
+## 覆盖度评估（第 25 轮）
+
+**质量分 4/5，可推。**
+- 覆盖：Ashby 公开 JS 核对、两个真实投递页的 DOM 和网络空闲（只读）、驱动替身 9 种判定组合、守卫 diff、逐提交 CI。
+- 扣 1 分：真实页面上的「填表 → 点提交」全流程没有跑过（纪律不允许）；Reevo 三项只靠 builder 的假页面测试。
+
+## 试过的错误方向（第 25 轮）
+
+- **一开始写的边界替身没有给 netidle 提供结果**：简历上传后的空闲闸一直等不到，每个场景都在点击前 crashed，也就测不到判定逻辑。照 builder 的 ashby_submit_gate 测试，用 `__MRW_CDP_RULES` 把 netidle 设成空闲，才测到点击后的判定。
+- **一开始担心地点下拉框选好之后 input 的值是空，会被当成「必填为空」**：去真实页面上看了 DOM，下拉框根本不带 required，所以这个担心不成立。
