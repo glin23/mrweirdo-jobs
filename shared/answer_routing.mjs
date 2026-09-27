@@ -1,3 +1,4 @@
+import { classifyPlace } from './location_gate.mjs';
 // Pure answer-routing helpers extracted from ashby_apply_driver.mjs so the
 // safety-critical decisions can be unit-tested WITHOUT a live browser tab.
 // Behavior here is verbatim with the driver's prior inline logic — these are
@@ -34,12 +35,20 @@ export function isOpenEndedResidenceQuestion(label = '') {
 // True only when the user explicitly opted into relocating anywhere legally
 // workable. Accepts either the whole search_intent.json object or the inner
 // geographic_preference object.
-export function relocationPolicyOpen(searchIntent = {}) {
+// anywhere_primary_country (「全美可搬」) is open for a job located in that
+// country — the first real run asked the user about OpusClip's Mountain View
+// office although he had said "anywhere in the US" (2026-09-26). A job whose
+// location is unknown or abroad is not covered: ask.
+export function relocationPolicyOpen(searchIntent = {}, { jobLocation = '' } = {}) {
   const geo = searchIntent?.search_intent?.geographic_preference
     || searchIntent?.geographic_preference
     || {};
-  return geo.relocation_policy === 'anywhere_legal_work'
-    && geo.willing_to_relocate_for_internship === true;
+  if (geo.willing_to_relocate_for_internship !== true) return false;
+  if (geo.relocation_policy === 'anywhere_legal_work') return true;
+  if (geo.relocation_policy === 'anywhere_primary_country') {
+    return String(geo.primary_country || 'US').toUpperCase() === 'US' && classifyPlace(jobLocation) === 'us';
+  }
+  return false;
 }
 
 // Cities the user has explicitly confirmed living-in / having logistics for.

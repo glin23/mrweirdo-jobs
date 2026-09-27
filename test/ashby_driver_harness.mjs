@@ -75,9 +75,13 @@ let seq = 0;
 
 // Loads the shipped driver against `profile` in a throwaway fake home. No
 // ~/.mrweirdo-jobs access, no browser, no network.
-export async function loadDriver(profile) {
+// opts: { searchIntent, essayProfile } are written next to profile.json;
+// { dbPath, jobId } point the driver at a work DB row (as a stream run does).
+export async function loadDriver(profile, opts = {}) {
   const home = mkdtempSync(join(tmpdir(), 'mrw-ashby-driver-'));
   writeFileSync(join(home, 'profile.json'), JSON.stringify(profile, null, 2));
+  if (opts.searchIntent) writeFileSync(join(home, 'search_intent.json'), JSON.stringify(opts.searchIntent));
+  if (opts.essayProfile) writeFileSync(join(home, 'essay_profile.json'), JSON.stringify(opts.essayProfile));
   let src = DRIVER_SRC.replace(/\nmain\(\)\.catch\([\s\S]*$/, '\n');
   // No real waits under test: submitAndCheck alone sleeps 7s per call in the
   // shipped code. Guarded like PENDING_LINE — if the declaration drifts, this
@@ -102,15 +106,20 @@ export async function loadDriver(profile) {
   const prevHome = process.env.MRWEIRDO_HOME;
   const prevRepo = process.env.MRWEIRDO_REPO_ROOT;
   const prevArgv = process.argv.slice();
+  const prevDb = process.env.MRWEIRDO_DB_PATH;
+  process.env.MRWEIRDO_DB_PATH = opts.dbPath || join(home, 'no-such.db');
   process.env.MRWEIRDO_HOME = home;
   process.env.MRWEIRDO_REPO_ROOT = ROOT; // use the REAL shipped answer_bank.json
-  process.argv[2] = 'https://jobs.ashbyhq.com/testco/00000000-0000-0000-0000-000000000000';
+  process.argv[2] = opts.applyUrl || 'https://jobs.ashbyhq.com/testco/00000000-0000-0000-0000-000000000000';
+  process.argv[3] = opts.jobId != null ? String(opts.jobId) : undefined;
+  if (opts.jobId == null) process.argv.length = Math.min(process.argv.length, 3);
   globalThis.__MRW_CDP = [];
   try {
     return await import(file);
   } finally {
     if (prevHome === undefined) delete process.env.MRWEIRDO_HOME; else process.env.MRWEIRDO_HOME = prevHome;
     if (prevRepo === undefined) delete process.env.MRWEIRDO_REPO_ROOT; else process.env.MRWEIRDO_REPO_ROOT = prevRepo;
+    if (prevDb === undefined) delete process.env.MRWEIRDO_DB_PATH; else process.env.MRWEIRDO_DB_PATH = prevDb;
     process.argv = prevArgv;
   }
 }

@@ -42,6 +42,8 @@ import {
 import { matchAnswerBucket } from './answer_buckets.mjs';
 import { submissionVerdict, captureEvidence } from './submission_evidence.mjs';
 import { emitOutcome, recordFill } from './driver_contract.mjs';
+import { dbPath } from './local_db.mjs';
+import { DatabaseSync } from 'node:sqlite';
 
 // ---- CLI dispatcher — handle --list-pending-essays before anything else ----
 const HOME = atsHome();
@@ -69,6 +71,22 @@ let coverLetterUploaded = false;
 
 const APPLY_URL = process.argv[2];
 const JOB_ID = process.argv[3] || null;
+
+// Where the job is, from the run's work DB row (read-only; a single-URL run
+// without a DB row gets '' and relocation questions stay asked). Needed by the
+// 「全美可搬」 policy: it covers a US office, not one abroad.
+function jobLocationFromDb() {
+  const p = dbPath();
+  if (!existsSync(p)) return '';
+  const d = new DatabaseSync(p, { readOnly: true });
+  try {
+    const row = JOB_ID ? d.prepare('SELECT location FROM jobs WHERE id = ?').get(Number(JOB_ID)) : d.prepare('SELECT location FROM jobs WHERE apply_url = ?').get(APPLY_URL);
+    return row?.location || '';
+  } finally {
+    d.close();
+  }
+}
+const JOB_LOCATION = jobLocationFromDb();
 if (!APPLY_URL) {
   console.error('usage: ashby_apply_driver.mjs <url> [<job_id>]');
   console.error('       ashby_apply_driver.mjs --list-pending-essays');
@@ -514,7 +532,7 @@ async function answerMissing(tab, missingLabel) {
   //    but if the phrasing asserts a residence/transport FACT (handled by the
   //    specific-city-fact guard below, which runs first), we ask-or-skip instead.
   // Decisions extracted to shared/answer_routing.mjs (pure, unit-tested).
-  const relocationPolicyOpen = routingRelocationPolicyOpen(SEARCH_INTENT);
+  const relocationPolicyOpen = routingRelocationPolicyOpen(SEARCH_INTENT, { jobLocation: JOB_LOCATION });
   const confirmedCities = routingConfirmedCities(PROFILE);
   const mentionsConfirmedCity = routingMentionsConfirmedCity(ml, confirmedCities);
   const isSpecificCityLogisticsFact = routingIsSpecificCityFact(ml);

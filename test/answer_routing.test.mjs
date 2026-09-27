@@ -283,3 +283,19 @@ test('currentResidenceYesNoAnswer uses profile address for named residence facts
     null,
   );
 });
+
+// 首次真投（2026-09-26）：真实 search_intent 是 anywhere_primary_country（全美可搬）+
+// willing_to_relocate_for_internship: true，OpusClip（Mountain View）的「Do the office location
+// and RTO requirements work for you?」却被判 relocation_commitment_policy_unset——函数只认
+// anywhere_legal_work。全美可搬 = 岗位在美国时开放；岗位地点未知或在国外时仍不开放（照问）。
+const REAL_GEO = { primary_country: 'US', preferred_metros: ['Anywhere US', 'Bay Area', 'San Francisco', 'New York', 'Remote-US'], remote_acceptable: true, work_mode_preference: 'any', countries_open_to: ['US'], relocation_policy: 'anywhere_primary_country', willing_to_relocate_for_internship: true, excluded_locations: ['Singapore'] };
+test('relocationPolicyOpen：全美可搬（真实拷贝的 geographic_preference）+ 岗位在美国 → 开放', () => {
+  const intent = { search_intent: { geographic_preference: REAL_GEO } };
+  assert.equal(relocationPolicyOpen(intent, { jobLocation: 'Mountain View' }), true);
+  assert.equal(relocationPolicyOpen(intent, { jobLocation: 'New York, NY' }), true);
+  assert.equal(relocationPolicyOpen(intent, { jobLocation: 'London' }), false, 'a job abroad is outside "anywhere in the US"');
+  assert.equal(relocationPolicyOpen(intent, { jobLocation: '' }), false, 'unknown job location → still ask');
+  assert.equal(relocationPolicyOpen(intent), false);
+  assert.equal(relocationPolicyOpen({ search_intent: { geographic_preference: { ...REAL_GEO, willing_to_relocate_for_internship: false } } }, { jobLocation: 'Mountain View' }), false);
+  assert.equal(relocationPolicyOpen({ search_intent: { geographic_preference: { ...REAL_GEO, relocation_policy: 'selected_metros' } } }, { jobLocation: 'Mountain View' }), false);
+});
